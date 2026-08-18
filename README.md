@@ -1,2 +1,2 @@
 # three-fund-rebalance
-A script to rebalance my three-fund portfolio.
+A CLI to rebalance my three-fund portfolio.
