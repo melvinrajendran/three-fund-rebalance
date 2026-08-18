@@ -1,0 +1,318 @@
+from decimal import Decimal
+
+import pytest
+
+from three_fund_rebalance import prompts as prompts_module
+from three_fund_rebalance.models import Account, FundType, Holding, TaxTreatment
+from three_fund_rebalance.prompts import (
+    Prompter,
+    prompt_accounts,
+    prompt_choice,
+    prompt_decimal,
+    prompt_stock_bond_target,
+    prompt_str,
+    prompt_yes_no,
+    resolve_vt_split,
+)
+from three_fund_rebalance.vt_allocation import VTAllocationResult, VTFetchError
+
+
+class ScriptedPrompter(Prompter):
+    """A Prompter driven by a queue of canned responses, for testing the
+    interactive flow without a real terminal."""
+
+    def __init__(self, responses: list[str]):
+        self._responses = list(responses)
+        self.said: list[str] = []
+        super().__init__(input_func=self._next, print_func=self.said.append)
+
+    def _next(self, _text: str = "") -> str:
+        if not self._responses:
+            raise AssertionError("Ran out of scripted responses")
+        return self._responses.pop(0)
+
+    def all_consumed(self) -> bool:
+        return not self._responses
+
+
+class TestPromptStr:
+    def test_returns_valid_input(self):
+        p = ScriptedPrompter(["hello"])
+        assert prompt_str(p, "Name") == "hello"
+
+    def test_retries_on_empty_without_default(self):
+        p = ScriptedPrompter(["", "", "value"])
+        assert prompt_str(p, "Name") == "value"
+
+    def test_uses_default_on_empty(self):
+        p = ScriptedPrompter([""])
+        assert prompt_str(p, "Name", default="fallback") == "fallback"
+
+
+class TestPromptDecimal:
+    def test_parses_valid_number(self):
+        p = ScriptedPrompter(["42.5"])
+        assert prompt_decimal(p, "Amount") == Decimal("42.5")
+
+    def test_retries_on_invalid_number(self):
+        p = ScriptedPrompter(["abc", "10"])
+        assert prompt_decimal(p, "Amount") == Decimal(10)
+
+    def test_enforces_min_and_max(self):
+        p = ScriptedPrompter(["-5", "200", "50"])
+        assert prompt_decimal(p, "Amount", min_value=Decimal(0), max_value=Decimal(100)) == Decimal(50)
+
+    def test_uses_default_on_empty(self):
+        p = ScriptedPrompter([""])
+        assert prompt_decimal(p, "Amount", default=Decimal(0)) == Decimal(0)
+
+
+class TestPromptYesNo:
+    @pytest.mark.parametrize("raw,expected", [("y", True), ("yes", True), ("n", False), ("no", False)])
+    def test_parses_variants(self, raw, expected):
+        p = ScriptedPrompter([raw])
+        assert prompt_yes_no(p, "Sure?") == expected
+
+    def test_retries_on_invalid(self):
+        p = ScriptedPrompter(["maybe", "y"])
+        assert prompt_yes_no(p, "Sure?") is True
+
+    def test_uses_default_on_empty(self):
+        p = ScriptedPrompter([""])
+        assert prompt_yes_no(p, "Sure?", default=False) is False
+
+
+class TestPromptChoice:
+    def test_selects_by_number(self):
+        p = ScriptedPrompter(["2"])
+        assert prompt_choice(p, "Pick:", ["A", "B", "C"]) == "B"
+
+    def test_retries_on_out_of_range(self):
+        p = ScriptedPrompter(["0", "5", "3"])
+        assert prompt_choice(p, "Pick:", ["A", "B", "C"]) == "C"
+
+    def test_uses_default_on_empty(self):
+        p = ScriptedPrompter([""])
+        assert prompt_choice(p, "Pick:", ["A", "B", "C"], default="B") == "B"
+
+
+class TestPromptStockBondTarget:
+    def test_accepts_valid_split(self):
+        p = ScriptedPrompter(["80", "20"])
+        stock, bond = prompt_stock_bond_target(p)
+        assert (stock, bond) == (Decimal(80), Decimal(20))
+
+    def test_retries_when_not_summing_to_100(self):
+        p = ScriptedPrompter(["80", "30", "70", "30"])
+        stock, bond = prompt_stock_bond_target(p)
+        assert (stock, bond) == (Decimal(70), Decimal(30))
+
+
+class TestResolveVtSplit:
+    def test_uses_live_fetch_when_accepted(self, monkeypatch):
+        monkeypatch.setattr(
+            prompts_module,
+            "fetch_vt_us_pct",
+            lambda: VTAllocationResult(us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"),
+        )
+        p = ScriptedPrompter(["y"])
+        result = resolve_vt_split(p)
+        assert result.us_pct == Decimal("61.9")
+        assert result.source == "vanguard_fact_sheet"
+
+    def test_falls_back_to_cache_when_live_value_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            prompts_module,
+            "fetch_vt_us_pct",
+            lambda: VTAllocationResult(us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"),
+        )
+        p = ScriptedPrompter(["n", "y"])  # reject live, accept cache
+        result = resolve_vt_split(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
+        assert result.us_pct == Decimal(60)
+        assert result.source == "cache"
+
+    def test_falls_back_to_cache_when_fetch_fails(self, monkeypatch):
+        def raise_fetch_error():
+            raise VTFetchError("network down")
+
+        monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", raise_fetch_error)
+        p = ScriptedPrompter(["y"])  # accept cache
+        result = resolve_vt_split(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
+        assert result.us_pct == Decimal(60)
+        assert result.source == "cache"
+
+    def test_falls_back_to_manual_when_fetch_fails_and_no_cache(self, monkeypatch):
+        def raise_fetch_error():
+            raise VTFetchError("network down")
+
+        monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", raise_fetch_error)
+        p = ScriptedPrompter(["58"])
+        result = resolve_vt_split(p)
+        assert result.us_pct == Decimal(58)
+        assert result.source == "manual"
+
+    def test_offline_skips_fetch_entirely(self, monkeypatch):
+        def fail_if_called():
+            raise AssertionError("should not fetch when offline")
+
+        monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", fail_if_called)
+        p = ScriptedPrompter(["y"])
+        result = resolve_vt_split(p, cached_us_pct=Decimal(60), cached_as_of="last quarter", offline=True)
+        assert result.us_pct == Decimal(60)
+
+
+class TestPromptAccounts:
+    def test_add_one_new_account_with_three_funds(self):
+        responses = [
+            "y",  # Add an account?
+            "1",  # account type -> Roth IRA
+            "My Roth",  # nickname
+            "y", "VTI", "6000",  # domestic equity
+            "y", "VXUS", "2000",  # intl equity
+            "y", "BND", "2000",  # bond
+            "n",  # TDF? no
+            "0",  # cash
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [])
+        assert p.all_consumed()
+        assert len(accounts) == 1
+        account = accounts[0]
+        assert account.name == "My Roth"
+        assert account.account_type == "Roth IRA"
+        assert account.tax_treatment == TaxTreatment.TAX_ADVANTAGED
+        assert account.total_value() == Decimal(10_000)
+        assert account.get_holding(FundType.DOMESTIC_EQUITY).name == "VTI"
+
+    def test_duplicate_nickname_is_rejected_and_retried(self):
+        responses = [
+            "y", "1", "First", "n", "n", "n", "n", "0",
+            "y", "1", "First", "SecondUnique", "n", "n", "n", "n", "0",
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [])
+        assert [a.name for a in accounts] == ["First", "SecondUnique"]
+
+    def test_tdf_allocation_must_sum_to_100_with_retry(self):
+        responses = [
+            "y", "1", "401k",
+            "n", "n", "n",  # no domestic/intl/bond individual funds
+            "y", "Target 2050", "10000",  # TDF holding
+            "50", "30", "10",  # invalid sum (90)
+            "60", "20", "20",  # valid
+            "0",  # cash
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [])
+        tdf_holding = accounts[0].get_holding(FundType.TDF)
+        assert tdf_holding.tdf_allocation.domestic_equity_pct == Decimal(60)
+
+    def test_keep_existing_account_and_update_balance_via_default(self):
+        existing = Account(
+            account_type="Roth IRA",
+            name="My Roth",
+            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            holdings=[
+                Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(6000)),
+            ],
+        )
+        responses = [
+            "y",  # Keep account 'My Roth'?
+            "",  # balance default (keep 6000)
+            "n", "n", "n",  # decline adding intl/bond/TDF
+            "",  # cash default (0)
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [existing])
+        assert len(accounts) == 1
+        assert accounts[0].get_holding(FundType.DOMESTIC_EQUITY).balance == Decimal(6000)
+
+    def test_removing_existing_account(self):
+        existing = Account(
+            account_type="Roth IRA",
+            name="My Roth",
+            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            holdings=[],
+        )
+        responses = [
+            "n",  # Keep account 'My Roth'? -> no, remove it
+            "n",  # Add an account? -> no
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [existing])
+        assert accounts == []
+
+    def test_other_account_type_asks_tax_treatment_explicitly(self):
+        responses = [
+            "y",  # Add an account?
+            "11",  # "Other" is the last entry in ACCOUNT_TYPE_CHOICES
+            "y",  # is it tax-advantaged?
+            "MyOtherAccount",
+            "n", "n", "n", "n",  # decline all four fund slots
+            "50",  # nonzero cash
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [])
+        assert accounts[0].account_type == "Other"
+        assert accounts[0].tax_treatment == TaxTreatment.TAX_ADVANTAGED
+        assert accounts[0].cash_balance() == Decimal(50)
+
+    def test_updating_existing_account_covers_tdf_update_new_slot_and_cash(self):
+        from three_fund_rebalance.models import TDFAllocation
+
+        existing = Account(
+            account_type="Roth 401(k)",
+            name="401k",
+            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            holdings=[
+                Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(6000)),
+                Holding(
+                    fund_type=FundType.TDF,
+                    name="Target 2050",
+                    balance=Decimal(3000),
+                    tdf_allocation=TDFAllocation(
+                        domestic_equity_pct=Decimal(60),
+                        international_equity_pct=Decimal(20),
+                        bond_pct=Decimal(20),
+                    ),
+                ),
+                Holding(fund_type=FundType.CASH, name="", balance=Decimal(100)),
+            ],
+        )
+        responses = [
+            "y",  # Keep account '401k'?
+            "",  # VTI balance -> keep default 6000
+            "",  # TDF balance -> keep default 3000
+            "y",  # update TDF's underlying allocation?
+            "70", "15", "15",  # new TDF allocation
+            "y", "VXUS", "500",  # add international equity fund (not previously declared)
+            "n",  # decline adding a domestic bond fund
+            "200",  # cash -> update to 200
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [existing])
+        assert len(accounts) == 1
+        updated = accounts[0]
+        assert updated.get_holding(FundType.TDF).tdf_allocation.domestic_equity_pct == Decimal(70)
+        assert updated.get_holding(FundType.INTERNATIONAL_EQUITY).balance == Decimal(500)
+        assert updated.cash_balance() == Decimal(200)
+
+    def test_taxable_account_with_bonds_prints_a_note(self):
+        responses = [
+            "y", "10",  # account type "Taxable Brokerage" is index 10 in ACCOUNT_TYPE_CHOICES
+            "Brokerage",
+            "n", "n",  # no domestic/intl
+            "y", "BND", "1000",  # bond fund
+            "n",  # no TDF
+            "0",  # cash
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
+        prompt_accounts(p, [])
+        assert any("extra" in line.lower() and "tax" in line.lower() for line in p.said)
