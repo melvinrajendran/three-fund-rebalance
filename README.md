@@ -80,11 +80,16 @@ editable defaults -- press Enter to keep a value or type a new one.
 
 ## How it works
 
-- **VT's US/ex-US weighting** is pulled from Vanguard's quarterly fact sheet
-  PDF (`https://fund-docs.vanguard.com/F3141.pdf`), a static file that isn't
-  behind the interactive site's bot protection. If that fetch fails, the CLI
+- **VT's US/ex-US weighting** comes from two independent Vanguard sources,
+  tried in freshness order. First the JSON endpoint behind the fund profile
+  page's country diversification table, which is refreshed **monthly**; if
+  that fails, Vanguard's **quarterly** fact sheet PDF
+  (`https://fund-docs.vanguard.com/F3141.pdf`), a static file on a separate
+  host outside the interactive site's bot protection. If both fail, the CLI
   falls back to your last cached value, and finally to manual entry -- it
-  never guesses silently.
+  never guesses silently. The fund page's own HTML is deliberately not
+  scraped: it's client-side rendered behind bot protection, so it would need
+  a headless browser and would still break often.
 - **Target-date funds** are entered as a single position with their own
   domestic/international/bond split (from the fund's fact sheet), and are
   folded into the overall allocation math as a fixed-ratio bundle -- a TDF

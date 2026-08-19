@@ -29,18 +29,28 @@ MIN_TRADE_DOLLARS = Decimal("1.00")
 # VT (Vanguard Total World Stock ETF) US / ex-US weighting
 # ---------------------------------------------------------------------------
 
-# Vanguard's quarterly fact sheet PDF for VT (fund ID 3141) is a static file
-# on a subdomain that is not behind the interactive site's bot-protection
-# layer, and it publishes a "Ten largest market allocations as % of common
-# stock" table with a "United States" line -- this is the live data source.
+# Primary source: the JSON endpoint backing the fund profile page's country
+# diversification table. It is refreshed monthly, so it leads the quarterly
+# fact sheet by up to three months (e.g. 62.0% as of 2026-07-31 versus 61.9%
+# as of 2026-06-30).
+VT_DIVERSIFICATION_API_URL = (
+    "https://investor.vanguard.com/investment-products/etfs/profile/api/vt/diversification"
+)
+
+# Fallback source: Vanguard's quarterly fact sheet PDF for VT (fund ID 3141),
+# a static file on a docs subdomain that sits outside the interactive site's
+# bot-protection layer. It publishes a "Ten largest market allocations as %
+# of common stock" table with a "United States" line. Staler than the API,
+# but served by entirely separate infrastructure, so it is unlikely to fail
+# at the same time.
 VT_FACT_SHEET_URL = "https://fund-docs.vanguard.com/F3141.pdf"
 
 # Baked-in emergency fallback, only ever offered as a *suggested default* in
 # the manual-entry prompt (never used silently) when both the live fetch and
 # any previously cached value are unavailable, e.g. on a brand new machine
 # with no network access.
-FALLBACK_VT_US_PCT = Decimal("61.9")
-FALLBACK_VT_AS_OF = "2026-06-30"
+FALLBACK_VT_US_PCT = Decimal("62.0")
+FALLBACK_VT_AS_OF = "2026-07-31"
 
 # ---------------------------------------------------------------------------
 # Account types
