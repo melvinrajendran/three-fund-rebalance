@@ -16,12 +16,37 @@ trades, to minimize tax drag.
 
 ## Setup
 
-Requires Python 3.10+.
+Requires Python 3.10+. Note that `python3` on macOS may still be the system
+3.9 -- use an explicit interpreter (e.g. `python3.12`) if so.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+```
+
+### Putting it on your PATH
+
+The generated console script hard-codes an absolute path to the venv's
+Python in its shebang, so it runs correctly from anywhere without the venv
+being activated. Symlink it into a directory already on your PATH:
+
+```bash
+ln -sf "$PWD/.venv/bin/three-fund-rebalance" ~/.local/bin/three-fund-rebalance
+```
+
+Then `three-fund-rebalance` works from any directory. Because the package is
+installed in editable mode (`-e`), code changes take effect immediately with
+no reinstall. If you ever delete and rebuild `.venv`, the symlink keeps
+working as long as the rebuild recreates the same path.
+
+If you'd rather keep it isolated from this repo's venv,
+[pipx](https://pipx.pypa.io/) does the same job and manages the PATH entry
+for you:
+
+```bash
+brew install pipx && pipx ensurepath
+pipx install -e /path/to/three-fund-rebalance
 ```
 
 ## Running
@@ -30,7 +55,7 @@ pip install -e ".[dev]"
 three-fund-rebalance
 ```
 
-or, without installing the console script:
+or, without the console script (requires the venv to be active):
 
 ```bash
 python -m three_fund_rebalance.cli
