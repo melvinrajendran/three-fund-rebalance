@@ -286,6 +286,115 @@ class TestCashInvestment:
         assert sum(t.amount for t in result.trades) == Decimal("1000.00")
 
 
+class TestPerAccountConservation:
+    """Rounding each solved slot to cents independently can leave an account
+    a cent off its real balance, which yields an unfillable recommendation
+    (e.g. 'buy $5,000.01' against exactly $5,000.00 of cash). Every trade set
+    must leave each account's holdings summing to exactly its total."""
+
+    def assert_conserved(self, accounts, result):
+        deltas: dict[str, Decimal] = {}
+        for t in result.trades:
+            signed = t.amount if t.action == "buy" else -t.amount
+            deltas[t.account_name] = deltas.get(t.account_name, Decimal(0)) + signed
+        for account in accounts:
+            net = deltas.get(account.name, Decimal(0))
+            expected = account.cash_balance()  # cash is spent, so buys exceed sells by that much
+            assert net == expected, (
+                f"{account.name}: trades net {net}, expected {expected} "
+                f"(account total {account.total_value()})"
+            )
+
+    def test_three_account_portfolio_conserves_each_account_total(self):
+        # This is the scenario that originally produced $5,000.01 of buys
+        # against $5,000.00 of cash: an 80/20 target with VT's 61.9% US split
+        # yields repeating-decimal dollar targets.
+        accounts = [
+            account(
+                "Roth IRA", "Fidelity Roth", TaxTreatment.TAX_ADVANTAGED,
+                [
+                    holding(FundType.DOMESTIC_EQUITY, "VTI", 20_000),
+                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", 10_000),
+                    holding(FundType.DOMESTIC_BOND, "BND", 0),
+                ],
+            ),
+            account(
+                "Traditional 401(k)", "Acme 401k", TaxTreatment.TAX_ADVANTAGED,
+                [
+                    holding(FundType.DOMESTIC_EQUITY, "VTI", 40_000),
+                    holding(FundType.DOMESTIC_BOND, "BND", 10_000),
+                ],
+            ),
+            account(
+                "Taxable Brokerage", "Fidelity Brokerage", TaxTreatment.TAXABLE,
+                [
+                    holding(FundType.DOMESTIC_EQUITY, "VTI", 25_000),
+                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", 5_000),
+                    holding(FundType.CASH, "", 5_000),
+                ],
+            ),
+        ]
+        result = compute_trades(
+            accounts,
+            TargetAllocation(
+                domestic_equity_pct=Decimal("49.52"),
+                international_equity_pct=Decimal("30.48"),
+                bond_pct=Decimal(20),
+            ),
+        )
+        self.assert_conserved(accounts, result)
+        # The taxable account should spend exactly its cash, to the cent.
+        taxable_buys = sum(
+            t.amount for t in result.trades if t.account_name == "Fidelity Brokerage"
+        )
+        assert taxable_buys == Decimal("5000.00")
+
+    def test_odd_cent_balances_still_conserve(self):
+        accounts = [
+            account(
+                "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
+                [
+                    holding(FundType.DOMESTIC_EQUITY, "VTI", Decimal("3333.33")),
+                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", Decimal("3333.33")),
+                    holding(FundType.DOMESTIC_BOND, "BND", Decimal("3333.34")),
+                ],
+            )
+        ]
+        result = compute_trades(
+            accounts,
+            TargetAllocation(
+                domestic_equity_pct=Decimal("49.52"),
+                international_equity_pct=Decimal("30.48"),
+                bond_pct=Decimal(20),
+            ),
+        )
+        self.assert_conserved(accounts, result)
+
+    def test_thirds_split_across_uneven_accounts_conserves(self):
+        # A 1/3-each target over accounts whose totals don't divide evenly is
+        # the classic largest-remainder stress case.
+        accounts = [
+            account(
+                "Roth IRA", f"Acct{i}", TaxTreatment.TAX_ADVANTAGED,
+                [
+                    holding(FundType.DOMESTIC_EQUITY, "VTI", balance),
+                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", 0),
+                    holding(FundType.DOMESTIC_BOND, "BND", 0),
+                ],
+            )
+            for i, balance in enumerate([Decimal("1000.01"), Decimal("2000.02"), Decimal("3000.07")])
+        ]
+        result = compute_trades(
+            accounts,
+            TargetAllocation(
+                domestic_equity_pct=Decimal("33.34"),
+                international_equity_pct=Decimal("33.33"),
+                bond_pct=Decimal("33.33"),
+            ),
+        )
+        self.assert_conserved(accounts, result)
+
+
 class TestMinimumTradeThreshold:
     def test_sub_dollar_drift_is_not_traded(self):
         accounts = [

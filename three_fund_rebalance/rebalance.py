@@ -38,6 +38,7 @@ from scipy.optimize import linprog
 from three_fund_rebalance.allocation import target_dollar_amounts
 from three_fund_rebalance.config import MIN_TRADE_DOLLARS
 from three_fund_rebalance.models import (
+    CENT,
     Account,
     FundType,
     Holding,
@@ -153,6 +154,77 @@ def _check_capacity_feasible(
             )
 
 
+def _distribute_residual(
+    values: dict[int, Decimal], raw_values: list[Decimal], residual: Decimal
+) -> None:
+    """Apply `residual` to `values` (in place) one cent at a time, using the
+    largest-remainder method: each cent goes to whichever slot rounding moved
+    furthest in the opposite direction, so it lands where it distorts least."""
+    if residual == 0:
+        return
+    step = CENT if residual > 0 else -CENT
+    ordered = sorted(values, key=lambda i: raw_values[i] - values[i], reverse=residual > 0)
+    cents_remaining = int((abs(residual) * 100).to_integral_value())
+
+    # Bounded loop: a slot clamped at zero is skipped, so allow enough passes
+    # to cycle past clamped slots without ever spinning forever.
+    for position in range(cents_remaining * len(ordered) + len(ordered)):
+        if cents_remaining == 0:
+            break
+        i = ordered[position % len(ordered)]
+        candidate = values[i] + step
+        if candidate >= 0:  # never drive a holding negative
+            values[i] = candidate
+            cents_remaining -= 1
+
+
+def _finalize_account_values(
+    account: Account, indices: list[int], slots: list[_Slot], raw_values: list[Decimal]
+) -> dict[int, Decimal]:
+    """Turn one account's solved (fractional) slot values into final cent
+    amounts that both round cleanly and leave the account summing to exactly
+    its own total.
+
+    Two things have to hold together here, and doing them in sequence breaks
+    them: rounding each slot independently can leave an account a cent off
+    its real balance, and dropping a sub-minimum trade afterwards reopens the
+    same gap from the other side. Together those produced recommendations
+    like "buy $5,000.01" against exactly $5,000.00 of cash -- the offsetting
+    $0.01 sell was filtered out as too small while the extra cent of buying
+    survived.
+
+    So slots that end up trading less than the minimum are snapped back to
+    their current balance and the freed money is redistributed among the
+    slots that are still trading, repeating until nothing new falls below
+    the minimum. Preserving the per-account total is the hard constraint --
+    you cannot spend money you don't have -- while the aggregate allocation
+    targets are approximate goals, so any leftover cent is absorbed there.
+    """
+    target_total = to_cents(account.total_value())
+    current = {i: to_cents(slots[i].holding.balance) for i in indices}
+    held: set[int] = set()  # slots pinned at their current balance (no trade)
+
+    # Each pass pins at least one more slot, so this runs at most once per slot.
+    for _ in range(len(indices) + 1):
+        tradeable = [i for i in indices if i not in held]
+        if not tradeable:
+            return current
+
+        budget = target_total - sum((current[i] for i in held), Decimal(0))
+        values = {i: to_cents(raw_values[i]) for i in tradeable}
+        _distribute_residual(values, raw_values, budget - sum(values.values()))
+
+        too_small = [i for i in tradeable if abs(values[i] - current[i]) < MIN_TRADE_DOLLARS]
+        if not too_small:
+            return {**{i: current[i] for i in held}, **values}
+        held.update(too_small)
+
+    # Unreachable: every pass either returns or pins at least one more slot,
+    # so the loop runs out of tradeable slots (and returns above) first. Kept
+    # as a backstop so a future change can't fall through to an implicit None.
+    return current  # pragma: no cover
+
+
 def _solve(c, A_eq, b_eq, A_ub, b_ub, bounds, context: str):
     result = linprog(c=c, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method="highs")
     if not result.success:
@@ -255,12 +327,21 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
         c3, A_eq2, b_eq2, A_ub3, b_ub3, bounds2, "phase 3: minimizing total trade volume"
     )
 
-    new_values = [to_cents(_to_decimal(v)) for v in phase3.x[:n]]
+    raw_values = [_to_decimal(v) for v in phase3.x[:n]]
+    new_values = [Decimal(0)] * n
+    for account_index, account in enumerate(accounts):
+        indices = [i for i, s in enumerate(slots) if s.account_index == account_index]
+        if not indices:
+            continue
+        for i, value in _finalize_account_values(account, indices, slots, raw_values).items():
+            new_values[i] = value
 
+    # _finalize_account_values already snapped every sub-minimum move back to
+    # its current balance, so any remaining delta is a real, fillable trade.
     trades = []
     for slot, new_value in zip(slots, new_values):
         delta = new_value - slot.holding.balance
-        if abs(delta) < MIN_TRADE_DOLLARS:
+        if delta == 0:
             continue
         trades.append(
             Trade(
