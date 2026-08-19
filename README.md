@@ -49,6 +49,54 @@ brew install pipx && pipx ensurepath
 pipx install -e /path/to/three-fund-rebalance
 ```
 
+## Updating
+
+```bash
+git pull
+```
+
+That is usually the whole update. The package is installed in editable mode
+(`-e`), so the venv resolves `three_fund_rebalance` straight to this source
+directory -- edited modules **and newly added ones** take effect on the next
+run with no reinstall. The PATH symlink keeps working too, since it points at
+the venv's console script rather than at any particular version.
+
+Reinstall when the packaging metadata changes rather than the code:
+
+```bash
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Specifically, that is needed after a change to `pyproject.toml` that
+adds or bumps a **dependency**, renames the **console script** under
+`[project.scripts]`, or introduces a **new top-level package** (new modules
+*inside* `three_fund_rebalance/` do not count). The command is cheap and
+idempotent, so when in doubt just run it.
+
+Rebuild the venv from scratch if the required Python version rises, or if the
+environment gets into an inconsistent state (for example `pyvenv.cfg`
+reporting a different version than `.venv/bin/python` actually is):
+
+```bash
+rm -rf .venv
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+The symlink from `~/.local/bin` survives this, because the rebuild recreates
+the same path. After any update, a quick check that things still work:
+
+```bash
+pytest
+three-fund-rebalance --help
+```
+
+Your saved portfolio config lives outside the repo at
+`~/.three_fund_rebalance/config.json`, so pulling, reinstalling, and even
+deleting `.venv` never touch it.
+
 ## Running
 
 ```bash
