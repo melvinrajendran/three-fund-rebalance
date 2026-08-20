@@ -136,14 +136,16 @@ def format_report(accounts: list[Account], target: TargetAllocation, result: Reb
         return "\n".join(lines)
 
     lines.extend(_subheading("Recommended trades"))
+    lines.append("Place the following orders:")
     grouped = group_trades_by_account(result.trades)
     for account in accounts:
         if account.name not in grouped:
             continue
         # Every account block is preceded by a blank line, the first one
-        # included, so the blocks stay uniform. The allocation summary above
-        # sits flush under its own subheading because it is a single run of
-        # lines rather than a series of blocks.
+        # included, so the blocks stay uniform -- only the lead-in line sits
+        # flush under the subheading. The allocation summary above is likewise
+        # flush because it is a single run of lines rather than a series of
+        # blocks.
         lines.append("")
         lines.append(INDENT_UNIT + format_account_heading(account.name, account.account_type))
         body_indent = INDENT_UNIT * 2
