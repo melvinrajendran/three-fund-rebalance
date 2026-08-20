@@ -12,8 +12,10 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from three_fund_rebalance import __version__
 from three_fund_rebalance.allocation import compute_target_allocation
 from three_fund_rebalance.config import DEFAULT_CONFIG_PATH
+from three_fund_rebalance.formatting import format_section_header, format_subheading
 from three_fund_rebalance.persistence import (
     PersistedConfig,
     PersistenceError,
@@ -43,6 +45,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="three-fund-rebalance",
         description="Compute trades to rebalance a three-fund portfolio across accounts.",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
     )
     parser.add_argument(
         "--config",
@@ -82,13 +87,21 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
         except PersistenceError as exc:
             prompter.say(f"Warning: could not read config at {args.config} ({exc}). Starting fresh.")
 
+    prompter.say("\n" + format_section_header(1, 3, "Target asset allocation"))
+
+    prompter.say("\n" + format_subheading("Stock/bond split"))
     stock_pct, bond_pct = prompt_stock_bond_target(
         prompter, default_stock=config.stock_pct, default_bond=config.bond_pct
     )
 
+    prompter.say("\n" + format_subheading("Domestic/international equity split"))
     if args.vt_us_pct is not None:
         vt_result = VTAllocationResult(
             us_pct=args.vt_us_pct, as_of="manually specified via --vt-us-pct", source="manual"
+        )
+        prompter.say(
+            f"Using {vt_result.us_pct}% US / {Decimal(100) - vt_result.us_pct}% international, "
+            f"as given by --vt-us-pct."
         )
     else:
         vt_result = resolve_vt_split(
@@ -100,6 +113,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
 
     target = compute_target_allocation(stock_pct, bond_pct, vt_result.us_pct)
 
+    prompter.say("\n" + format_section_header(2, 3, "Account holdings"))
     accounts = prompt_accounts(prompter, config.accounts)
     if not accounts:
         prompter.say("\nNo accounts entered -- nothing to rebalance.")
@@ -111,6 +125,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
         prompter.say(f"\nCould not compute a rebalance: {exc}")
         return 1
 
+    prompter.say("\n" + format_section_header(3, 3, "Rebalancing trades"))
     prompter.say("\n" + format_report(accounts, target, result))
 
     if not args.no_save and prompt_yes_no(

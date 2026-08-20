@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from three_fund_rebalance.formatting import format_account_heading
 from three_fund_rebalance.models import (
     Account,
     FundType,
@@ -153,7 +154,7 @@ class TestFormatReport:
             taxable_bond_dollars=Decimal(0),
         )
         text = format_report([account], target, result)
-        assert "Roth (Roth IRA):" in text
+        assert format_account_heading("Roth", "Roth IRA") in text
         assert "Exchange $500.00 from VTI to BND" in text
 
     def test_warnings_are_included(self):
@@ -176,7 +177,7 @@ class TestFormatReport:
             taxable_bond_dollars=Decimal(0),
         )
         text = format_report([account_with_trades, account_without_trades], target, result)
-        assert "Roth (Roth IRA):" in text
+        assert format_account_heading("Roth", "Roth IRA") in text
         assert "Trad IRA" not in text
 
     def test_cash_investment_note_shown_when_present(self):
