@@ -7,7 +7,8 @@ tests without monkeypatching builtins.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 
 from three_fund_rebalance.config import (
@@ -16,7 +17,11 @@ from three_fund_rebalance.config import (
     VT_FACT_SHEET_URL,
     infer_tax_treatment,
 )
-from three_fund_rebalance.formatting import format_account_heading, format_subheading
+from three_fund_rebalance.formatting import (
+    INDENT_UNIT,
+    format_account_heading,
+    format_subheading,
+)
 from three_fund_rebalance.models import (
     PERCENT_SUM_TOLERANCE,
     Account,
@@ -44,12 +49,38 @@ class Prompter:
     ):
         self._input = input_func
         self._print = print_func
+        self._indent = ""
+
+    @contextmanager
+    def indented(self) -> Iterator[Prompter]:
+        """Nest everything said or asked inside the block one level deeper.
+        Depth is what shows structure below the ruled headings, so it lives
+        on the prompter rather than being spelled into each message."""
+        outer = self._indent
+        self._indent += INDENT_UNIT
+        try:
+            yield self
+        finally:
+            self._indent = outer
+
+    def _at_depth(self, text: str) -> str:
+        """Indent every content line, leaving leading blank lines flush so a
+        message that opens with a separator still gets one."""
+        if not self._indent:
+            return text
+        blank_lead = len(text) - len(text.lstrip("\n"))
+        body = text[blank_lead:]
+        if not body:
+            return text
+        return "\n" * blank_lead + "\n".join(
+            self._indent + line if line else line for line in body.split("\n")
+        )
 
     def ask(self, text: str) -> str:
-        return self._input(text).strip()
+        return self._input(self._at_depth(text)).strip()
 
     def say(self, message: str = "") -> None:
-        self._print(message)
+        self._print(self._at_depth(message))
 
 
 # --------------------------------------------------------------------------
@@ -278,8 +309,11 @@ def _prompt_new_account(prompter: Prompter, existing_names: set[str]) -> Account
             continue
         break
 
-    prompter.say("\n" + format_account_heading(name, account_type))
-    holdings = _prompt_holdings(prompter, tax_treatment)
+    prompter.say("")
+    with prompter.indented():
+        prompter.say(format_account_heading(name, account_type))
+        with prompter.indented():
+            holdings = _prompt_holdings(prompter, tax_treatment)
     return Account(account_type=account_type, name=name, tax_treatment=tax_treatment, holdings=holdings)
 
 
@@ -312,7 +346,7 @@ def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Ac
         if fund_type in declared_types and fund_type != FundType.CASH:
             continue
         if fund_type not in declared_types and prompt_yes_no(
-            prompter, f"  Add {description} to this account?", default=False
+            prompter, f"Add {description} to this account?", default=False
         ):
             new_holdings.append(_prompt_new_holding(prompter, fund_type))
 
@@ -337,11 +371,14 @@ def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> lis
             f"{', '.join(a.name for a in existing_accounts)}"
         )
         for existing in existing_accounts:
-            prompter.say("\n" + format_account_heading(existing.name, existing.account_type))
-            if prompt_yes_no(prompter, "Keep this account?", default=True):
-                accounts.append(_prompt_update_existing_account(prompter, existing))
-            else:
-                prompter.say(f"Removed '{existing.name}'.")
+            prompter.say("")
+            with prompter.indented():
+                prompter.say(format_account_heading(existing.name, existing.account_type))
+                with prompter.indented():
+                    if prompt_yes_no(prompter, "Keep this account?", default=True):
+                        accounts.append(_prompt_update_existing_account(prompter, existing))
+                    else:
+                        prompter.say(f"Removed '{existing.name}'.")
 
     prompter.say("\n" + format_subheading("New accounts"))
     is_first_prompt = True
