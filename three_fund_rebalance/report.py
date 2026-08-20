@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from three_fund_rebalance.allocation import target_dollar_amounts
+from three_fund_rebalance.formatting import format_account_heading, format_subheading
 from three_fund_rebalance.models import Account, TargetAllocation, Trade, to_cents
 from three_fund_rebalance.rebalance import RebalanceResult
 
@@ -35,6 +36,10 @@ class AllocationSummary:
     total_value: Decimal
     uninvested_cash: Decimal
     categories: list[CategorySummary]
+
+
+def _subheading(text: str) -> list[str]:
+    return format_subheading(text).split("\n")
 
 
 def summarize_allocation(accounts: list[Account], target: TargetAllocation) -> AllocationSummary:
@@ -103,7 +108,7 @@ def describe_account_trades(trades: list[Trade]) -> list[str]:
 
 def format_report(accounts: list[Account], target: TargetAllocation, result: RebalanceResult) -> str:
     summary = summarize_allocation(accounts, target)
-    lines = ["Target vs. current allocation", "-" * 30]
+    lines = _subheading("Current vs. target allocation")
     lines.append(f"Total portfolio value: ${summary.total_value:,.2f}")
     if summary.uninvested_cash > 0:
         lines.append(f"  (includes ${summary.uninvested_cash:,.2f} currently uninvested cash)")
@@ -124,12 +129,13 @@ def format_report(accounts: list[Account], target: TargetAllocation, result: Reb
         lines.append("Your portfolio already matches your target allocation -- no trades needed.")
         return "\n".join(lines)
 
-    lines.append("Recommended trades:")
+    lines.extend(_subheading("Recommended trades"))
     grouped = group_trades_by_account(result.trades)
     for account in accounts:
         if account.name not in grouped:
             continue
-        lines.append(f"\n{account.name} ({account.account_type}):")
+        lines.append("")
+        lines.append(format_account_heading(account.name, account.account_type))
         cash = account.cash_balance()
         if cash > 0:
             lines.append(f"  (investing ${cash:,.2f} of uninvested cash as part of these trades)")
