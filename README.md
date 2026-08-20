@@ -33,8 +33,6 @@ Some limits worth knowing about specifically:
 - VT's US/ex-US weighting is fetched from Vanguard and may be stale, or may
   fail and fall back to a cached or manually entered value.
 
-Provided as-is, without warranty of any kind.
-
 ## Install
 
 Requires Python 3.10+. Install with [pipx](https://pipx.pypa.io/), which puts
