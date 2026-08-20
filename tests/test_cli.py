@@ -2,6 +2,7 @@ from decimal import Decimal
 
 import pytest
 
+from three_fund_rebalance import __version__
 from three_fund_rebalance.cli import parse_args, run
 from three_fund_rebalance.models import FundType
 from three_fund_rebalance.persistence import load_config
@@ -52,6 +53,12 @@ class TestArgParsing:
             parse_args(["--vt-us-pct", "not-a-number"])
         assert exc_info.value.code == 2
         assert "not a valid number" in capsys.readouterr().err
+
+    def test_version_flag_prints_version_and_exits_cleanly(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            parse_args(["--version"])
+        assert exc_info.value.code == 0
+        assert __version__ in capsys.readouterr().out
 
 
 class TestEndToEndRun:

@@ -16,6 +16,7 @@ from three_fund_rebalance.config import (
     VT_FACT_SHEET_URL,
     infer_tax_treatment,
 )
+from three_fund_rebalance.formatting import format_account_heading, format_subheading
 from three_fund_rebalance.models import (
     PERCENT_SUM_TOLERANCE,
     Account,
@@ -135,7 +136,6 @@ def prompt_stock_bond_target(
     default_stock: Decimal | None = None,
     default_bond: Decimal | None = None,
 ) -> tuple[Decimal, Decimal]:
-    prompter.say("\nWhat is your target stock/bond allocation?")
     while True:
         stock = prompt_decimal(
             prompter, "Target stock %", default=default_stock, min_value=Decimal(0), max_value=Decimal(100)
@@ -161,8 +161,13 @@ def resolve_vt_split(
     cached_as_of: str | None = None,
     offline: bool = False,
 ) -> VTAllocationResult:
+    # Each fallback below separates itself from whatever came before it, but
+    # the first one to speak sits flush under the subheading cli.py printed.
+    spoken = False
+
     if not offline:
-        prompter.say("\nFetching VT's current US/international stock weighting from Vanguard...")
+        prompter.say("Fetching VT's current US/international stock weighting from Vanguard...")
+        spoken = True
         try:
             result = fetch_vt_us_pct()
             prompter.say(
@@ -175,15 +180,19 @@ def resolve_vt_split(
             prompter.say(f"  Could not fetch live data ({exc}).")
 
     if cached_us_pct is not None:
+        lead = "\n" if spoken else ""
         prompter.say(
-            f"\nLast known value: {cached_us_pct}% US (as of {cached_as_of or 'unknown date'})."
+            f"{lead}Last known value: {cached_us_pct}% US "
+            f"(as of {cached_as_of or 'unknown date'})."
         )
+        spoken = True
         if prompt_yes_no(prompter, "  Use this cached value?", default=True):
             return VTAllocationResult(us_pct=cached_us_pct, as_of=cached_as_of or "unknown date", source="cache")
 
     suggested_default = cached_us_pct if cached_us_pct is not None else FALLBACK_VT_US_PCT
+    lead = "\n" if spoken else ""
     prompter.say(
-        f"\nPlease enter VT's US stock allocation % manually "
+        f"{lead}Please enter VT's US stock allocation % manually "
         f"(see {VT_FACT_SHEET_URL} or Vanguard's fund page)."
     )
     manual = prompt_decimal(
@@ -269,12 +278,13 @@ def _prompt_new_account(prompter: Prompter, existing_names: set[str]) -> Account
             continue
         break
 
+    prompter.say("\n" + format_account_heading(name, account_type))
     holdings = _prompt_holdings(prompter, tax_treatment)
     return Account(account_type=account_type, name=name, tax_treatment=tax_treatment, holdings=holdings)
 
 
 def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Account:
-    prompter.say(f"\n{existing.name} ({existing.account_type}) -- press Enter to keep the last value:")
+    prompter.say("Press Enter to keep the last value.")
     new_holdings = []
     for holding in existing.holdings:
         if holding.fund_type == FundType.CASH:
@@ -320,22 +330,28 @@ def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Ac
 
 def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> list[Account]:
     accounts: list[Account] = []
-    prompter.say("\n--- Accounts ---")
     if existing_accounts:
+        prompter.say("\n" + format_subheading("Saved accounts"))
         prompter.say(
             f"You have {len(existing_accounts)} saved account(s): "
             f"{', '.join(a.name for a in existing_accounts)}"
         )
         for existing in existing_accounts:
-            if prompt_yes_no(prompter, f"Keep account '{existing.name}'?", default=True):
+            prompter.say("\n" + format_account_heading(existing.name, existing.account_type))
+            if prompt_yes_no(prompter, "Keep this account?", default=True):
                 accounts.append(_prompt_update_existing_account(prompter, existing))
             else:
                 prompter.say(f"Removed '{existing.name}'.")
 
+    prompter.say("\n" + format_subheading("New accounts"))
+    is_first_prompt = True
     while True:
-        prompt_text = "\nAdd an account?" if not accounts else "\nAdd another account?"
-        if not prompt_yes_no(prompter, prompt_text, default=not accounts):
+        label = "Add an account?" if not accounts else "Add another account?"
+        # Only the first question sits directly under the subheading; later
+        # ones need a blank line to separate them from the account above.
+        if not prompt_yes_no(prompter, label if is_first_prompt else f"\n{label}", default=not accounts):
             break
         accounts.append(_prompt_new_account(prompter, existing_names={a.name for a in accounts}))
+        is_first_prompt = False
 
     return accounts

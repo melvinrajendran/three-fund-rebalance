@@ -1,7 +1,9 @@
 [project]
 name = "three-fund-rebalance"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Interactive CLI that computes trades to rebalance a three-fund portfolio across multiple accounts."
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "scipy>=1.11",
@@ -20,8 +22,11 @@ dev = [
 ]
 
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "three_fund_rebalance.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["three_fund_rebalance*"]

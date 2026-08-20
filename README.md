@@ -14,99 +14,70 @@ they hold, and then prints the buy/sell/exchange trades needed to reach your
 target -- favoring tax-advantaged accounts for both bonds and rebalancing
 trades, to minimize tax drag.
 
-## Setup
+## Disclaimer
 
-Requires Python 3.10+. Note that `python3` on macOS may still be the system
-3.9 -- use an explicit interpreter (e.g. `python3.12`) if so.
+**This is not financial, investment, or tax advice.** It is a calculator that
+arithmetic-checks a portfolio against a target you choose. Review every trade
+it suggests before placing it, and consult a qualified professional if you
+want advice.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
+Some limits worth knowing about specifically:
 
-### Putting it on your PATH
+- It collects no cost-basis data, so it cannot compute capital gains. The
+  rebalance minimizes taxable trade *volume* as a proxy for tax cost -- a
+  heuristic, not a gains calculation. Selling in a taxable account may realize
+  a tax liability this tool never sees.
+- It knows nothing about wash sales, contribution or withdrawal limits,
+  holding periods, early-withdrawal penalties, or restrictions on what a given
+  account can actually hold -- a 401(k)'s fixed fund menu, for instance.
+- VT's US/ex-US weighting is fetched from Vanguard and may be stale, or may
+  fail and fall back to a cached or manually entered value.
 
-The generated console script hard-codes an absolute path to the venv's
-Python in its shebang, so it runs correctly from anywhere without the venv
-being activated. Symlink it into a directory already on your PATH:
+Provided as-is, without warranty of any kind.
 
-```bash
-ln -sf "$PWD/.venv/bin/three-fund-rebalance" ~/.local/bin/three-fund-rebalance
-```
+## Install
 
-Then `three-fund-rebalance` works from any directory. Because the package is
-installed in editable mode (`-e`), code changes take effect immediately with
-no reinstall. If you ever delete and rebuild `.venv`, the symlink keeps
-working as long as the rebuild recreates the same path.
-
-If you'd rather keep it isolated from this repo's venv,
-[pipx](https://pipx.pypa.io/) does the same job and manages the PATH entry
-for you:
+Requires Python 3.10+. Install with [pipx](https://pipx.pypa.io/), which puts
+the CLI on your PATH in its own isolated environment:
 
 ```bash
-brew install pipx && pipx ensurepath
-pipx install -e /path/to/three-fund-rebalance
+pipx install git+https://github.com/melvinrajendran/three-fund-rebalance
 ```
+
+If you don't have pipx yet: `brew install pipx && pipx ensurepath` on macOS,
+or `python3 -m pip install --user pipx && python3 -m pipx ensurepath`
+elsewhere.
+
+[uv](https://docs.astral.sh/uv/) does the same job and will fetch a suitable
+Python for you if your system one is too old:
+
+```bash
+uv tool install git+https://github.com/melvinrajendran/three-fund-rebalance
+```
+
+Either way, `three-fund-rebalance` then works from any directory. To remove
+it: `pipx uninstall three-fund-rebalance` (or `uv tool uninstall`).
 
 ## Updating
 
 ```bash
-git pull
+pipx install --force git+https://github.com/melvinrajendran/three-fund-rebalance
 ```
 
-That is usually the whole update. The package is installed in editable mode
-(`-e`), so the venv resolves `three_fund_rebalance` straight to this source
-directory -- edited modules **and newly added ones** take effect on the next
-run with no reinstall. The PATH symlink keeps working too, since it points at
-the venv's console script rather than at any particular version.
+The `--force` is deliberate. The version string in `pyproject.toml` doesn't
+change on every commit, so `pipx upgrade` compares versions, sees the
+installed one as current, and skips the refetch; `--force` reinstalls from
+the latest commit unconditionally. The uv equivalent is
+`uv tool install --force git+https://...`.
 
-Reinstall when the packaging metadata changes rather than the code:
-
-```bash
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
-
-Specifically, that is needed after a change to `pyproject.toml` that
-adds or bumps a **dependency**, renames the **console script** under
-`[project.scripts]`, or introduces a **new top-level package** (new modules
-*inside* `three_fund_rebalance/` do not count). The command is cheap and
-idempotent, so when in doubt just run it.
-
-Rebuild the venv from scratch if the required Python version rises, or if the
-environment gets into an inconsistent state (for example `pyvenv.cfg`
-reporting a different version than `.venv/bin/python` actually is):
-
-```bash
-rm -rf .venv
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
-
-The symlink from `~/.local/bin` survives this, because the rebuild recreates
-the same path. After any update, a quick check that things still work:
-
-```bash
-pytest
-three-fund-rebalance --help
-```
-
-Your saved portfolio config lives outside the repo at
-`~/.three_fund_rebalance/config.json`, so pulling, reinstalling, and even
-deleting `.venv` never touch it.
+Your saved portfolio config lives outside the installation at
+`~/.three_fund_rebalance/config.json`, so updating -- and even uninstalling
+-- never touches it.
 
 ## Running
 
 ```bash
 three-fund-rebalance
-```
-
-or, without the console script (requires the venv to be active):
-
-```bash
-python -m three_fund_rebalance.cli
 ```
 
 Useful flags:
@@ -118,6 +89,7 @@ Useful flags:
 | `--no-save` | Don't offer to persist this run's answers |
 | `--offline` | Skip the live VT fetch; use the cached or a manually entered value |
 | `--vt-us-pct PCT` | Manually set VT's US % and skip fetching/prompting for it entirely |
+| `--version` | Print the installed version and exit |
 
 On each run you're asked for your target stock/bond split, then your
 accounts (type, a unique nickname, and which of a domestic equity fund,
@@ -158,8 +130,56 @@ editable defaults -- press Enter to keep a value or type a new one.
 
 ## Development
 
+Clone the repo and install it in editable mode in a virtualenv:
+
+```bash
+git clone https://github.com/melvinrajendran/three-fund-rebalance
+cd three-fund-rebalance
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Note that `python3` on macOS may still be the system 3.9 -- use an explicit
+interpreter (e.g. `python3.12`) if so.
+
+With the venv active, run the CLI straight from your working copy:
+
+```bash
+three-fund-rebalance                    # the venv's console script
+python -m three_fund_rebalance.cli      # equivalent, without the console script
+```
+
+This coexists with a pipx or uv install: activating the venv puts its
+`bin/` first on your PATH, so the working copy shadows the installed CLI for
+as long as the venv is active, and the installed one comes back when it isn't.
+
+Editable mode means edited modules -- **and newly added ones** -- take effect
+on the next run with no reinstall. Rerun `pip install -e ".[dev]"` only when
+the packaging metadata changes rather than the code: a new or bumped
+**dependency**, a renamed **console script** under `[project.scripts]`, or a
+new **top-level package** (new modules *inside* `three_fund_rebalance/` do
+not count). The command is cheap and idempotent, so when in doubt just run it.
+
+Rebuild the venv from scratch if the required Python version rises, or if the
+environment gets into an inconsistent state (for example `pyvenv.cfg`
+reporting a different version than `.venv/bin/python` actually is):
+
+```bash
+rm -rf .venv
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Tests and lint:
+
 ```bash
 pytest                              # run the test suite
 pytest --cov=three_fund_rebalance --cov-report=term-missing  # with coverage
 ruff check three_fund_rebalance tests   # lint
 ```
+
+## License
+
+[MIT](LICENSE).
