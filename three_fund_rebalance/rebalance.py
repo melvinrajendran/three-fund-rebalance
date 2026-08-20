@@ -120,7 +120,7 @@ def _build_slots(accounts: list[Account]) -> list[_Slot]:
         tradeable = [h for h in account.holdings if h.fund_type != FundType.CASH]
         if not tradeable and account.total_value() > 0:
             raise RebalanceError(
-                f"Account '{account.name}' has ${account.total_value()} but no fund holdings "
+                f"Account '{account.name}' has ${account.total_value():,.2f} but no fund holdings "
                 "declared to invest it in -- add at least one fund holding for this account."
             )
         slots.extend(_Slot(account_index=account_index, holding=h) for h in tradeable)
@@ -131,7 +131,8 @@ def _check_names_unique(accounts: list[Account]) -> None:
     names = [a.name for a in accounts]
     duplicates = {name for name in names if names.count(name) > 1}
     if duplicates:
-        raise RebalanceError(f"Account names must be unique; duplicated: {sorted(duplicates)}")
+        listed = ", ".join(repr(name) for name in sorted(duplicates))
+        raise RebalanceError(f"Account names must be unique; duplicated: {listed}")
 
 
 def _check_capacity_feasible(

@@ -366,8 +366,9 @@ def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> lis
     accounts: list[Account] = []
     if existing_accounts:
         prompter.say("\n" + format_subheading("Saved accounts"))
+        noun = "account" if len(existing_accounts) == 1 else "accounts"
         prompter.say(
-            f"You have {len(existing_accounts)} saved account(s): "
+            f"You have {len(existing_accounts)} saved {noun}: "
             f"{', '.join(a.name for a in existing_accounts)}"
         )
         for existing in existing_accounts:

@@ -115,7 +115,9 @@ def format_report(accounts: list[Account], target: TargetAllocation, result: Reb
     lines = _subheading("Current vs. target allocation")
     lines.append(f"Total portfolio value: ${summary.total_value:,.2f}")
     if summary.uninvested_cash > 0:
-        lines.append(f"  (includes ${summary.uninvested_cash:,.2f} currently uninvested cash)")
+        lines.append(
+            f"{INDENT_UNIT}(includes ${summary.uninvested_cash:,.2f} of currently uninvested cash)"
+        )
     lines.append("")
     for cat in summary.categories:
         lines.append(
@@ -138,6 +140,10 @@ def format_report(accounts: list[Account], target: TargetAllocation, result: Reb
     for account in accounts:
         if account.name not in grouped:
             continue
+        # Every account block is preceded by a blank line, the first one
+        # included, so the blocks stay uniform. The allocation summary above
+        # sits flush under its own subheading because it is a single run of
+        # lines rather than a series of blocks.
         lines.append("")
         lines.append(INDENT_UNIT + format_account_heading(account.name, account.account_type))
         body_indent = INDENT_UNIT * 2
