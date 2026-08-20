@@ -38,13 +38,15 @@ class TestSubheading:
 
 
 class TestAccountHeading:
-    def test_names_the_account_and_its_type_on_one_delimited_line(self):
+    def test_names_the_account_and_its_type_on_one_plain_line(self):
         heading = format_account_heading("Fidelity Roth", "Roth IRA")
-        assert heading == "[ Fidelity Roth -- Roth IRA ]"
+        assert heading == "Fidelity Roth (Roth IRA)"
         assert "\n" not in heading
 
-    def test_stays_unruled_so_it_reads_lighter_than_the_headings_above_it(self):
+    def test_carries_no_rule_of_its_own_so_depth_alone_places_it(self):
+        """The level below a subheading is shown by indentation, not by a
+        third rule style competing with the two above it."""
         heading = format_account_heading("Fidelity Roth", "Roth IRA")
-        assert not any(rule_char in heading for rule_char in ("=", "~"))
+        assert not any(rule_char in heading for rule_char in "=-~.")
         assert format_subheading("Saved accounts").split("\n")[1][0] == "-"
         assert format_section_header(1, 3, "Account holdings").split("\n")[0][0] == "="

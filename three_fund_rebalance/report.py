@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from three_fund_rebalance.allocation import target_dollar_amounts
-from three_fund_rebalance.formatting import format_account_heading, format_subheading
+from three_fund_rebalance.formatting import (
+    INDENT_UNIT,
+    format_account_heading,
+    format_subheading,
+)
 from three_fund_rebalance.models import Account, TargetAllocation, Trade, to_cents
 from three_fund_rebalance.rebalance import RebalanceResult
 
@@ -111,7 +115,9 @@ def format_report(accounts: list[Account], target: TargetAllocation, result: Reb
     lines = _subheading("Current vs. target allocation")
     lines.append(f"Total portfolio value: ${summary.total_value:,.2f}")
     if summary.uninvested_cash > 0:
-        lines.append(f"  (includes ${summary.uninvested_cash:,.2f} currently uninvested cash)")
+        lines.append(
+            f"{INDENT_UNIT}(includes ${summary.uninvested_cash:,.2f} of currently uninvested cash)"
+        )
     lines.append("")
     for cat in summary.categories:
         lines.append(
@@ -134,11 +140,18 @@ def format_report(accounts: list[Account], target: TargetAllocation, result: Reb
     for account in accounts:
         if account.name not in grouped:
             continue
+        # Every account block is preceded by a blank line, the first one
+        # included, so the blocks stay uniform. The allocation summary above
+        # sits flush under its own subheading because it is a single run of
+        # lines rather than a series of blocks.
         lines.append("")
-        lines.append(format_account_heading(account.name, account.account_type))
+        lines.append(INDENT_UNIT + format_account_heading(account.name, account.account_type))
+        body_indent = INDENT_UNIT * 2
         cash = account.cash_balance()
         if cash > 0:
-            lines.append(f"  (investing ${cash:,.2f} of uninvested cash as part of these trades)")
+            lines.append(
+                f"{body_indent}(investing ${cash:,.2f} of uninvested cash as part of these trades)"
+            )
         for line in describe_account_trades(grouped[account.name]):
-            lines.append(f"  {line}")
+            lines.append(f"{body_indent}{line}")
     return "\n".join(lines)

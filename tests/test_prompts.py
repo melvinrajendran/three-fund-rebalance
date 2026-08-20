@@ -17,6 +17,49 @@ from three_fund_rebalance.prompts import (
 from three_fund_rebalance.vt_allocation import VTAllocationResult, VTFetchError
 
 
+class TestPrompterIndentation:
+    def make(self):
+        said, asked = [], []
+        prompter = Prompter(
+            input_func=lambda text: asked.append(text) or "",
+            print_func=said.append,
+        )
+        return prompter, said, asked
+
+    def test_says_and_asks_at_the_current_depth(self):
+        prompter, said, asked = self.make()
+        prompter.say("flush")
+        with prompter.indented():
+            prompter.say("one deep")
+            prompter.ask("question: ")
+            with prompter.indented():
+                prompter.say("two deep")
+        prompter.say("flush again")
+        assert said == ["flush", "  one deep", "    two deep", "flush again"]
+        assert asked == ["  question: "]
+
+    def test_depth_is_restored_even_if_the_block_raises(self):
+        prompter, said, _ = self.make()
+        with pytest.raises(RuntimeError), prompter.indented():
+            raise RuntimeError("boom")
+        prompter.say("flush")
+        assert said == ["flush"]
+
+    def test_a_leading_blank_line_stays_flush_so_it_still_separates(self):
+        """Messages that open with a newline use it as a separator; padding it
+        would emit a line of trailing whitespace instead of a blank one."""
+        prompter, said, _ = self.make()
+        with prompter.indented():
+            prompter.say("\nafter a gap")
+        assert said == ["\n  after a gap"]
+
+    def test_every_line_of_a_multi_line_message_is_indented(self):
+        prompter, said, _ = self.make()
+        with prompter.indented():
+            prompter.say("first\nsecond")
+        assert said == ["  first\n  second"]
+
+
 class ScriptedPrompter(Prompter):
     """A Prompter driven by a queue of canned responses, for testing the
     interactive flow without a real terminal."""
