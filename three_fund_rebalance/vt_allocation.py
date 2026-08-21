@@ -1,8 +1,8 @@
 """Fetches VT's (Vanguard Total World Stock ETF) US vs. ex-US stock weighting.
 
-This is used to translate a user's stock/bond target into a domestic/
-international equity split, on the theory that VT's market-cap weighting
-*is* "the world stock market's" domestic/international split.
+This is used to divide a user's stock target into U.S. and international
+stocks, on the theory that VT's market-cap weighting *is* how the world
+stock market itself is divided between the two.
 
 Two independent Vanguard sources are tried, in freshness order:
 
@@ -81,7 +81,7 @@ def _extract_us_pct_and_as_of(text: str) -> tuple[Decimal, str]:
         us_pct = Decimal(match.group(1))
     except InvalidOperation as exc:
         raise VTFetchError(
-            f"Found a US allocation match but could not parse it as a number: {match.group(1)!r}"
+            f"Found a U.S. allocation match but could not parse it as a number: {match.group(1)!r}"
         ) from exc
     if not (Decimal(0) < us_pct <= Decimal(100)):
         raise VTFetchError(f"Parsed US allocation percentage is out of range: {us_pct}")
@@ -118,7 +118,7 @@ def _extract_us_pct_from_diversification(payload: dict) -> tuple[Decimal, str]:
             continue
         raw_pct = item.get("currYrPct")
         if raw_pct in (None, ""):
-            raise VTFetchError("VT diversification response has no current-period US percentage.")
+            raise VTFetchError("VT diversification response has no current-period U.S. percentage.")
         try:
             us_pct = Decimal(str(raw_pct))
         except InvalidOperation as exc:

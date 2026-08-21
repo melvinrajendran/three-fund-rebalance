@@ -18,27 +18,35 @@ from three_fund_rebalance.config import (
     infer_tax_treatment,
 )
 from three_fund_rebalance.formatting import (
+    ASSET_CLASS_LABELS,
     INDENT_UNIT,
     format_account_heading,
     format_subheading,
 )
 from three_fund_rebalance.models import (
+    INDIVIDUAL_FUND_TYPES,
     PERCENT_SUM_TOLERANCE,
     Account,
     FundType,
     Holding,
+    TargetDateAllocation,
     TaxTreatment,
-    TDFAllocation,
 )
 from three_fund_rebalance.vt_allocation import VTAllocationResult, VTFetchError, fetch_vt_us_pct
 
-# (fund type, human description, whether it's a security that needs a name/ticker)
-_SLOT_PROMPTS: list[tuple[FundType, str]] = [
-    (FundType.DOMESTIC_EQUITY, "a domestic (US) equity fund"),
-    (FundType.INTERNATIONAL_EQUITY, "an international (ex-US) equity fund"),
-    (FundType.DOMESTIC_BOND, "a domestic bond fund"),
-    (FundType.TDF, "a target-date fund (TDF)"),
+# (fund type, how the question names it) -- also the order the slots are asked in.
+_INDIVIDUAL_SLOT_PROMPTS: list[tuple[FundType, str]] = [
+    (FundType.US_STOCK, "a U.S. stock fund"),
+    (FundType.INTERNATIONAL_STOCK, "an international stock fund"),
+    (FundType.US_BOND, "a U.S. bond fund"),
 ]
+
+# An account holds one or the other, never a mix, so this is asked once up
+# front rather than as a fourth "does it hold..." question that could be
+# answered yes alongside the others.
+_INDIVIDUAL_FUNDS_CHOICE = "Individual funds (U.S. stock, international stock, bonds)"
+_TARGET_DATE_CHOICE = "A single target-date fund"
+_HOLDING_KIND_CHOICES = [_INDIVIDUAL_FUNDS_CHOICE, _TARGET_DATE_CHOICE]
 
 
 class Prompter:
@@ -161,7 +169,7 @@ def prompt_choice(
 # --------------------------------------------------------------------------
 
 
-def prompt_stock_bond_target(
+def prompt_stock_bond_allocation(
     prompter: Prompter,
     *,
     default_stock: Decimal | None = None,
@@ -181,11 +189,11 @@ def prompt_stock_bond_target(
 
 
 # --------------------------------------------------------------------------
-# VT US/ex-US split, with the live-fetch -> cache -> manual fallback chain
+# VT's U.S. weighting, with the live-fetch -> cache -> manual fallback chain
 # --------------------------------------------------------------------------
 
 
-def resolve_vt_split(
+def resolve_vt_weighting(
     prompter: Prompter,
     *,
     cached_us_pct: Decimal | None = None,
@@ -197,23 +205,23 @@ def resolve_vt_split(
     spoken = False
 
     if not offline:
-        prompter.say("Fetching VT's current US/international stock weighting from Vanguard...")
+        prompter.say("Looking up VT's current U.S./international stock weighting from Vanguard...")
         spoken = True
         try:
             result = fetch_vt_us_pct()
             prompter.say(
-                f"  Found: {result.us_pct}% US / {result.ex_us_pct}% international "
+                f"  Found: {result.us_pct}% U.S. / {result.ex_us_pct}% international "
                 f"(as of {result.as_of})."
             )
             if prompt_yes_no(prompter, "  Use this value?", default=True):
                 return result
         except VTFetchError as exc:
-            prompter.say(f"  Could not fetch live data ({exc}).")
+            prompter.say(f"  Couldn't look up the current weighting ({exc}).")
 
     if cached_us_pct is not None:
         lead = "\n" if spoken else ""
         prompter.say(
-            f"{lead}Last known value: {cached_us_pct}% US "
+            f"{lead}Last known value: {cached_us_pct}% U.S. "
             f"(as of {cached_as_of or 'unknown date'})."
         )
         spoken = True
@@ -223,11 +231,11 @@ def resolve_vt_split(
     suggested_default = cached_us_pct if cached_us_pct is not None else FALLBACK_VT_US_PCT
     lead = "\n" if spoken else ""
     prompter.say(
-        f"{lead}Please enter VT's US stock allocation % manually "
+        f"{lead}Please enter VT's U.S. stock allocation % manually "
         f"(see {VT_FACT_SHEET_URL} or Vanguard's fund page)."
     )
     manual = prompt_decimal(
-        prompter, "US stock %", default=suggested_default, min_value=Decimal(0), max_value=Decimal(100)
+        prompter, "U.S. stock %", default=suggested_default, min_value=Decimal(0), max_value=Decimal(100)
     )
     return VTAllocationResult(us_pct=manual, as_of="manually entered", source="manual")
 
@@ -237,52 +245,79 @@ def resolve_vt_split(
 # --------------------------------------------------------------------------
 
 
-def _prompt_tdf_allocation(prompter: Prompter) -> TDFAllocation:
-    prompter.say("    Enter this TDF's underlying allocation (from its fact sheet):")
+def _describe_target_date_allocation(allocation: TargetDateAllocation) -> str:
+    """The fund's own mix on one line. Shown before offering to change it, so
+    the user is deciding against the numbers rather than from memory."""
+    return (
+        f"{allocation.us_stock_pct}% U.S. stocks / "
+        f"{allocation.international_stock_pct}% international stocks / "
+        f"{allocation.bond_pct}% bonds"
+    )
+
+
+def _prompt_target_date_allocation(prompter: Prompter) -> TargetDateAllocation:
+    prompter.say("    Enter this fund's underlying allocation (from its fact sheet):")
     while True:
-        domestic = prompt_decimal(
-            prompter, "      Domestic equity %", min_value=Decimal(0), max_value=Decimal(100)
+        us_stock = prompt_decimal(
+            prompter, "      U.S. stock %", min_value=Decimal(0), max_value=Decimal(100)
         )
-        intl = prompt_decimal(
-            prompter, "      International equity %", min_value=Decimal(0), max_value=Decimal(100)
+        international = prompt_decimal(
+            prompter, "      International stock %", min_value=Decimal(0), max_value=Decimal(100)
         )
         bond = prompt_decimal(prompter, "      Bond %", min_value=Decimal(0), max_value=Decimal(100))
-        total = domestic + intl + bond
+        total = us_stock + international + bond
         if abs(total - Decimal(100)) <= PERCENT_SUM_TOLERANCE:
-            return TDFAllocation(
-                domestic_equity_pct=domestic, international_equity_pct=intl, bond_pct=bond
+            return TargetDateAllocation(
+                us_stock_pct=us_stock, international_stock_pct=international, bond_pct=bond
             )
         prompter.say(f"    These must sum to 100 (got {total}). Let's try again.")
 
 
 def _prompt_new_holding(prompter: Prompter, fund_type: FundType) -> Holding:
-    name = prompt_str(prompter, "  Fund name/ticker")
-    balance = prompt_decimal(prompter, "  Current balance ($)", default=Decimal(0), min_value=Decimal(0))
-    tdf_allocation = _prompt_tdf_allocation(prompter) if fund_type == FundType.TDF else None
-    return Holding(fund_type=fund_type, name=name, balance=balance, tdf_allocation=tdf_allocation)
+    name = prompt_str(prompter, "  Fund name or ticker")
+    value = prompt_decimal(prompter, "  Current value ($)", default=Decimal(0), min_value=Decimal(0))
+    target_date_allocation = _prompt_target_date_allocation(prompter) if fund_type == FundType.TARGET_DATE else None
+    return Holding(fund_type=fund_type, name=name, value=value, target_date_allocation=target_date_allocation)
 
 
 def _prompt_cash(prompter: Prompter, *, default: Decimal = Decimal(0)) -> Holding | None:
     cash = prompt_decimal(
-        prompter, "Uninvested cash in this account ($)", default=default, min_value=Decimal(0)
+        prompter, "Cash available to invest ($)", default=default, min_value=Decimal(0)
     )
-    return Holding(fund_type=FundType.CASH, name="", balance=cash) if cash > 0 else None
+    return Holding(fund_type=FundType.CASH, name="", value=cash) if cash > 0 else None
+
+
+def _prompt_fund_holdings(prompter: Prompter) -> list[Holding]:
+    """The funds an account holds -- one target-date fund, or any combination
+    of the three individual funds. Never both; see Account's validation."""
+    kind = prompt_choice(
+        prompter,
+        "What does this account hold?",
+        _HOLDING_KIND_CHOICES,
+        default=_INDIVIDUAL_FUNDS_CHOICE,
+    )
+    if kind == _TARGET_DATE_CHOICE:
+        return [_prompt_new_holding(prompter, FundType.TARGET_DATE)]
+
+    holdings = []
+    for fund_type, description in _INDIVIDUAL_SLOT_PROMPTS:
+        if prompt_yes_no(prompter, f"Does this account hold {description}?", default=False):
+            holdings.append(_prompt_new_holding(prompter, fund_type))
+    return holdings
 
 
 def _prompt_holdings(prompter: Prompter, tax_treatment: TaxTreatment) -> list[Holding]:
-    holdings = []
-    for fund_type, description in _SLOT_PROMPTS:
-        if prompt_yes_no(prompter, f"Does this account hold {description}?", default=False):
-            holdings.append(_prompt_new_holding(prompter, fund_type))
+    holdings = _prompt_fund_holdings(prompter)
     cash_holding = _prompt_cash(prompter)
     if cash_holding:
         holdings.append(cash_holding)
 
-    has_bonds = any(h.fund_type in (FundType.DOMESTIC_BOND, FundType.TDF) for h in holdings)
+    has_bonds = any(h.fund_type in (FundType.US_BOND, FundType.TARGET_DATE) for h in holdings)
     if tax_treatment == TaxTreatment.TAXABLE and has_bonds:
         prompter.say(
-            "  Note: bonds (including via a TDF) held in a taxable account can trigger extra "
-            "tax on interest income; the rebalance will try to minimize this where possible."
+            "  Note: bonds held in a taxable account (including through a target-date fund) "
+            "pay interest that is taxed as income each year; the rebalance will hold bonds in "
+            "your tax-advantaged accounts wherever there is room."
         )
     return holdings
 
@@ -323,34 +358,45 @@ def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Ac
     for holding in existing.holdings:
         if holding.fund_type == FundType.CASH:
             continue
-        prompter.say(f"  {holding.name} ({holding.fund_type.value.replace('_', ' ')})")
-        balance = prompt_decimal(
-            prompter, "    Current balance ($)", default=holding.balance, min_value=Decimal(0)
+        prompter.say(f"  {holding.name} ({ASSET_CLASS_LABELS[holding.fund_type]} fund)")
+        value = prompt_decimal(
+            prompter, "    Current value ($)", default=holding.value, min_value=Decimal(0)
         )
-        tdf_allocation = holding.tdf_allocation
-        if holding.fund_type == FundType.TDF and prompt_yes_no(
-            prompter, "    Update this TDF's underlying allocation?", default=False
-        ):
-            tdf_allocation = _prompt_tdf_allocation(prompter)
+        target_date_allocation = holding.target_date_allocation
+        if holding.fund_type == FundType.TARGET_DATE:
+            prompter.say(
+                f"    Currently {_describe_target_date_allocation(target_date_allocation)}"
+            )
+            if prompt_yes_no(
+                prompter, "    Update this fund's underlying allocation?", default=False
+            ):
+                target_date_allocation = _prompt_target_date_allocation(prompter)
         new_holdings.append(
             Holding(
                 fund_type=holding.fund_type,
                 name=holding.name,
-                balance=balance,
-                tdf_allocation=tdf_allocation,
+                value=value,
+                target_date_allocation=target_date_allocation,
             )
         )
 
+    # What can be added depends on which kind of account this already is: a
+    # target-date account is full at one fund, an individual-fund account can
+    # gain the asset classes it's missing, and one holding only cash hasn't
+    # committed to either yet.
     declared_types = {h.fund_type for h in existing.holdings}
-    for fund_type, description in _SLOT_PROMPTS:
-        if fund_type in declared_types and fund_type != FundType.CASH:
-            continue
-        if fund_type not in declared_types and prompt_yes_no(
-            prompter, f"Add {description} to this account?", default=False
-        ):
-            new_holdings.append(_prompt_new_holding(prompter, fund_type))
+    if FundType.TARGET_DATE in declared_types:
+        pass
+    elif declared_types & set(INDIVIDUAL_FUND_TYPES):
+        for fund_type, description in _INDIVIDUAL_SLOT_PROMPTS:
+            if fund_type in declared_types:
+                continue
+            if prompt_yes_no(prompter, f"Add {description} to this account?", default=False):
+                new_holdings.append(_prompt_new_holding(prompter, fund_type))
+    else:
+        new_holdings.extend(_prompt_fund_holdings(prompter))
 
-    cash_holding = _prompt_cash(prompter, default=existing.cash_balance())
+    cash_holding = _prompt_cash(prompter, default=existing.available_cash())
     if cash_holding:
         new_holdings.append(cash_holding)
 

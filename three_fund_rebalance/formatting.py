@@ -10,7 +10,21 @@ would have said, without the ink.
 
 from __future__ import annotations
 
+from three_fund_rebalance.models import FundType
+
 SECTION_RULE_WIDTH = 52
+
+#: What each fund type is called in anything the user reads. Kept here rather
+#: than on FundType because the enum's values are a storage detail -- they go
+#: into config.json verbatim -- while these are prose, and are shared by the
+#: prompts, the report, and the solver's error messages.
+ASSET_CLASS_LABELS: dict[FundType, str] = {
+    FundType.US_STOCK: "U.S. stock",
+    FundType.INTERNATIONAL_STOCK: "international stock",
+    FundType.US_BOND: "bond",
+    FundType.TARGET_DATE: "target-date",
+    FundType.CASH: "cash",
+}
 
 #: One level of nesting. Below the ruled headings, depth is the whole system.
 INDENT_UNIT = "  "

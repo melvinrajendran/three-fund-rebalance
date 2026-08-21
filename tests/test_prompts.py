@@ -3,16 +3,22 @@ from decimal import Decimal
 import pytest
 
 from three_fund_rebalance import prompts as prompts_module
-from three_fund_rebalance.models import Account, FundType, Holding, TaxTreatment
+from three_fund_rebalance.models import (
+    Account,
+    FundType,
+    Holding,
+    TargetDateAllocation,
+    TaxTreatment,
+)
 from three_fund_rebalance.prompts import (
     Prompter,
     prompt_accounts,
     prompt_choice,
     prompt_decimal,
-    prompt_stock_bond_target,
+    prompt_stock_bond_allocation,
     prompt_str,
     prompt_yes_no,
-    resolve_vt_split,
+    resolve_vt_weighting,
 )
 from three_fund_rebalance.vt_allocation import VTAllocationResult, VTFetchError
 
@@ -140,14 +146,14 @@ class TestPromptChoice:
 
 
 class TestPromptStockBondTarget:
-    def test_accepts_valid_split(self):
+    def test_accepts_valid_allocation(self):
         p = ScriptedPrompter(["80", "20"])
-        stock, bond = prompt_stock_bond_target(p)
+        stock, bond = prompt_stock_bond_allocation(p)
         assert (stock, bond) == (Decimal(80), Decimal(20))
 
     def test_retries_when_not_summing_to_100(self):
         p = ScriptedPrompter(["80", "30", "70", "30"])
-        stock, bond = prompt_stock_bond_target(p)
+        stock, bond = prompt_stock_bond_allocation(p)
         assert (stock, bond) == (Decimal(70), Decimal(30))
 
 
@@ -159,7 +165,7 @@ class TestResolveVtSplit:
             lambda: VTAllocationResult(us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"),
         )
         p = ScriptedPrompter(["y"])
-        result = resolve_vt_split(p)
+        result = resolve_vt_weighting(p)
         assert result.us_pct == Decimal("61.9")
         assert result.source == "vanguard_fact_sheet"
 
@@ -170,7 +176,7 @@ class TestResolveVtSplit:
             lambda: VTAllocationResult(us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"),
         )
         p = ScriptedPrompter(["n", "y"])  # reject live, accept cache
-        result = resolve_vt_split(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
+        result = resolve_vt_weighting(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
         assert result.us_pct == Decimal(60)
         assert result.source == "cache"
 
@@ -180,7 +186,7 @@ class TestResolveVtSplit:
 
         monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", raise_fetch_error)
         p = ScriptedPrompter(["y"])  # accept cache
-        result = resolve_vt_split(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
+        result = resolve_vt_weighting(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
         assert result.us_pct == Decimal(60)
         assert result.source == "cache"
 
@@ -190,7 +196,7 @@ class TestResolveVtSplit:
 
         monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", raise_fetch_error)
         p = ScriptedPrompter(["58"])
-        result = resolve_vt_split(p)
+        result = resolve_vt_weighting(p)
         assert result.us_pct == Decimal(58)
         assert result.source == "manual"
 
@@ -200,7 +206,7 @@ class TestResolveVtSplit:
 
         monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", fail_if_called)
         p = ScriptedPrompter(["y"])
-        result = resolve_vt_split(p, cached_us_pct=Decimal(60), cached_as_of="last quarter", offline=True)
+        result = resolve_vt_weighting(p, cached_us_pct=Decimal(60), cached_as_of="last quarter", offline=True)
         assert result.us_pct == Decimal(60)
 
 
@@ -210,10 +216,10 @@ class TestPromptAccounts:
             "y",  # Add an account?
             "1",  # account type -> Roth IRA
             "My Roth",  # nickname
-            "y", "VTI", "6000",  # domestic equity
-            "y", "VXUS", "2000",  # intl equity
+            "1",  # holds individual funds
+            "y", "VTI", "6000",  # U.S. stock fund
+            "y", "VXUS", "2000",  # international stock fund
             "y", "BND", "2000",  # bond
-            "n",  # TDF? no
             "0",  # cash
             "n",  # Add another account?
         ]
@@ -226,23 +232,23 @@ class TestPromptAccounts:
         assert account.account_type == "Roth IRA"
         assert account.tax_treatment == TaxTreatment.TAX_ADVANTAGED
         assert account.total_value() == Decimal(10_000)
-        assert account.get_holding(FundType.DOMESTIC_EQUITY).name == "VTI"
+        assert account.get_holding(FundType.US_STOCK).name == "VTI"
 
     def test_duplicate_nickname_is_rejected_and_retried(self):
         responses = [
-            "y", "1", "First", "n", "n", "n", "n", "0",
-            "y", "1", "First", "SecondUnique", "n", "n", "n", "n", "0",
+            "y", "1", "First", "1", "n", "n", "n", "0",
+            "y", "1", "First", "SecondUnique", "1", "n", "n", "n", "0",
             "n",
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [])
         assert [a.name for a in accounts] == ["First", "SecondUnique"]
 
-    def test_tdf_allocation_must_sum_to_100_with_retry(self):
+    def test_target_date_allocation_must_sum_to_100_with_retry(self):
         responses = [
             "y", "1", "401k",
-            "n", "n", "n",  # no domestic/intl/bond individual funds
-            "y", "Target 2050", "10000",  # TDF holding
+            "2",  # holds a single target-date fund
+            "Target 2050", "10000",
             "50", "30", "10",  # invalid sum (90)
             "60", "20", "20",  # valid
             "0",  # cash
@@ -250,29 +256,29 @@ class TestPromptAccounts:
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [])
-        tdf_holding = accounts[0].get_holding(FundType.TDF)
-        assert tdf_holding.tdf_allocation.domestic_equity_pct == Decimal(60)
+        target_date_holding = accounts[0].get_holding(FundType.TARGET_DATE)
+        assert target_date_holding.target_date_allocation.us_stock_pct == Decimal(60)
 
-    def test_keep_existing_account_and_update_balance_via_default(self):
+    def test_keep_existing_account_and_update_value_via_default(self):
         existing = Account(
             account_type="Roth IRA",
             name="My Roth",
             tax_treatment=TaxTreatment.TAX_ADVANTAGED,
             holdings=[
-                Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(6000)),
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
             ],
         )
         responses = [
             "y",  # Keep account 'My Roth'?
-            "",  # balance default (keep 6000)
-            "n", "n", "n",  # decline adding intl/bond/TDF
+            "",  # value default (keep 6000)
+            "n", "n",  # decline adding international/bond
             "",  # cash default (0)
             "n",  # Add another account?
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [existing])
         assert len(accounts) == 1
-        assert accounts[0].get_holding(FundType.DOMESTIC_EQUITY).balance == Decimal(6000)
+        assert accounts[0].get_holding(FundType.US_STOCK).value == Decimal(6000)
 
     def test_removing_existing_account(self):
         existing = Account(
@@ -295,7 +301,8 @@ class TestPromptAccounts:
             "11",  # "Other" is the last entry in ACCOUNT_TYPE_CHOICES
             "y",  # is it tax-advantaged?
             "MyOtherAccount",
-            "n", "n", "n", "n",  # decline all four fund slots
+            "1",  # holds individual funds
+            "n", "n", "n",  # decline all three of them
             "50",  # nonzero cash
             "n",  # Add another account?
         ]
@@ -303,59 +310,110 @@ class TestPromptAccounts:
         accounts = prompt_accounts(p, [])
         assert accounts[0].account_type == "Other"
         assert accounts[0].tax_treatment == TaxTreatment.TAX_ADVANTAGED
-        assert accounts[0].cash_balance() == Decimal(50)
+        assert accounts[0].available_cash() == Decimal(50)
 
-    def test_updating_existing_account_covers_tdf_update_new_slot_and_cash(self):
-        from three_fund_rebalance.models import TDFAllocation
-
+    def test_updating_an_individual_fund_account_offers_only_the_missing_ones(self):
         existing = Account(
             account_type="Roth 401(k)",
             name="401k",
             tax_treatment=TaxTreatment.TAX_ADVANTAGED,
             holdings=[
-                Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(6000)),
-                Holding(
-                    fund_type=FundType.TDF,
-                    name="Target 2050",
-                    balance=Decimal(3000),
-                    tdf_allocation=TDFAllocation(
-                        domestic_equity_pct=Decimal(60),
-                        international_equity_pct=Decimal(20),
-                        bond_pct=Decimal(20),
-                    ),
-                ),
-                Holding(fund_type=FundType.CASH, name="", balance=Decimal(100)),
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
+                Holding(fund_type=FundType.CASH, name="", value=Decimal(100)),
             ],
         )
         responses = [
             "y",  # Keep account '401k'?
-            "",  # VTI balance -> keep default 6000
-            "",  # TDF balance -> keep default 3000
-            "y",  # update TDF's underlying allocation?
-            "70", "15", "15",  # new TDF allocation
-            "y", "VXUS", "500",  # add international equity fund (not previously declared)
-            "n",  # decline adding a domestic bond fund
+            "",  # VTI value -> keep default 6000
+            "y", "VXUS", "500",  # add international stock fund (not previously declared)
+            "n",  # decline adding a U.S. bond fund
             "200",  # cash -> update to 200
             "n",  # Add another account?
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [existing])
-        assert len(accounts) == 1
+        assert p.all_consumed()
         updated = accounts[0]
-        assert updated.get_holding(FundType.TDF).tdf_allocation.domestic_equity_pct == Decimal(70)
-        assert updated.get_holding(FundType.INTERNATIONAL_EQUITY).balance == Decimal(500)
-        assert updated.cash_balance() == Decimal(200)
+        assert updated.get_holding(FundType.INTERNATIONAL_STOCK).value == Decimal(500)
+        assert updated.available_cash() == Decimal(200)
+        # A target-date fund was never offered -- this account holds individual
+        # funds, so adding one would make it a mix.
+        assert updated.get_holding(FundType.TARGET_DATE) is None
+
+    def test_updating_a_cash_only_account_asks_which_kind_it_is_now(self):
+        """A saved account with no funds hasn't committed to either kind yet,
+        so it gets the same question a brand new account does."""
+        existing = Account(
+            account_type="Roth IRA",
+            name="Empty Roth",
+            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            holdings=[Holding(fund_type=FundType.CASH, name="", value=Decimal(500))],
+        )
+        responses = [
+            "y",  # Keep account 'Empty Roth'?
+            "2",  # it now holds a single target-date fund
+            "Target 2050", "500",
+            "60", "20", "20",
+            "0",  # cash -> all invested
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [existing])
+        assert p.all_consumed()
+        assert accounts[0].get_holding(FundType.TARGET_DATE).value == Decimal(500)
+        assert accounts[0].available_cash() == Decimal(0)
+
+    def test_updating_a_target_date_account_offers_no_other_funds(self):
+        existing = Account(
+            account_type="Roth 401(k)",
+            name="401k",
+            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            holdings=[
+                Holding(
+                    fund_type=FundType.TARGET_DATE,
+                    name="Target 2050",
+                    value=Decimal(3000),
+                    target_date_allocation=TargetDateAllocation(
+                        us_stock_pct=Decimal(60),
+                        international_stock_pct=Decimal(20),
+                        bond_pct=Decimal(20),
+                    ),
+                ),
+                Holding(fund_type=FundType.CASH, name="", value=Decimal(100)),
+            ],
+        )
+        responses = [
+            "y",  # Keep account '401k'?
+            "",  # target-date fund value -> keep default 3000
+            "y",  # update the fund's underlying allocation?
+            "70", "15", "15",  # new underlying allocation
+            "200",  # cash -> update to 200
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [existing])
+        assert p.all_consumed()
+        updated = accounts[0]
+        assert updated.get_holding(FundType.TARGET_DATE).target_date_allocation.us_stock_pct == Decimal(70)
+        assert updated.available_cash() == Decimal(200)
+        assert [h.fund_type for h in updated.holdings] == [FundType.TARGET_DATE, FundType.CASH]
+        # The mix being replaced is shown, so the answer isn't from memory. It
+        # is the *old* one: the question hasn't been answered yet at that point.
+        assert any(
+            "Currently 60% U.S. stocks / 20% international stocks / 20% bonds" in line
+            for line in p.said
+        )
 
     def test_taxable_account_with_bonds_prints_a_note(self):
         responses = [
             "y", "10",  # account type "Taxable Brokerage" is index 10 in ACCOUNT_TYPE_CHOICES
             "Brokerage",
-            "n", "n",  # no domestic/intl
+            "1",  # holds individual funds
+            "n", "n",  # no U.S./international stock funds
             "y", "BND", "1000",  # bond fund
-            "n",  # no TDF
             "0",  # cash
             "n",
         ]
         p = ScriptedPrompter(responses)
         prompt_accounts(p, [])
-        assert any("extra" in line.lower() and "tax" in line.lower() for line in p.said)
+        assert any("bonds" in line.lower() and "taxed" in line.lower() for line in p.said)

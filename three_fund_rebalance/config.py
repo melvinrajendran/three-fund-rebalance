@@ -11,7 +11,12 @@ from three_fund_rebalance.models import TaxTreatment
 # Persistence
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = 1
+# 2 renamed the fund types and the per-holding fields to the same words the
+# CLI puts on screen (us_stock/international_stock/us_bond/target_date, and
+# `value` for a holding's dollar amount). Version 1 files are still read --
+# persistence._upgrade_v1 translates them on load -- and are rewritten as 2
+# the next time the user saves.
+SCHEMA_VERSION = 2
 DEFAULT_CONFIG_PATH = Path.home() / ".three_fund_rebalance" / "config.json"
 
 # ---------------------------------------------------------------------------
