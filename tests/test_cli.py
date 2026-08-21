@@ -186,6 +186,18 @@ class TestEndToEndRun:
         assert exit_code == 0
         assert "could not read config" in prompter.full_output.lower()
 
+    def test_wrongly_shaped_config_falls_back_to_blank_with_warning(self, tmp_path):
+        """Valid JSON, wrong shape -- the file parses, so the failure happens
+        deeper than json.loads. It still has to be recoverable."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text('{"schema_version": 2, "accounts": ["not an account"]}')
+        prompter = ScriptedPrompter(["100", "0", "n"])
+        exit_code = run(
+            ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
+        )
+        assert exit_code == 0
+        assert "could not read config" in prompter.full_output.lower()
+
     def test_fresh_flag_ignores_existing_config(self, tmp_path):
         config_path = tmp_path / "config.json"
         # First run: create and save a config with one account.

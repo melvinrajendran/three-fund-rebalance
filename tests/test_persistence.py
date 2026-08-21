@@ -87,6 +87,107 @@ def target_date_allocation_of(account: Account) -> TargetDateAllocation:
     return account.get_holding(FundType.TARGET_DATE).target_date_allocation
 
 
+MALFORMED = {
+    "accounts is not a list": {"schema_version": 2, "accounts": 7},
+    "account is not an object": {"schema_version": 2, "accounts": ["nope"]},
+    "holdings is not a list": {
+        "schema_version": 2,
+        "accounts": [
+            {
+                "account_type": "Roth IRA",
+                "name": "X",
+                "tax_treatment": "tax_advantaged",
+                "holdings": 3,
+            }
+        ],
+    },
+    "holding is not an object": {
+        "schema_version": 2,
+        "accounts": [
+            {
+                "account_type": "Roth IRA",
+                "name": "X",
+                "tax_treatment": "tax_advantaged",
+                "holdings": ["nope"],
+            }
+        ],
+    },
+    "holding name is not a string": {
+        "schema_version": 2,
+        "accounts": [
+            {
+                "account_type": "Roth IRA",
+                "name": "X",
+                "tax_treatment": "tax_advantaged",
+                "holdings": [{"fund_type": "us_stock", "name": ["VTI"], "value": "10"}],
+            }
+        ],
+    },
+    "allocation is not an object": {
+        "schema_version": 2,
+        "accounts": [
+            {
+                "account_type": "Roth IRA",
+                "name": "X",
+                "tax_treatment": "tax_advantaged",
+                "holdings": [
+                    {
+                        "fund_type": "target_date",
+                        "name": "Target 2050",
+                        "value": "10",
+                        "target_date_allocation": "60/20/20",
+                    }
+                ],
+            }
+        ],
+    },
+    "percentage is not a string": {"schema_version": 2, "stock_pct": ["80"], "accounts": []},
+    "account name is null": {
+        "schema_version": 2,
+        "accounts": [
+            {
+                "account_type": "Roth IRA",
+                "name": None,
+                "tax_treatment": "tax_advantaged",
+                "holdings": [],
+            }
+        ],
+    },
+}
+
+
+class TestMalformedShapes:
+    """Valid JSON of the wrong shape must still come back as PersistenceError.
+    cli.run() recovers from that by warning and starting blank; any other
+    exception takes the whole run down over a file the user can hand-edit."""
+
+
+    @pytest.mark.parametrize("description", sorted(MALFORMED))
+    def test_wrong_shape_raises_persistence_error(self, description, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(MALFORMED[description]))
+        with pytest.raises(PersistenceError):
+            load_config(path)
+
+    @pytest.mark.parametrize("description", sorted(MALFORMED))
+    def test_wrong_shape_raises_persistence_error_via_v1_too(self, description, tmp_path):
+        """The v1 upgrade runs before any of these checks, so it has to survive
+        the same garbage rather than being the thing that raises."""
+        payload = dict(MALFORMED[description])
+        payload["schema_version"] = 1
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(payload))
+        with pytest.raises(PersistenceError):
+            load_config(path)
+
+    def test_specific_message_survives_the_catch_all(self, tmp_path):
+        """The backstop must not bury the message that names what's wrong."""
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(MALFORMED["holding is not an object"]))
+        with pytest.raises(PersistenceError, match="Invalid holding in config"):
+            load_config(path)
+
+
 class TestSchemaV1Migration:
     """v1 named the fund types and the per-holding amount after the academic
     terms; v2 uses the words the CLI prints. Files written by v1 must keep

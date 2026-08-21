@@ -117,8 +117,17 @@ with `\n` as a separator, and padding it would emit trailing whitespace.
 
 `~/.three_fund_rebalance/config.json`, versioned by `SCHEMA_VERSION`, written
 atomically (temp file + `os.replace`). Saved values are re-offered as *editable
-defaults*, never silently trusted. A corrupt file raises `PersistenceError`, which
-`cli.run()` catches to warn and continue blank rather than crash.
+defaults*, never silently trusted.
+
+**Every way a config file can fail to load raises `PersistenceError`** — that is
+what `cli.run()` catches to warn and continue blank instead of crashing, so any
+other exception escaping the parse takes the whole run down over a file the user
+can hand-edit. Valid JSON of the wrong shape counts: `"accounts": 7`, a holding
+that isn't an object, a name that's a list. The inner parsers name what's wrong
+where they can, and `config_from_dict` wraps the lot in a catch-all that converts
+anything unanticipated (re-raising `PersistenceError` untouched so specific
+messages survive). `tests/test_persistence.py::MALFORMED` is the table to extend
+when a new shape shows up.
 
 The file is at v2. v1 spelled the fund types after the academic asset classes
 (`domestic_equity`, `tdf`, `balance`, `balances_as_of`); v2 uses the same words the

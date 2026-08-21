@@ -52,7 +52,7 @@ def _decimal_from_json(value: str | None, *, field_name: str) -> Decimal | None:
         return None
     try:
         return Decimal(value)
-    except InvalidOperation as exc:
+    except (InvalidOperation, TypeError) as exc:
         raise PersistenceError(f"Could not parse {field_name!r} as a number: {value!r}") from exc
 
 
@@ -71,7 +71,7 @@ def _target_date_allocation_from_dict(data: dict) -> TargetDateAllocation:
             international_stock_pct=Decimal(data["international_stock_pct"]),
             bond_pct=Decimal(data["bond_pct"]),
         )
-    except (KeyError, InvalidOperation, ValueError) as exc:
+    except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
         raise PersistenceError(f"Invalid target_date_allocation in config: {data!r}") from exc
 
 
@@ -86,7 +86,7 @@ def _holding_from_dict(data: dict) -> Holding:
     try:
         fund_type = FundType(data["fund_type"])
         value = Decimal(data["value"])
-    except (KeyError, ValueError, InvalidOperation) as exc:
+    except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
         raise PersistenceError(f"Invalid holding in config: {data!r}") from exc
     allocation_data = data.get("target_date_allocation")
     try:
@@ -96,7 +96,7 @@ def _holding_from_dict(data: dict) -> Holding:
             value=value,
             target_date_allocation=_target_date_allocation_from_dict(allocation_data) if allocation_data else None,
         )
-    except ValueError as exc:
+    except (AttributeError, TypeError, ValueError) as exc:
         raise PersistenceError(f"Invalid holding in config: {data!r}: {exc}") from exc
 
 
@@ -119,7 +119,7 @@ def _account_from_dict(data: dict) -> Account:
             tax_treatment=tax_treatment,
             holdings=holdings,
         )
-    except (KeyError, ValueError) as exc:
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise PersistenceError(f"Invalid account in config: {data!r}: {exc}") from exc
 
 
@@ -197,24 +197,38 @@ def _upgrade_v1(data: dict) -> dict:
 
 
 def config_from_dict(data: dict) -> PersistedConfig:
-    schema_version = data.get("schema_version")
-    if schema_version == 1:
-        data = _upgrade_v1(data)
-        schema_version = data["schema_version"]
-    if schema_version != SCHEMA_VERSION:
-        raise PersistenceError(
-            f"Unsupported config schema_version {schema_version!r} "
-            f"(this version of three-fund-rebalance understands 1 and {SCHEMA_VERSION})"
+    """Parse a decoded config payload. Every way this can fail is reported as
+    PersistenceError -- see the catch-all at the bottom for why."""
+    try:
+        schema_version = data.get("schema_version")
+        if schema_version == 1:
+            data = _upgrade_v1(data)
+            schema_version = data["schema_version"]
+        if schema_version != SCHEMA_VERSION:
+            raise PersistenceError(
+                f"Unsupported config schema_version {schema_version!r} "
+                f"(this version of three-fund-rebalance understands 1 and {SCHEMA_VERSION})"
+            )
+        return PersistedConfig(
+            schema_version=schema_version,
+            stock_pct=_decimal_from_json(data.get("stock_pct"), field_name="stock_pct"),
+            bond_pct=_decimal_from_json(data.get("bond_pct"), field_name="bond_pct"),
+            vt_us_pct=_decimal_from_json(data.get("vt_us_pct"), field_name="vt_us_pct"),
+            vt_as_of=data.get("vt_as_of"),
+            values_as_of=data.get("values_as_of"),
+            accounts=[_account_from_dict(a) for a in data.get("accounts", [])],
         )
-    return PersistedConfig(
-        schema_version=schema_version,
-        stock_pct=_decimal_from_json(data.get("stock_pct"), field_name="stock_pct"),
-        bond_pct=_decimal_from_json(data.get("bond_pct"), field_name="bond_pct"),
-        vt_us_pct=_decimal_from_json(data.get("vt_us_pct"), field_name="vt_us_pct"),
-        vt_as_of=data.get("vt_as_of"),
-        values_as_of=data.get("values_as_of"),
-        accounts=[_account_from_dict(a) for a in data.get("accounts", [])],
-    )
+    except PersistenceError:
+        # Already names the account, holding, or field at fault -- don't bury
+        # that under the generic message below.
+        raise
+    except Exception as exc:
+        # The config file is hand-editable JSON, so it can be malformed in
+        # ways no specific check anticipates: a list where a string belongs,
+        # "accounts" that isn't a list, a holding that isn't an object.
+        # cli.run() recovers from PersistenceError by warning and starting
+        # blank, and crashes on anything else, so nothing may escape here.
+        raise PersistenceError(f"Config is not valid: {exc}") from exc
 
 
 def load_config(path: Path) -> PersistedConfig:
