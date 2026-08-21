@@ -2,15 +2,15 @@
 
 An interactive CLI that computes the trades needed to rebalance a
 [three-fund portfolio](https://www.bogleheads.org/wiki/Three-fund_portfolio)
-(domestic equity / international equity / bonds) to a target stock/bond
+(U.S. stocks / international stocks / bonds) to a target stock and bond
 allocation, across any number of investment accounts -- tax-advantaged
 (Roth/Traditional IRA, 401(k), HSA, ...) and taxable alike.
 
-It asks for your target stock/bond split, derives the domestic/international
-equity split from
+It asks for your target stock and bond allocation, derives the U.S. versus
+international stock mix from
 [VT](https://investor.vanguard.com/investment-products/etfs/profile/vt)'s
-current US/ex-US market weighting, asks about each of your accounts and what
-they hold, and then prints the buy/sell/exchange trades needed to reach your
+current market-cap weighting, asks about each of your accounts and what they
+hold, and then prints the buy, sell, and exchange orders needed to reach your
 target -- favoring tax-advantaged accounts for both bonds and rebalancing
 trades, to minimize tax drag.
 
@@ -27,11 +27,16 @@ Some limits worth knowing about specifically:
   rebalance minimizes taxable trade *volume* as a proxy for tax cost -- a
   heuristic, not a gains calculation. Selling in a taxable account may realize
   a tax liability this tool never sees.
+- Preferring international funds in taxable accounts is a rule of thumb, not
+  a calculation. The credit is worth a couple of basis points a year and is
+  partly offset by international funds' higher, less-qualified dividends; the
+  tool weighs neither, and does not check that a given fund is majority-foreign
+  and therefore actually eligible to pass the credit through.
 - It knows nothing about wash sales, contribution or withdrawal limits,
   holding periods, early-withdrawal penalties, or restrictions on what a given
   account can actually hold -- a 401(k)'s fixed fund menu, for instance.
-- VT's US/ex-US weighting is fetched from Vanguard and may be stale, or may
-  fail and fall back to a cached or manually entered value.
+- VT's U.S./international weighting is fetched from Vanguard and may be
+  stale, or may fail and fall back to a cached or manually entered value.
 
 ## Install
 
@@ -70,7 +75,8 @@ the latest commit unconditionally. The uv equivalent is
 
 Your saved portfolio config lives outside the installation at
 `~/.three_fund_rebalance/config.json`, so updating -- and even uninstalling
--- never touches it.
+-- never touches it. A config written by an older version is upgraded in
+place the first time a newer version saves over it.
 
 ## Running
 
@@ -86,21 +92,21 @@ Useful flags:
 | `--fresh` | Ignore any existing config file and start blank |
 | `--no-save` | Don't offer to persist this run's answers |
 | `--offline` | Skip the live VT fetch; use the cached or a manually entered value |
-| `--vt-us-pct PCT` | Manually set VT's US % and skip fetching/prompting for it entirely |
+| `--vt-us-pct PCT` | Manually set VT's U.S. % and skip looking it up or prompting for it |
 | `--version` | Print the installed version and exit |
 
-On each run you're asked for your target stock/bond split, then your
-accounts (type, a unique nickname, and which of a domestic equity fund,
-international equity fund, domestic bond fund, and/or target-date fund each
-one holds, plus any uninvested cash). If you've run it before, your saved
-accounts are offered back with their last-known balances pre-filled as
+On each run you're asked for your target stock and bond allocation, then
+your accounts (type, a unique nickname, whether the account holds individual
+funds or a single target-date fund, which of those funds it holds, and any
+cash available to invest). If you've run it before, your
+saved accounts are offered back with their last-known values pre-filled as
 editable defaults -- press Enter to keep a value or type a new one.
 
 ## How it works
 
-- **VT's US/ex-US weighting** comes from two independent Vanguard sources,
-  tried in freshness order. First the JSON endpoint behind the fund profile
-  page's country diversification table, which is refreshed **monthly**; if
+- **VT's U.S./international weighting** comes from two independent Vanguard
+  sources, tried in freshness order. First the JSON endpoint behind the fund
+  profile page's country diversification table, refreshed **monthly**; if
   that fails, Vanguard's **quarterly** fact sheet PDF
   (`https://fund-docs.vanguard.com/F3141.pdf`), a static file on a separate
   host outside the interactive site's bot protection. If both fail, the CLI
@@ -108,21 +114,32 @@ editable defaults -- press Enter to keep a value or type a new one.
   never guesses silently. The fund page's own HTML is deliberately not
   scraped: it's client-side rendered behind bot protection, so it would need
   a headless browser and would still break often.
+- **Each account holds one kind of thing**: either a single target-date fund
+  or some combination of a U.S. stock fund, an international stock fund and a
+  U.S. bond fund. Cash can sit alongside either. Different accounts in the
+  same portfolio can be of different kinds.
 - **Target-date funds** are entered as a single position with their own
-  domestic/international/bond split (from the fund's fact sheet), and are
-  folded into the overall allocation math as a fixed-ratio bundle -- a TDF
-  can coexist with individual funds in the same account.
-- **Uninvested cash** in an account counts toward that account's investable
+  U.S. stock / international stock / bond mix (from the fund's fact sheet),
+  and are folded into the overall allocation math as a fixed-ratio bundle.
+  Because such an account holds nothing else, its value is fixed: the tool
+  will never recommend selling a target-date fund, only investing that
+  account's cash into it. Its sleeves still count toward your overall
+  allocation, so the rest of the portfolio works around them.
+- **Cash available to invest** in an account counts toward that account's
   total and is always recommended to be fully invested.
-- **Rebalancing** is computed as a small linear program, solved in three
+- **Rebalancing** is computed as a small linear program, solved in four
   lexicographic phases: (1) minimize bonds left in taxable accounts --
   bonds fill tax-advantaged capacity first and only spill into taxable once
   that's exhausted; (2) minimize $ trade volume within taxable accounts, as
   a proxy for avoiding capital gains (no cost-basis data is collected, so
-  this is an approximation, not an exact gains calculation); (3) tie-break
-  by minimizing total trade volume everywhere. Each account's total value is
-  fixed -- a rebalance only reallocates *within* an account, never moves
-  money between accounts. Trades under $1 (Fidelity's fractional-share
+  this is an approximation, not an exact gains calculation); (3) prefer to
+  hold the international fund in taxable accounts, where the foreign tax
+  withheld on it can be claimed as a credit that a tax-advantaged account
+  forfeits -- ranked below (2), so it decides which fund to buy when an
+  account is being traded anyway and never opens a taxable trade of its own;
+  (4) tie-break by minimizing total trade volume everywhere. Each account's
+  total value is fixed -- a rebalance only reallocates *within* an account,
+  never moves money between accounts. Trades under $1 (Fidelity's fractional-share
   minimum, the smaller of its Roth IRA and taxable brokerage minimums) are
   dropped as impractical.
 

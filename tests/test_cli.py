@@ -31,18 +31,32 @@ class ScriptedPrompter(Prompter):
 def new_account_responses(
     account_type_index: str,
     nickname: str,
-    domestic_balance: str,
-    intl_balance: str,
-    bond_balance: str,
+    us_stock_value: str,
+    intl_value: str,
+    bond_value: str,
     cash: str = "0",
 ) -> list[str]:
     return [
         account_type_index,
         nickname,
-        "y", "VTI", domestic_balance,
-        "y", "VXUS", intl_balance,
-        "y", "BND", bond_balance,
-        "n",  # TDF
+        "1",  # holds individual funds rather than a target-date fund
+        "y", "VTI", us_stock_value,
+        "y", "VXUS", intl_value,
+        "y", "BND", bond_value,
+        cash,
+    ]
+
+
+def target_date_account_responses(
+    account_type_index: str, nickname: str, value: str, cash: str = "0"
+) -> list[str]:
+    """The other kind of account: one target-date fund and nothing else."""
+    return [
+        account_type_index,
+        nickname,
+        "2",  # holds a single target-date fund
+        "Target 2050", value,
+        "60", "20", "20",  # its underlying allocation
         cash,
     ]
 
@@ -62,8 +76,8 @@ class TestArgParsing:
 
 
 class TestEndToEndRun:
-    def test_run_without_vt_flag_uses_resolve_vt_split_offline_path(self, tmp_path):
-        # Without --vt-us-pct, run() should go through resolve_vt_split(); using
+    def test_run_without_vt_flag_uses_resolve_vt_weighting_offline_path(self, tmp_path):
+        # Without --vt-us-pct, run() should go through resolve_vt_weighting(); using
         # --offline with no cache exercises the manual-entry fallback without
         # touching the network.
         config_path = tmp_path / "config.json"
@@ -96,7 +110,7 @@ class TestEndToEndRun:
         )
 
         assert exit_code == 0
-        # domestic 80*75%=60, intl 20, bond 20 on a $10,000 account starting all-domestic
+        # U.S. 80*75%=60, international 20, bond 20 on a $10,000 account starting all-U.S.
         assert "Sell $4,000.00 of VTI" in prompter.full_output
         assert "Buy $2,000.00 of VXUS" in prompter.full_output
         assert "Buy $2,000.00 of BND" in prompter.full_output
@@ -106,9 +120,9 @@ class TestEndToEndRun:
         assert saved.bond_pct == Decimal(20)
         assert saved.vt_us_pct == Decimal(75)
         assert len(saved.accounts) == 1
-        # Persisted balances reflect what the user *entered* (current holdings),
+        # Persisted values reflect what the user *entered* (current holdings),
         # not the hypothetical post-trade recommendation.
-        assert saved.accounts[0].get_holding(FundType.DOMESTIC_EQUITY).balance == Decimal(10_000)
+        assert saved.accounts[0].get_holding(FundType.US_STOCK).value == Decimal(10_000)
 
     def test_already_balanced_reports_no_trades_needed(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -160,8 +174,9 @@ class TestEndToEndRun:
             "50", "50",  # 50% bond target
             "y",
             "1", "Roth",
-            "y", "VTI", "10000",  # only a domestic equity fund -- no bond slot
-            "n", "n", "n",  # no intl, no bond, no TDF
+            "1",  # individual funds
+            "y", "VTI", "10000",  # only a U.S. stock fund -- no bond slot
+            "n", "n",  # no international, no bond
             "0",
             "n",
         ]
@@ -180,6 +195,18 @@ class TestEndToEndRun:
             "n",  # no accounts, just check it doesn't crash
         ]
         prompter = ScriptedPrompter(responses)
+        exit_code = run(
+            ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
+        )
+        assert exit_code == 0
+        assert "could not read config" in prompter.full_output.lower()
+
+    def test_wrongly_shaped_config_falls_back_to_blank_with_warning(self, tmp_path):
+        """Valid JSON, wrong shape -- the file parses, so the failure happens
+        deeper than json.loads. It still has to be recoverable."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text('{"schema_version": 2, "accounts": ["not an account"]}')
+        prompter = ScriptedPrompter(["100", "0", "n"])
         exit_code = run(
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
         )

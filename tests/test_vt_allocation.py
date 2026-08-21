@@ -131,7 +131,7 @@ class TestExtractFromDiversification:
         payload = {
             "country": {"currentAsOfDate": "", "item": [{"name": "United States", "currYrPct": None}]}
         }
-        with pytest.raises(VTFetchError, match="no current-period US percentage"):
+        with pytest.raises(VTFetchError, match=r"no current-period U\.S\. percentage"):
             _extract_us_pct_from_diversification(payload)
 
     def test_unparseable_percentage_raises(self):

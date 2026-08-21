@@ -12,7 +12,7 @@ python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
 pytest                                   # full suite (fast: ~0.4s, no network)
 pytest tests/test_rebalance.py           # one file
 pytest tests/test_cli.py::TestArgParsing::test_version_flag_prints_version_and_exits_cleanly
-pytest -k "tdf and not persistence"      # by expression
+pytest -k "target_date and not persistence"   # by expression
 pytest --cov=three_fund_rebalance --cov-report=term-missing
 
 ruff check three_fund_rebalance tests    # lint (CI runs exactly this)
@@ -41,7 +41,7 @@ brittle because the prompt sequence branches on answers.
 One linear pipeline, orchestrated end-to-end by `cli.run()`:
 
 ```
-load_config → prompt_stock_bond_target → resolve_vt_split → compute_target_allocation
+load_config → prompt_stock_bond_allocation → resolve_vt_weighting → compute_target_allocation
             → prompt_accounts → compute_trades → format_report → save_config
 ```
 
@@ -58,18 +58,30 @@ back at the boundary. Introducing a float into a dollar amount elsewhere is a bu
 
 **A rebalance never moves money between accounts.** Each account's total value is an
 equality constraint. Trades only reallocate *within* an account, including investing
-that account's uninvested cash.
+that account's available cash.
 
 **`FundType.CASH` has an implicit target of zero** — cash is always fully invested.
 It is excluded from the tradeable slots and from `_TARGET_FUND_TYPES`.
 
-**A TDF is one position holding a fixed internal ratio,** not three positions.
-`_fund_type_coefficient` is what lets a single slot contribute fractionally to all
-three targets, so a TDF can coexist with individual funds in the same account.
+**A target-date fund is one position holding a fixed internal ratio,** not three
+positions. `_fund_type_coefficient` is what lets a single slot contribute
+fractionally to all three targets.
+
+**An account holds a target-date fund *or* individual funds, never both** (cash may
+sit alongside either). `Account.__post_init__` enforces it, `prompts` asks which kind
+up front instead of offering a fourth yes/no, and `INDIVIDUAL_FUND_TYPES` is the set
+that clashes with `TARGET_DATE`.
+
+The consequence worth holding onto: **a target-date account has exactly one slot, so
+the per-account budget equality pins it outright.** No objective can reach inside it.
+That is what stops the solver from liquidating a taxable target-date fund to relocate
+the bond sleeve within it — which it used to do even for a portfolio already sitting
+on its target. It also means such an account sets a *floor* under every asset class,
+not just a ceiling, which is why `_check_capacity_feasible` checks both.
 
 ### The solver (`rebalance.py`)
 
-One decision variable per existing (account, holding) slot, solved as three
+One decision variable per existing (account, holding) slot, solved as four
 **lexicographic** phases — each phase's optimum is carried forward as a `<=` bound so
 later phases refine but never undo earlier ones:
 
@@ -77,15 +89,38 @@ later phases refine but never undo earlier ones:
 2. Minimize trade volume *within taxable accounts* — the proxy for avoiding capital
    gains. **No cost-basis data is collected**, so this is an approximation, not a
    gains calculation. Do not describe it as one in user-facing text.
-3. Tie-break by minimizing total trade volume everywhere, so the recommendation
+3. Minimize the international fund held in *tax-advantaged* accounts, i.e. prefer it
+   in taxable, where its foreign withholding is claimable as a credit.
+4. Tie-break by minimizing total trade volume everywhere, so the recommendation
    disturbs the fewest positions.
+
+**Phase 3's rank is the whole design, in both directions.** Above phase 4 so it will
+do free (non-taxable) rearrangement to fix placement; below phase 2 so it will never
+open a taxable trade to chase a credit worth a couple of basis points against a
+realized gain we cannot even measure. It also tests `slot.fund_type` directly rather
+than going through `_fund_type_coefficient` — a target-date fund is not
+majority-foreign, so it passes no credit through from either kind of account, and
+counting its international sleeve makes the solver liquidate half a TDF for nothing
+(`test_target_date_international_sleeve_is_left_alone` pins this).
+
+A caution when testing placement: this LP is degenerate, so a scenario where the
+preferred placement merely *ties* proves nothing — the old solver often picked it
+anyway. A test earns its keep only if it fails against the previous ranking; see
+`test_international_is_moved_out_of_tax_advantaged_when_the_trades_are_free`.
 
 `_OBJECTIVE_SLACK` exists because HiGHS is not bit-exact — a hard `<=` against a raw
 optimum can spuriously reject the next phase's true optimum. Don't tighten it to zero.
 
 `_check_capacity_feasible` deliberately fails early with an actionable message rather
-than letting scipy surface a generic "infeasible". Trades below `MIN_TRADE_DOLLARS`
-are dropped as impractical.
+than letting scipy surface a generic "infeasible". It bounds each asset class by the
+smallest and largest coefficient among an account's own slots, because the account
+must spend exactly its own total across them — so a single-fund account's floor and
+ceiling are the same number. All three ceilings are checked before any floor: one
+account holding one fund breaches both at once, and "nothing you hold can be bonds"
+points at the missing piece, while "you are stuck holding this much U.S. stock"
+describes the same problem from the side the user can do least about.
+
+Trades below `MIN_TRADE_DOLLARS` are dropped as impractical.
 
 ### VT weighting (`vt_allocation.py`)
 
@@ -115,9 +150,33 @@ with `\n` as a separator, and padding it would emit trailing whitespace.
 ### Persistence
 
 `~/.three_fund_rebalance/config.json`, versioned by `SCHEMA_VERSION`, written
-atomically (temp file + `os.replace`). Saved balances are re-offered as *editable
-defaults*, never silently trusted. A corrupt file raises `PersistenceError`, which
-`cli.run()` catches to warn and continue blank rather than crash.
+atomically (temp file + `os.replace`). Saved values are re-offered as *editable
+defaults*, never silently trusted.
+
+**Every way a config file can fail to load raises `PersistenceError`** — that is
+what `cli.run()` catches to warn and continue blank instead of crashing, so any
+other exception escaping the parse takes the whole run down over a file the user
+can hand-edit. Valid JSON of the wrong shape counts: `"accounts": 7`, a holding
+that isn't an object, a name that's a list. The inner parsers name what's wrong
+where they can, and `config_from_dict` wraps the lot in a catch-all that converts
+anything unanticipated (re-raising `PersistenceError` untouched so specific
+messages survive). `tests/test_persistence.py::MALFORMED` is the table to extend
+when a new shape shows up.
+
+A config saved before accounts became one-kind-or-the-other can hold a mix, and no
+longer loads; `Account`'s message names the account, and `cli.run()` warns and starts
+blank as it does for any `PersistenceError`. That is deliberate — splitting such an
+account automatically would invent an account boundary that is a hard constraint on
+the solver.
+
+The file is at v2. v1 spelled the fund types after the academic asset classes
+(`domestic_equity`, `tdf`, `balance`, `balances_as_of`); v2 uses the same words the
+CLI prints (`us_stock`, `target_date`, `value`, `values_as_of`). `_upgrade_v1`
+translates on load without validating — anything still wrong surfaces from the
+normal parse, so a corrupt v1 file reports what a corrupt v2 file would — and the
+next save rewrites the file as v2. It copies at every level: a failed load must not
+leave the caller's parsed JSON half-renamed. Any further rename of a persisted name
+needs the same treatment, not an in-place edit of the current version.
 
 ## Testing conventions
 

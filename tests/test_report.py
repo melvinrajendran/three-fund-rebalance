@@ -36,46 +36,46 @@ class TestSummarizeAllocation:
                 name="Roth",
                 tax_treatment=TaxTreatment.TAX_ADVANTAGED,
                 holdings=[
-                    Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(8000)),
-                    Holding(fund_type=FundType.DOMESTIC_BOND, name="BND", balance=Decimal(2000)),
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(8000)),
+                    Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(2000)),
                 ],
             )
         ]
         target = TargetAllocation(
-            domestic_equity_pct=Decimal(60), international_equity_pct=Decimal(20), bond_pct=Decimal(20)
+            us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         summary = summarize_allocation(accounts, target)
         assert summary.total_value == Decimal("10000.00")
-        assert summary.uninvested_cash == Decimal(0)
+        assert summary.available_cash == Decimal(0)
 
-        domestic = next(c for c in summary.categories if c.label == "Domestic equity")
-        assert domestic.current_amount == Decimal("8000.00")
-        assert domestic.current_pct == Decimal(80)
-        assert domestic.target_amount == Decimal("6000.00")
-        assert domestic.target_pct == Decimal(60)
+        us_stocks = next(c for c in summary.categories if c.label == "U.S. stocks")
+        assert us_stocks.current_amount == Decimal("8000.00")
+        assert us_stocks.current_pct == Decimal(80)
+        assert us_stocks.target_amount == Decimal("6000.00")
+        assert us_stocks.target_pct == Decimal(60)
 
-    def test_includes_uninvested_cash_in_total_but_not_any_category(self):
+    def test_includes_available_cash_in_total_but_not_any_category(self):
         accounts = [
             Account(
                 account_type="Taxable Brokerage",
                 name="Brokerage",
                 tax_treatment=TaxTreatment.TAXABLE,
                 holdings=[
-                    Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(1000)),
-                    Holding(fund_type=FundType.CASH, name="", balance=Decimal(500)),
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1000)),
+                    Holding(fund_type=FundType.CASH, name="", value=Decimal(500)),
                 ],
             )
         ]
         target = TargetAllocation(
-            domestic_equity_pct=Decimal(100), international_equity_pct=Decimal(0), bond_pct=Decimal(0)
+            us_stock_pct=Decimal(100), international_stock_pct=Decimal(0), bond_pct=Decimal(0)
         )
         summary = summarize_allocation(accounts, target)
         assert summary.total_value == Decimal("1500.00")
-        assert summary.uninvested_cash == Decimal("500.00")
+        assert summary.available_cash == Decimal("500.00")
 
     def test_empty_portfolio_does_not_divide_by_zero(self):
         summary = summarize_allocation(
-            [], TargetAllocation(domestic_equity_pct=Decimal(60), international_equity_pct=Decimal(20), bond_pct=Decimal(20))
+            [], TargetAllocation(us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20))
         )
         assert summary.total_value == Decimal(0)
         assert all(c.current_pct == Decimal(0) for c in summary.categories)
@@ -84,17 +84,17 @@ class TestSummarizeAllocation:
 class TestDescribeAccountTrades:
     def test_single_sell_and_buy_becomes_exchange(self):
         trades = [
-            trade("Roth", FundType.DOMESTIC_EQUITY, "VTI", "sell", "400.00"),
-            trade("Roth", FundType.DOMESTIC_BOND, "BND", "buy", "400.00"),
+            trade("Roth", FundType.US_STOCK, "VTI", "sell", "400.00"),
+            trade("Roth", FundType.US_BOND, "BND", "buy", "400.00"),
         ]
         lines = describe_account_trades(trades)
         assert lines == ["Exchange $400.00 from VTI to BND"]
 
     def test_multiple_sells_and_one_buy_stay_separate(self):
         trades = [
-            trade("Roth", FundType.DOMESTIC_EQUITY, "VTI", "sell", "200.00"),
-            trade("Roth", FundType.INTERNATIONAL_EQUITY, "VXUS", "sell", "200.00"),
-            trade("Roth", FundType.DOMESTIC_BOND, "BND", "buy", "400.00"),
+            trade("Roth", FundType.US_STOCK, "VTI", "sell", "200.00"),
+            trade("Roth", FundType.INTERNATIONAL_STOCK, "VXUS", "sell", "200.00"),
+            trade("Roth", FundType.US_BOND, "BND", "buy", "400.00"),
         ]
         lines = describe_account_trades(trades)
         assert lines == [
@@ -104,16 +104,16 @@ class TestDescribeAccountTrades:
         ]
 
     def test_single_buy_only_stays_a_buy_line(self):
-        trades = [trade("Brokerage", FundType.DOMESTIC_EQUITY, "VTI", "buy", "750.00")]
+        trades = [trade("Brokerage", FundType.US_STOCK, "VTI", "buy", "750.00")]
         assert describe_account_trades(trades) == ["Buy $750.00 of VTI"]
 
 
 class TestGroupTradesByAccount:
     def test_groups_by_account_name(self):
         trades = [
-            trade("A", FundType.DOMESTIC_EQUITY, "VTI", "sell", "100"),
-            trade("B", FundType.DOMESTIC_EQUITY, "VTI", "buy", "100"),
-            trade("A", FundType.DOMESTIC_BOND, "BND", "buy", "100"),
+            trade("A", FundType.US_STOCK, "VTI", "sell", "100"),
+            trade("B", FundType.US_STOCK, "VTI", "buy", "100"),
+            trade("A", FundType.US_BOND, "BND", "buy", "100"),
         ]
         grouped = group_trades_by_account(trades)
         assert set(grouped.keys()) == {"A", "B"}
@@ -128,12 +128,12 @@ class TestFormatReport:
             name="Roth",
             tax_treatment=TaxTreatment.TAX_ADVANTAGED,
             holdings=[
-                Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(1000)),
-                Holding(fund_type=FundType.DOMESTIC_BOND, name="BND", balance=Decimal(0)),
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1000)),
+                Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(0)),
             ],
         )
         target = TargetAllocation(
-            domestic_equity_pct=Decimal(50), international_equity_pct=Decimal(0), bond_pct=Decimal(50)
+            us_stock_pct=Decimal(50), international_stock_pct=Decimal(0), bond_pct=Decimal(50)
         )
         return account, target
 
@@ -147,8 +147,8 @@ class TestFormatReport:
         account, target = self.make_account_and_target()
         result = RebalanceResult(
             trades=[
-                trade("Roth", FundType.DOMESTIC_EQUITY, "VTI", "sell", "500.00"),
-                trade("Roth", FundType.DOMESTIC_BOND, "BND", "buy", "500.00"),
+                trade("Roth", FundType.US_STOCK, "VTI", "sell", "500.00"),
+                trade("Roth", FundType.US_BOND, "BND", "buy", "500.00"),
             ],
             warnings=[],
             taxable_bond_dollars=Decimal(0),
@@ -169,10 +169,10 @@ class TestFormatReport:
             account_type="Traditional IRA",
             name="Trad IRA",
             tax_treatment=TaxTreatment.TAX_ADVANTAGED,
-            holdings=[Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(500))],
+            holdings=[Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(500))],
         )
         result = RebalanceResult(
-            trades=[trade("Roth", FundType.DOMESTIC_EQUITY, "VTI", "sell", "500.00")],
+            trades=[trade("Roth", FundType.US_STOCK, "VTI", "sell", "500.00")],
             warnings=[],
             taxable_bond_dollars=Decimal(0),
         )
@@ -186,17 +186,17 @@ class TestFormatReport:
             name="Brokerage",
             tax_treatment=TaxTreatment.TAXABLE,
             holdings=[
-                Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(0)),
-                Holding(fund_type=FundType.CASH, name="", balance=Decimal(1000)),
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(0)),
+                Holding(fund_type=FundType.CASH, name="", value=Decimal(1000)),
             ],
         )
         target = TargetAllocation(
-            domestic_equity_pct=Decimal(100), international_equity_pct=Decimal(0), bond_pct=Decimal(0)
+            us_stock_pct=Decimal(100), international_stock_pct=Decimal(0), bond_pct=Decimal(0)
         )
         result = RebalanceResult(
-            trades=[trade("Brokerage", FundType.DOMESTIC_EQUITY, "VTI", "buy", "1000.00")],
+            trades=[trade("Brokerage", FundType.US_STOCK, "VTI", "buy", "1000.00")],
             warnings=[],
             taxable_bond_dollars=Decimal(0),
         )
         text = format_report([account], target, result)
-        assert "investing $1,000.00 of uninvested cash" in text
+        assert "includes investing $1,000.00 of available cash" in text

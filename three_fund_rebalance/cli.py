@@ -1,6 +1,6 @@
 """Command-line entry point: orchestrates the interactive flow end-to-end.
 
-    stock/bond target -> VT US/ex-US split -> per-account holdings
+    stock and bond target -> VT's U.S. weighting -> per-account holdings
     -> LP rebalance -> report -> optionally persist for next time.
 """
 
@@ -25,9 +25,9 @@ from three_fund_rebalance.persistence import (
 from three_fund_rebalance.prompts import (
     Prompter,
     prompt_accounts,
-    prompt_stock_bond_target,
+    prompt_stock_bond_allocation,
     prompt_yes_no,
-    resolve_vt_split,
+    resolve_vt_weighting,
 )
 from three_fund_rebalance.rebalance import RebalanceError, compute_trades
 from three_fund_rebalance.report import format_report
@@ -44,7 +44,7 @@ def _decimal_arg(raw: str) -> Decimal:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="three-fund-rebalance",
-        description="Compute trades to rebalance a three-fund portfolio across accounts.",
+        description="Calculate the trades needed to rebalance a three-fund portfolio across your accounts.",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -71,7 +71,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=_decimal_arg,
         default=None,
         metavar="PCT",
-        help="Manually set VT's US stock allocation %% and skip fetching/prompting for it entirely",
+        help="Manually set VT's U.S. stock allocation %% and skip looking it up or prompting for it",
     )
     return parser.parse_args(argv)
 
@@ -89,22 +89,22 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
 
     prompter.say("\n" + format_section_header(1, 3, "Target asset allocation"))
 
-    prompter.say("\n" + format_subheading("Stock/bond split"))
-    stock_pct, bond_pct = prompt_stock_bond_target(
+    prompter.say("\n" + format_subheading("Stock and bond allocation"))
+    stock_pct, bond_pct = prompt_stock_bond_allocation(
         prompter, default_stock=config.stock_pct, default_bond=config.bond_pct
     )
 
-    prompter.say("\n" + format_subheading("Domestic/international equity split"))
+    prompter.say("\n" + format_subheading("U.S. and international stock allocation"))
     if args.vt_us_pct is not None:
         vt_result = VTAllocationResult(
             us_pct=args.vt_us_pct, as_of="manually specified via --vt-us-pct", source="manual"
         )
         prompter.say(
-            f"Using {vt_result.us_pct}% US / {Decimal(100) - vt_result.us_pct}% international, "
+            f"Using {vt_result.us_pct}% U.S. / {Decimal(100) - vt_result.us_pct}% international, "
             f"as given by --vt-us-pct."
         )
     else:
-        vt_result = resolve_vt_split(
+        vt_result = resolve_vt_weighting(
             prompter,
             cached_us_pct=config.vt_us_pct,
             cached_as_of=config.vt_as_of,
@@ -129,14 +129,14 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
     prompter.say("\n" + format_report(accounts, target, result))
 
     if not args.no_save and prompt_yes_no(
-        prompter, "\nSave this configuration for next time?", default=True
+        prompter, "\nSave this portfolio for next time?", default=True
     ):
         updated = PersistedConfig(
             stock_pct=stock_pct,
             bond_pct=bond_pct,
             vt_us_pct=vt_result.us_pct,
             vt_as_of=vt_result.as_of,
-            balances_as_of=datetime.now(tz=timezone.utc).date().isoformat(),
+            values_as_of=datetime.now(tz=timezone.utc).date().isoformat(),
             accounts=accounts,
         )
         save_config(args.config, updated)
