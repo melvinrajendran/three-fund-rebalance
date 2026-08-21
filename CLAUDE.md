@@ -12,7 +12,7 @@ python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
 pytest                                   # full suite (fast: ~0.4s, no network)
 pytest tests/test_rebalance.py           # one file
 pytest tests/test_cli.py::TestArgParsing::test_version_flag_prints_version_and_exits_cleanly
-pytest -k "tdf and not persistence"      # by expression
+pytest -k "target_date and not persistence"   # by expression
 pytest --cov=three_fund_rebalance --cov-report=term-missing
 
 ruff check three_fund_rebalance tests    # lint (CI runs exactly this)
@@ -41,7 +41,7 @@ brittle because the prompt sequence branches on answers.
 One linear pipeline, orchestrated end-to-end by `cli.run()`:
 
 ```
-load_config → prompt_stock_bond_target → resolve_vt_split → compute_target_allocation
+load_config → prompt_stock_bond_allocation → resolve_vt_weighting → compute_target_allocation
             → prompt_accounts → compute_trades → format_report → save_config
 ```
 
@@ -58,14 +58,15 @@ back at the boundary. Introducing a float into a dollar amount elsewhere is a bu
 
 **A rebalance never moves money between accounts.** Each account's total value is an
 equality constraint. Trades only reallocate *within* an account, including investing
-that account's uninvested cash.
+that account's available cash.
 
 **`FundType.CASH` has an implicit target of zero** — cash is always fully invested.
 It is excluded from the tradeable slots and from `_TARGET_FUND_TYPES`.
 
-**A TDF is one position holding a fixed internal ratio,** not three positions.
-`_fund_type_coefficient` is what lets a single slot contribute fractionally to all
-three targets, so a TDF can coexist with individual funds in the same account.
+**A target-date fund is one position holding a fixed internal ratio,** not three
+positions. `_fund_type_coefficient` is what lets a single slot contribute
+fractionally to all three targets, so a target-date fund can coexist with
+individual funds in the same account.
 
 ### The solver (`rebalance.py`)
 
@@ -115,9 +116,18 @@ with `\n` as a separator, and padding it would emit trailing whitespace.
 ### Persistence
 
 `~/.three_fund_rebalance/config.json`, versioned by `SCHEMA_VERSION`, written
-atomically (temp file + `os.replace`). Saved balances are re-offered as *editable
+atomically (temp file + `os.replace`). Saved values are re-offered as *editable
 defaults*, never silently trusted. A corrupt file raises `PersistenceError`, which
 `cli.run()` catches to warn and continue blank rather than crash.
+
+The file is at v2. v1 spelled the fund types after the academic asset classes
+(`domestic_equity`, `tdf`, `balance`, `balances_as_of`); v2 uses the same words the
+CLI prints (`us_stock`, `target_date`, `value`, `values_as_of`). `_upgrade_v1`
+translates on load without validating — anything still wrong surfaces from the
+normal parse, so a corrupt v1 file reports what a corrupt v2 file would — and the
+next save rewrites the file as v2. It copies at every level: a failed load must not
+leave the caller's parsed JSON half-renamed. Any further rename of a persisted name
+needs the same treatment, not an in-place edit of the current version.
 
 ## Testing conventions
 

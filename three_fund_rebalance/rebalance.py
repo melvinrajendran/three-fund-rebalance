@@ -24,8 +24,8 @@ phase's priority):
     recommendation.
 
 Each account's total value is treated as fixed -- a rebalance only moves
-money between funds *within* an account (including investing any uninvested
-cash there); it never moves money between accounts.
+money between funds *within* an account (including investing any cash
+sitting there); it never moves money between accounts.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from scipy.optimize import linprog
 
 from three_fund_rebalance.allocation import target_dollar_amounts
 from three_fund_rebalance.config import MIN_TRADE_DOLLARS
+from three_fund_rebalance.formatting import ASSET_CLASS_LABELS
 from three_fund_rebalance.models import (
     CENT,
     Account,
@@ -56,11 +57,11 @@ _OBJECTIVE_SLACK = 0.01
 
 # Fund types whose dollar target we're solving for (CASH is excluded: it is
 # not a security, and its target is implicitly zero -- see _build_slots).
-_TARGET_FUND_TYPES = (FundType.DOMESTIC_EQUITY, FundType.INTERNATIONAL_EQUITY, FundType.DOMESTIC_BOND)
+_TARGET_FUND_TYPES = (FundType.US_STOCK, FundType.INTERNATIONAL_STOCK, FundType.US_BOND)
 _TARGET_KEYS = {
-    FundType.DOMESTIC_EQUITY: "domestic_equity",
-    FundType.INTERNATIONAL_EQUITY: "international_equity",
-    FundType.DOMESTIC_BOND: "bond",
+    FundType.US_STOCK: "us_stock",
+    FundType.INTERNATIONAL_STOCK: "international_stock",
+    FundType.US_BOND: "bond",
 }
 
 
@@ -101,14 +102,15 @@ def _to_decimal(value: float) -> Decimal:
 
 def _fund_type_coefficient(slot: _Slot, target_type: FundType) -> float:
     """How much of slot's dollar value counts toward `target_type` (1.0 for
-    a direct match, the TDF's internal % for a TDF slot, 0.0 otherwise)."""
+    a direct match, the fund's internal % for a target-date slot, 0.0
+    otherwise)."""
     if slot.fund_type == target_type:
         return 1.0
-    if slot.fund_type == FundType.TDF:
+    if slot.fund_type == FundType.TARGET_DATE:
         pct = {
-            FundType.DOMESTIC_EQUITY: slot.holding.tdf_allocation.domestic_equity_pct,
-            FundType.INTERNATIONAL_EQUITY: slot.holding.tdf_allocation.international_equity_pct,
-            FundType.DOMESTIC_BOND: slot.holding.tdf_allocation.bond_pct,
+            FundType.US_STOCK: slot.holding.target_date_allocation.us_stock_pct,
+            FundType.INTERNATIONAL_STOCK: slot.holding.target_date_allocation.international_stock_pct,
+            FundType.US_BOND: slot.holding.target_date_allocation.bond_pct,
         }[target_type]
         return float(pct) / 100.0
     return 0.0
@@ -148,10 +150,10 @@ def _check_capacity_feasible(
         target = float(dollar_targets[_TARGET_KEYS[fund_type]])
         if target > max_capacity + 0.01:
             raise RebalanceError(
-                f"Target {fund_type.value.replace('_', ' ')} allocation is "
-                f"${target:,.2f}, but no combination of your declared holdings can hold "
-                f"more than ${max_capacity:,.2f} -- add a matching fund (or TDF) holding "
-                "to an account to make room."
+                f"Target {ASSET_CLASS_LABELS[fund_type]} allocation is "
+                f"${target:,.2f}, but no combination of the funds you listed can hold "
+                f"more than ${max_capacity:,.2f} -- add a matching fund (or a target-date "
+                "fund) to an account to make room."
             )
 
 
@@ -188,22 +190,22 @@ def _finalize_account_values(
 
     Two things have to hold together here, and doing them in sequence breaks
     them: rounding each slot independently can leave an account a cent off
-    its real balance, and dropping a sub-minimum trade afterwards reopens the
+    its real value, and dropping a sub-minimum trade afterwards reopens the
     same gap from the other side. Together those produced recommendations
     like "buy $5,000.01" against exactly $5,000.00 of cash -- the offsetting
     $0.01 sell was filtered out as too small while the extra cent of buying
     survived.
 
     So slots that end up trading less than the minimum are snapped back to
-    their current balance and the freed money is redistributed among the
+    their current value and the freed money is redistributed among the
     slots that are still trading, repeating until nothing new falls below
     the minimum. Preserving the per-account total is the hard constraint --
     you cannot spend money you don't have -- while the aggregate allocation
     targets are approximate goals, so any leftover cent is absorbed there.
     """
     target_total = to_cents(account.total_value())
-    current = {i: to_cents(slots[i].holding.balance) for i in indices}
-    held: set[int] = set()  # slots pinned at their current balance (no trade)
+    current = {i: to_cents(slots[i].holding.value) for i in indices}
+    held: set[int] = set()  # slots pinned at their current value (no trade)
 
     # Each pass pins at least one more slot, so this runs at most once per slot.
     for _ in range(len(indices) + 1):
@@ -243,11 +245,11 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
     dollar_targets = target_dollar_amounts(target, total_value)
     slots = _build_slots(accounts)
     # n cannot be 0 here: total_value > 0 (checked above) means at least one
-    # account has a positive balance, and _build_slots already rejects any
-    # positive-balance account that declares no tradeable holdings.
+    # account has a positive value, and _build_slots already rejects any
+    # positive-value account that declares no tradeable holdings.
     n = len(slots)
 
-    current = [float(slot.holding.balance) for slot in slots]
+    current = [float(slot.holding.value) for slot in slots]
     bounds = [(0.0, float(accounts[s.account_index].total_value())) for s in slots]
 
     # --- equality constraints shared by all three phases -----------------
@@ -263,7 +265,7 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
         budget_rows.append(row)
         budget_rhs.append(float(account.total_value()))
 
-    # Three rows: aggregate domestic/international/bond dollar targets.
+    # Three rows: aggregate U.S. stock / international stock / bond dollar targets.
     aggregate_rows = [
         [_fund_type_coefficient(slot, fund_type) for slot in slots] for fund_type in _TARGET_FUND_TYPES
     ]
@@ -276,7 +278,7 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
 
     # --- phase 1: minimize $ of bonds left in taxable accounts -----------
     c1 = [
-        _fund_type_coefficient(slot, FundType.DOMESTIC_BOND)
+        _fund_type_coefficient(slot, FundType.US_BOND)
         if accounts[slot.account_index].tax_treatment == TaxTreatment.TAXABLE
         else 0.0
         for slot in slots
@@ -338,10 +340,10 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
             new_values[i] = value
 
     # _finalize_account_values already snapped every sub-minimum move back to
-    # its current balance, so any remaining delta is a real, fillable trade.
+    # its current value, so any remaining delta is a real, fillable trade.
     trades = []
     for slot, new_value in zip(slots, new_values):
-        delta = new_value - slot.holding.balance
+        delta = new_value - slot.holding.value
         if delta == 0:
             continue
         trades.append(
@@ -359,13 +361,13 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
     for slot, new_value in zip(slots, new_values):
         if accounts[slot.account_index].tax_treatment != TaxTreatment.TAXABLE:
             continue
-        taxable_bond_dollars += new_value * Decimal(str(_fund_type_coefficient(slot, FundType.DOMESTIC_BOND)))
+        taxable_bond_dollars += new_value * Decimal(str(_fund_type_coefficient(slot, FundType.US_BOND)))
     taxable_bond_dollars = to_cents(taxable_bond_dollars)
 
     warnings = []
     if taxable_bond_dollars > 0:
         warnings.append(
-            "Tax-advantaged accounts don't have enough room for the full bond target; "
+            "Your tax-advantaged accounts don't have enough room for the full bond target; "
             f"${taxable_bond_dollars:,} in bonds will remain in taxable accounts "
             "(minimized as much as possible)."
         )

@@ -7,98 +7,100 @@ from three_fund_rebalance.models import (
     FundType,
     Holding,
     TargetAllocation,
+    TargetDateAllocation,
     TaxTreatment,
-    TDFAllocation,
     Trade,
     to_cents,
 )
 
 
-def make_tdf(domestic=Decimal(60), intl=Decimal(20), bond=Decimal(20)) -> TDFAllocation:
-    return TDFAllocation(
-        domestic_equity_pct=domestic, international_equity_pct=intl, bond_pct=bond
+def make_target_date(
+    us_stock=Decimal(60), international=Decimal(20), bond=Decimal(20)
+) -> TargetDateAllocation:
+    return TargetDateAllocation(
+        us_stock_pct=us_stock, international_stock_pct=international, bond_pct=bond
     )
 
 
-class TestTDFAllocation:
+class TestTargetDateAllocation:
     def test_valid_allocation(self):
-        tdf = make_tdf()
-        assert tdf.domestic_equity_pct == Decimal(60)
+        allocation = make_target_date()
+        assert allocation.us_stock_pct == Decimal(60)
 
     def test_rejects_sum_not_100(self):
         with pytest.raises(ValueError, match="must sum to 100"):
-            TDFAllocation(
-                domestic_equity_pct=Decimal(50),
-                international_equity_pct=Decimal(20),
+            TargetDateAllocation(
+                us_stock_pct=Decimal(50),
+                international_stock_pct=Decimal(20),
                 bond_pct=Decimal(20),
             )
 
     def test_allows_small_rounding_slack(self):
         # 33.3 + 33.3 + 33.4 = 100.0 exactly, but check a case that's off by
         # a hair due to human-entered one-decimal percentages.
-        tdf = TDFAllocation(
-            domestic_equity_pct=Decimal("33.4"),
-            international_equity_pct=Decimal("33.3"),
+        allocation = TargetDateAllocation(
+            us_stock_pct=Decimal("33.4"),
+            international_stock_pct=Decimal("33.3"),
             bond_pct=Decimal("33.35"),
         )
-        assert tdf.bond_pct == Decimal("33.35")
+        assert allocation.bond_pct == Decimal("33.35")
 
     def test_rejects_negative_component(self):
         with pytest.raises(ValueError, match="cannot be negative"):
-            TDFAllocation(
-                domestic_equity_pct=Decimal(-10),
-                international_equity_pct=Decimal(90),
+            TargetDateAllocation(
+                us_stock_pct=Decimal(-10),
+                international_stock_pct=Decimal(90),
                 bond_pct=Decimal(20),
             )
 
 
 class TestHolding:
-    def test_tdf_requires_allocation(self):
-        with pytest.raises(ValueError, match="requires a tdf_allocation"):
-            Holding(fund_type=FundType.TDF, name="Target 2050", balance=Decimal(100))
+    def test_target_date_fund_requires_allocation(self):
+        with pytest.raises(ValueError, match="requires a target_date_allocation"):
+            Holding(fund_type=FundType.TARGET_DATE, name="Target 2050", value=Decimal(100))
 
-    def test_non_tdf_rejects_allocation(self):
-        with pytest.raises(ValueError, match="Only TDF holdings"):
+    def test_non_target_date_fund_rejects_allocation(self):
+        with pytest.raises(ValueError, match="Only target-date fund holdings"):
             Holding(
-                fund_type=FundType.DOMESTIC_EQUITY,
+                fund_type=FundType.US_STOCK,
                 name="VTI",
-                balance=Decimal(100),
-                tdf_allocation=make_tdf(),
+                value=Decimal(100),
+                target_date_allocation=make_target_date(),
             )
 
-    def test_negative_balance_rejected(self):
+    def test_negative_value_rejected(self):
         with pytest.raises(ValueError, match="cannot be negative"):
-            Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(-1))
+            Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(-1))
 
     def test_fund_holding_requires_name(self):
         with pytest.raises(ValueError, match="non-empty name"):
-            Holding(fund_type=FundType.DOMESTIC_EQUITY, name="  ", balance=Decimal(100))
+            Holding(fund_type=FundType.US_STOCK, name="  ", value=Decimal(100))
 
     def test_cash_holding_allows_empty_name(self):
-        holding = Holding(fund_type=FundType.CASH, name="", balance=Decimal(50))
-        assert holding.balance == Decimal(50)
+        holding = Holding(fund_type=FundType.CASH, name="", value=Decimal(50))
+        assert holding.value == Decimal(50)
 
     def test_components_for_plain_fund(self):
-        holding = Holding(fund_type=FundType.DOMESTIC_BOND, name="BND", balance=Decimal(1000))
+        holding = Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1000))
         assert holding.bond_component() == Decimal(1000)
-        assert holding.domestic_equity_component() == Decimal(0)
-        assert holding.international_equity_component() == Decimal(0)
+        assert holding.us_stock_component() == Decimal(0)
+        assert holding.international_stock_component() == Decimal(0)
 
-    def test_components_for_tdf_split_correctly(self):
+    def test_components_for_target_date_fund_divide_correctly(self):
         holding = Holding(
-            fund_type=FundType.TDF,
+            fund_type=FundType.TARGET_DATE,
             name="Target 2050",
-            balance=Decimal(1000),
-            tdf_allocation=make_tdf(domestic=Decimal(60), intl=Decimal(20), bond=Decimal(20)),
+            value=Decimal(1000),
+            target_date_allocation=make_target_date(us_stock=Decimal(60), international=Decimal(20), bond=Decimal(20)),
         )
-        assert holding.domestic_equity_component() == Decimal(600)
-        assert holding.international_equity_component() == Decimal(200)
+        assert holding.us_stock_component() == Decimal(600)
+        assert holding.international_stock_component() == Decimal(200)
         assert holding.bond_component() == Decimal(200)
 
     def test_cash_has_no_components(self):
-        holding = Holding(fund_type=FundType.CASH, name="", balance=Decimal(500))
-        assert holding.domestic_equity_component() == Decimal(0)
-        assert holding.international_equity_component() == Decimal(0)
+        holding = Holding(fund_type=FundType.CASH, name="", value=Decimal(500))
+        assert holding.us_stock_component() == Decimal(0)
+        assert holding.international_stock_component() == Decimal(0)
         assert holding.bond_component() == Decimal(0)
 
 
@@ -109,8 +111,8 @@ class TestAccount:
             name="My Roth",
             tax_treatment=TaxTreatment.TAX_ADVANTAGED,
             holdings=[
-                Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(100)),
-                Holding(fund_type=FundType.DOMESTIC_BOND, name="BND", balance=Decimal(50)),
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(100)),
+                Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(50)),
             ],
         )
         assert account.total_value() == Decimal(150)
@@ -122,8 +124,8 @@ class TestAccount:
                 name="My Roth",
                 tax_treatment=TaxTreatment.TAX_ADVANTAGED,
                 holdings=[
-                    Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VTI", balance=Decimal(100)),
-                    Holding(fund_type=FundType.DOMESTIC_EQUITY, name="VOO", balance=Decimal(50)),
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(100)),
+                    Holding(fund_type=FundType.US_STOCK, name="VOO", value=Decimal(50)),
                 ],
             )
 
@@ -131,20 +133,20 @@ class TestAccount:
         with pytest.raises(ValueError, match="cannot be empty"):
             Account(account_type="Roth IRA", name="", tax_treatment=TaxTreatment.TAX_ADVANTAGED)
 
-    def test_cash_balance_defaults_to_zero(self):
+    def test_available_cash_defaults_to_zero(self):
         account = Account(
             account_type="Taxable Brokerage", name="Brokerage", tax_treatment=TaxTreatment.TAXABLE
         )
-        assert account.cash_balance() == Decimal(0)
+        assert account.available_cash() == Decimal(0)
 
-    def test_cash_balance_reads_cash_holding(self):
+    def test_available_cash_reads_cash_holding(self):
         account = Account(
             account_type="Taxable Brokerage",
             name="Brokerage",
             tax_treatment=TaxTreatment.TAXABLE,
-            holdings=[Holding(fund_type=FundType.CASH, name="", balance=Decimal(250))],
+            holdings=[Holding(fund_type=FundType.CASH, name="", value=Decimal(250))],
         )
-        assert account.cash_balance() == Decimal(250)
+        assert account.available_cash() == Decimal(250)
 
     def test_is_tax_advantaged(self):
         taxable = Account(
@@ -160,14 +162,14 @@ class TestAccount:
         account = Account(
             account_type="Roth IRA", name="R", tax_treatment=TaxTreatment.TAX_ADVANTAGED
         )
-        assert account.get_holding(FundType.DOMESTIC_BOND) is None
+        assert account.get_holding(FundType.US_BOND) is None
 
 
 class TestTargetAllocation:
     def test_valid(self):
         target = TargetAllocation(
-            domestic_equity_pct=Decimal(50),
-            international_equity_pct=Decimal(30),
+            us_stock_pct=Decimal(50),
+            international_stock_pct=Decimal(30),
             bond_pct=Decimal(20),
         )
         assert target.bond_pct == Decimal(20)
@@ -175,16 +177,16 @@ class TestTargetAllocation:
     def test_rejects_sum_not_100(self):
         with pytest.raises(ValueError, match="must sum to 100"):
             TargetAllocation(
-                domestic_equity_pct=Decimal(50),
-                international_equity_pct=Decimal(30),
+                us_stock_pct=Decimal(50),
+                international_stock_pct=Decimal(30),
                 bond_pct=Decimal(30),
             )
 
     def test_rejects_negative_component(self):
         with pytest.raises(ValueError, match="cannot be negative"):
             TargetAllocation(
-                domestic_equity_pct=Decimal(-10),
-                international_equity_pct=Decimal(90),
+                us_stock_pct=Decimal(-10),
+                international_stock_pct=Decimal(90),
                 bond_pct=Decimal(20),
             )
 
@@ -194,7 +196,7 @@ class TestTrade:
         with pytest.raises(ValueError, match="'buy' or 'sell'"):
             Trade(
                 account_name="A",
-                fund_type=FundType.DOMESTIC_EQUITY,
+                fund_type=FundType.US_STOCK,
                 fund_name="VTI",
                 action="exchange",
                 amount=Decimal(100),
@@ -204,7 +206,7 @@ class TestTrade:
         with pytest.raises(ValueError, match="must be positive"):
             Trade(
                 account_name="A",
-                fund_type=FundType.DOMESTIC_EQUITY,
+                fund_type=FundType.US_STOCK,
                 fund_name="VTI",
                 action="buy",
                 amount=Decimal(0),

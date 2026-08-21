@@ -18,10 +18,10 @@ from three_fund_rebalance.formatting import (
 from three_fund_rebalance.models import Account, TargetAllocation, Trade, to_cents
 from three_fund_rebalance.rebalance import RebalanceResult
 
-_CATEGORY_LABELS = ("Domestic equity", "International equity", "Bonds")
+_CATEGORY_LABELS = ("U.S. stocks", "International stocks", "Bonds")
 _CATEGORY_TARGET_KEYS = {
-    "Domestic equity": "domestic_equity",
-    "International equity": "international_equity",
+    "U.S. stocks": "us_stock",
+    "International stocks": "international_stock",
     "Bonds": "bond",
 }
 
@@ -38,7 +38,7 @@ class CategorySummary:
 @dataclass(frozen=True)
 class AllocationSummary:
     total_value: Decimal
-    uninvested_cash: Decimal
+    available_cash: Decimal
     categories: list[CategorySummary]
 
 
@@ -48,26 +48,26 @@ def _subheading(text: str) -> list[str]:
 
 def summarize_allocation(accounts: list[Account], target: TargetAllocation) -> AllocationSummary:
     total = sum((a.total_value() for a in accounts), Decimal(0))
-    uninvested_cash = sum((a.cash_balance() for a in accounts), Decimal(0))
+    available_cash = sum((a.available_cash() for a in accounts), Decimal(0))
 
     current_by_label = {
-        "Domestic equity": sum(
-            (h.domestic_equity_component() for a in accounts for h in a.holdings), Decimal(0)
+        "U.S. stocks": sum(
+            (h.us_stock_component() for a in accounts for h in a.holdings), Decimal(0)
         ),
-        "International equity": sum(
-            (h.international_equity_component() for a in accounts for h in a.holdings), Decimal(0)
+        "International stocks": sum(
+            (h.international_stock_component() for a in accounts for h in a.holdings), Decimal(0)
         ),
         "Bonds": sum((h.bond_component() for a in accounts for h in a.holdings), Decimal(0)),
     }
     target_pct_by_label = {
-        "Domestic equity": target.domestic_equity_pct,
-        "International equity": target.international_equity_pct,
+        "U.S. stocks": target.us_stock_pct,
+        "International stocks": target.international_stock_pct,
         "Bonds": target.bond_pct,
     }
     target_amounts = (
         target_dollar_amounts(target, total)
         if total > 0
-        else {"domestic_equity": Decimal(0), "international_equity": Decimal(0), "bond": Decimal(0)}
+        else {"us_stock": Decimal(0), "international_stock": Decimal(0), "bond": Decimal(0)}
     )
 
     categories = []
@@ -84,7 +84,7 @@ def summarize_allocation(accounts: list[Account], target: TargetAllocation) -> A
             )
         )
     return AllocationSummary(
-        total_value=to_cents(total), uninvested_cash=to_cents(uninvested_cash), categories=categories
+        total_value=to_cents(total), available_cash=to_cents(available_cash), categories=categories
     )
 
 
@@ -114,9 +114,9 @@ def format_report(accounts: list[Account], target: TargetAllocation, result: Reb
     summary = summarize_allocation(accounts, target)
     lines = _subheading("Current vs. target allocation")
     lines.append(f"Total portfolio value: ${summary.total_value:,.2f}")
-    if summary.uninvested_cash > 0:
+    if summary.available_cash > 0:
         lines.append(
-            f"{INDENT_UNIT}(includes ${summary.uninvested_cash:,.2f} of currently uninvested cash)"
+            f"{INDENT_UNIT}(includes ${summary.available_cash:,.2f} of cash available to invest)"
         )
     lines.append("")
     for cat in summary.categories:
@@ -149,10 +149,10 @@ def format_report(accounts: list[Account], target: TargetAllocation, result: Reb
         lines.append("")
         lines.append(INDENT_UNIT + format_account_heading(account.name, account.account_type))
         body_indent = INDENT_UNIT * 2
-        cash = account.cash_balance()
+        cash = account.available_cash()
         if cash > 0:
             lines.append(
-                f"{body_indent}(investing ${cash:,.2f} of uninvested cash as part of these trades)"
+                f"{body_indent}(includes investing ${cash:,.2f} of available cash)"
             )
         for line in describe_account_trades(grouped[account.name]):
             lines.append(f"{body_indent}{line}")

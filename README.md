@@ -2,15 +2,15 @@
 
 An interactive CLI that computes the trades needed to rebalance a
 [three-fund portfolio](https://www.bogleheads.org/wiki/Three-fund_portfolio)
-(domestic equity / international equity / bonds) to a target stock/bond
+(U.S. stocks / international stocks / bonds) to a target stock and bond
 allocation, across any number of investment accounts -- tax-advantaged
 (Roth/Traditional IRA, 401(k), HSA, ...) and taxable alike.
 
-It asks for your target stock/bond split, derives the domestic/international
-equity split from
+It asks for your target stock and bond allocation, derives the U.S. versus
+international stock mix from
 [VT](https://investor.vanguard.com/investment-products/etfs/profile/vt)'s
-current US/ex-US market weighting, asks about each of your accounts and what
-they hold, and then prints the buy/sell/exchange trades needed to reach your
+current market-cap weighting, asks about each of your accounts and what they
+hold, and then prints the buy, sell, and exchange orders needed to reach your
 target -- favoring tax-advantaged accounts for both bonds and rebalancing
 trades, to minimize tax drag.
 
@@ -30,8 +30,8 @@ Some limits worth knowing about specifically:
 - It knows nothing about wash sales, contribution or withdrawal limits,
   holding periods, early-withdrawal penalties, or restrictions on what a given
   account can actually hold -- a 401(k)'s fixed fund menu, for instance.
-- VT's US/ex-US weighting is fetched from Vanguard and may be stale, or may
-  fail and fall back to a cached or manually entered value.
+- VT's U.S./international weighting is fetched from Vanguard and may be
+  stale, or may fail and fall back to a cached or manually entered value.
 
 ## Install
 
@@ -70,7 +70,8 @@ the latest commit unconditionally. The uv equivalent is
 
 Your saved portfolio config lives outside the installation at
 `~/.three_fund_rebalance/config.json`, so updating -- and even uninstalling
--- never touches it.
+-- never touches it. A config written by an older version is upgraded in
+place the first time a newer version saves over it.
 
 ## Running
 
@@ -86,21 +87,21 @@ Useful flags:
 | `--fresh` | Ignore any existing config file and start blank |
 | `--no-save` | Don't offer to persist this run's answers |
 | `--offline` | Skip the live VT fetch; use the cached or a manually entered value |
-| `--vt-us-pct PCT` | Manually set VT's US % and skip fetching/prompting for it entirely |
+| `--vt-us-pct PCT` | Manually set VT's U.S. % and skip looking it up or prompting for it |
 | `--version` | Print the installed version and exit |
 
-On each run you're asked for your target stock/bond split, then your
-accounts (type, a unique nickname, and which of a domestic equity fund,
-international equity fund, domestic bond fund, and/or target-date fund each
-one holds, plus any uninvested cash). If you've run it before, your saved
-accounts are offered back with their last-known balances pre-filled as
+On each run you're asked for your target stock and bond allocation, then
+your accounts (type, a unique nickname, and which of a U.S. stock fund,
+international stock fund, U.S. bond fund, and/or target-date fund each one
+holds, plus any cash available to invest). If you've run it before, your
+saved accounts are offered back with their last-known values pre-filled as
 editable defaults -- press Enter to keep a value or type a new one.
 
 ## How it works
 
-- **VT's US/ex-US weighting** comes from two independent Vanguard sources,
-  tried in freshness order. First the JSON endpoint behind the fund profile
-  page's country diversification table, which is refreshed **monthly**; if
+- **VT's U.S./international weighting** comes from two independent Vanguard
+  sources, tried in freshness order. First the JSON endpoint behind the fund
+  profile page's country diversification table, refreshed **monthly**; if
   that fails, Vanguard's **quarterly** fact sheet PDF
   (`https://fund-docs.vanguard.com/F3141.pdf`), a static file on a separate
   host outside the interactive site's bot protection. If both fail, the CLI
@@ -109,10 +110,10 @@ editable defaults -- press Enter to keep a value or type a new one.
   scraped: it's client-side rendered behind bot protection, so it would need
   a headless browser and would still break often.
 - **Target-date funds** are entered as a single position with their own
-  domestic/international/bond split (from the fund's fact sheet), and are
-  folded into the overall allocation math as a fixed-ratio bundle -- a TDF
-  can coexist with individual funds in the same account.
-- **Uninvested cash** in an account counts toward that account's investable
+  U.S. stock / international stock / bond mix (from the fund's fact sheet),
+  and are folded into the overall allocation math as a fixed-ratio bundle --
+  a target-date fund can coexist with individual funds in the same account.
+- **Cash available to invest** in an account counts toward that account's
   total and is always recommended to be fully invested.
 - **Rebalancing** is computed as a small linear program, solved in three
   lexicographic phases: (1) minimize bonds left in taxable accounts --

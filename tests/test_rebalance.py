@@ -7,24 +7,26 @@ from three_fund_rebalance.models import (
     FundType,
     Holding,
     TargetAllocation,
+    TargetDateAllocation,
     TaxTreatment,
-    TDFAllocation,
 )
 from three_fund_rebalance.rebalance import RebalanceError, compute_trades
 
 
-def holding(fund_type, name, balance, tdf=None):
-    return Holding(fund_type=fund_type, name=name, balance=Decimal(balance), tdf_allocation=tdf)
+def holding(fund_type, name, value, allocation=None):
+    return Holding(
+        fund_type=fund_type, name=name, value=Decimal(value), target_date_allocation=allocation
+    )
 
 
 def account(account_type, name, tax_treatment, holdings):
     return Account(account_type=account_type, name=name, tax_treatment=tax_treatment, holdings=holdings)
 
 
-def target(domestic, intl, bond):
+def target(us_stock, international, bond):
     return TargetAllocation(
-        domestic_equity_pct=Decimal(domestic),
-        international_equity_pct=Decimal(intl),
+        us_stock_pct=Decimal(us_stock),
+        international_stock_pct=Decimal(international),
         bond_pct=Decimal(bond),
     )
 
@@ -41,9 +43,9 @@ class TestBasicRebalance:
                 "Roth",
                 TaxTreatment.TAX_ADVANTAGED,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", 600),
-                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", 200),
-                    holding(FundType.DOMESTIC_BOND, "BND", 200),
+                    holding(FundType.US_STOCK, "VTI", 600),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 200),
+                    holding(FundType.US_BOND, "BND", 200),
                 ],
             )
         ]
@@ -59,9 +61,9 @@ class TestBasicRebalance:
                 "Roth",
                 TaxTreatment.TAX_ADVANTAGED,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", 1000),
-                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", 0),
-                    holding(FundType.DOMESTIC_BOND, "BND", 0),
+                    holding(FundType.US_STOCK, "VTI", 1000),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                    holding(FundType.US_BOND, "BND", 0),
                 ],
             )
         ]
@@ -87,8 +89,8 @@ class TestBasicRebalance:
         populated_account = account(
             "Traditional IRA", "TradIRA", TaxTreatment.TAX_ADVANTAGED,
             [
-                holding(FundType.DOMESTIC_EQUITY, "VTI", 1000),
-                holding(FundType.DOMESTIC_BOND, "BND", 0),
+                holding(FundType.US_STOCK, "VTI", 1000),
+                holding(FundType.US_BOND, "BND", 0),
             ],
         )
         result = compute_trades([empty_account, populated_account], target(50, 0, 50))
@@ -110,7 +112,7 @@ class TestSolverFailure:
         accounts = [
             account(
                 "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
-                [holding(FundType.DOMESTIC_EQUITY, "VTI", 100)],
+                [holding(FundType.US_STOCK, "VTI", 100)],
             )
         ]
         with pytest.raises(RebalanceError, match="Could not find a feasible rebalance"):
@@ -122,11 +124,11 @@ class TestValidation:
         accounts = [
             account(
                 "Roth IRA", "Same", TaxTreatment.TAX_ADVANTAGED,
-                [holding(FundType.DOMESTIC_EQUITY, "VTI", 100)],
+                [holding(FundType.US_STOCK, "VTI", 100)],
             ),
             account(
                 "Traditional IRA", "Same", TaxTreatment.TAX_ADVANTAGED,
-                [holding(FundType.DOMESTIC_EQUITY, "VTI", 100)],
+                [holding(FundType.US_STOCK, "VTI", 100)],
             ),
         ]
         with pytest.raises(RebalanceError, match="must be unique"):
@@ -147,7 +149,7 @@ class TestValidation:
         accounts = [
             account(
                 "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
-                [holding(FundType.DOMESTIC_EQUITY, "VTI", 10_000)],
+                [holding(FundType.US_STOCK, "VTI", 10_000)],
             )
         ]
         with pytest.raises(RebalanceError, match="bond"):
@@ -158,15 +160,15 @@ class TestBondsPreferTaxAdvantaged:
     def test_bonds_fill_tax_advantaged_before_taxable_when_room_exists(self):
         tax_adv_1 = account(
             "Roth IRA", "Roth1", TaxTreatment.TAX_ADVANTAGED,
-            [holding(FundType.DOMESTIC_EQUITY, "VTI", 2000), holding(FundType.DOMESTIC_BOND, "BND", 0)],
+            [holding(FundType.US_STOCK, "VTI", 2000), holding(FundType.US_BOND, "BND", 0)],
         )
         tax_adv_2 = account(
             "Traditional 401(k)", "401k", TaxTreatment.TAX_ADVANTAGED,
-            [holding(FundType.DOMESTIC_EQUITY, "VTI", 3000), holding(FundType.DOMESTIC_BOND, "BND", 0)],
+            [holding(FundType.US_STOCK, "VTI", 3000), holding(FundType.US_BOND, "BND", 0)],
         )
         taxable = account(
             "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
-            [holding(FundType.DOMESTIC_EQUITY, "VTI", 5000), holding(FundType.DOMESTIC_BOND, "BND", 0)],
+            [holding(FundType.US_STOCK, "VTI", 5000), holding(FundType.US_BOND, "BND", 0)],
         )
         result = compute_trades([tax_adv_1, tax_adv_2, taxable], target(60, 0, 40))
 
@@ -181,21 +183,21 @@ class TestBondsPreferTaxAdvantaged:
             t.amount for t in result.trades if t.fund_name == "BND" and t.action == "buy"
         )
         assert bond_bought == Decimal("4000.00")
-        domestic_total = (
+        us_stock_total = (
             tax_adv_1.total_value() + tax_adv_2.total_value() + taxable.total_value()
         )
-        assert domestic_total == Decimal(10_000)
+        assert us_stock_total == Decimal(10_000)
 
     def test_bonds_overflow_to_taxable_when_tax_advantaged_insufficient(self):
         small_roth = account(
             "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
-            [holding(FundType.DOMESTIC_EQUITY, "VTI", 100), holding(FundType.DOMESTIC_BOND, "BND", 0)],
+            [holding(FundType.US_STOCK, "VTI", 100), holding(FundType.US_BOND, "BND", 0)],
         )
         big_taxable = account(
             "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
-            [holding(FundType.DOMESTIC_EQUITY, "VTI", 9900), holding(FundType.DOMESTIC_BOND, "BND", 0)],
+            [holding(FundType.US_STOCK, "VTI", 9900), holding(FundType.US_BOND, "BND", 0)],
         )
-        # domestic 60 / bond 40 on a $10,000 portfolio -> $4,000 bonds needed,
+        # U.S. stock 60 / bond 40 on a $10,000 portfolio -> $4,000 bonds needed,
         # but tax-advantaged capacity is only $100.
         result = compute_trades([small_roth, big_taxable], target(60, 0, 40))
 
@@ -214,66 +216,66 @@ class TestBondsPreferTaxAdvantaged:
         assert taxable_bond.amount == Decimal("3900.00")
 
 
-class TestTDF:
-    def test_tdf_only_account_already_balanced(self):
-        tdf_alloc = TDFAllocation(
-            domestic_equity_pct=Decimal(60), international_equity_pct=Decimal(20), bond_pct=Decimal(20)
+class TestTargetDateFunds:
+    def test_target_date_fund_only_account_already_balanced(self):
+        target_date_alloc = TargetDateAllocation(
+            us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
             account(
                 "Roth 401(k)", "401k", TaxTreatment.TAX_ADVANTAGED,
-                [holding(FundType.TDF, "Target 2050", 10_000, tdf=tdf_alloc)],
+                [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
             )
         ]
         result = compute_trades(accounts, target(60, 20, 20))
         assert result.trades == []
 
-    def test_tdf_plus_individual_fund_solved_correctly(self):
-        tdf_alloc = TDFAllocation(
-            domestic_equity_pct=Decimal(60), international_equity_pct=Decimal(20), bond_pct=Decimal(20)
+    def test_target_date_fund_plus_individual_fund_solved_correctly(self):
+        target_date_alloc = TargetDateAllocation(
+            us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
             account(
                 "Roth 401(k)", "Mixed401k", TaxTreatment.TAX_ADVANTAGED,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", 7000),
-                    holding(FundType.TDF, "TargetFund", 3000, tdf=tdf_alloc),
+                    holding(FundType.US_STOCK, "VTI", 7000),
+                    holding(FundType.TARGET_DATE, "TargetFund", 3000, allocation=target_date_alloc),
                 ],
             )
         ]
-        # intl and bonds can only come from the TDF, forcing it to $5,000
-        # (since 20% of $5,000 = $1,000 = each of the intl/bond targets).
+        # international and bonds can only come from the target-date fund, forcing it to $5,000
+        # (since 20% of $5,000 = $1,000 = each of the international/bond targets).
         result = compute_trades(accounts, target(80, 10, 10))
         trades = trades_by_key(result)
         assert trades[("Mixed401k", "VTI")] == ("sell", Decimal("2000.00"))
         assert trades[("Mixed401k", "TargetFund")] == ("buy", Decimal("2000.00"))
 
-    def test_tdf_in_taxable_account_counts_toward_taxable_bonds(self):
-        tdf_alloc = TDFAllocation(
-            domestic_equity_pct=Decimal(60), international_equity_pct=Decimal(20), bond_pct=Decimal(20)
+    def test_target_date_fund_in_taxable_account_counts_toward_taxable_bonds(self):
+        target_date_alloc = TargetDateAllocation(
+            us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
             account(
                 "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
-                [holding(FundType.TDF, "Target 2050", 10_000, tdf=tdf_alloc)],
+                [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
             )
         ]
         result = compute_trades(accounts, target(60, 20, 20))
         # Only one slot exists in the whole portfolio, so nothing can move --
-        # the $2,000 bond sleeve inside the taxable TDF is unavoidable.
+        # the $2,000 bond sleeve inside the taxable target-date fund is unavoidable.
         assert result.trades == []
         assert result.taxable_bond_dollars == Decimal("2000.00")
         assert len(result.warnings) == 1
 
 
 class TestCashInvestment:
-    def test_uninvested_cash_gets_fully_invested(self):
+    def test_available_cash_gets_fully_invested(self):
         accounts = [
             account(
                 "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", 0),
-                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", 0),
+                    holding(FundType.US_STOCK, "VTI", 0),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                     holding(FundType.CASH, "", 1000),
                 ],
             )
@@ -288,7 +290,7 @@ class TestCashInvestment:
 
 class TestPerAccountConservation:
     """Rounding each solved slot to cents independently can leave an account
-    a cent off its real balance, which yields an unfillable recommendation
+    a cent off its real value, which yields an unfillable recommendation
     (e.g. 'buy $5,000.01' against exactly $5,000.00 of cash). Every trade set
     must leave each account's holdings summing to exactly its total."""
 
@@ -299,7 +301,7 @@ class TestPerAccountConservation:
             deltas[t.account_name] = deltas.get(t.account_name, Decimal(0)) + signed
         for account in accounts:
             net = deltas.get(account.name, Decimal(0))
-            expected = account.cash_balance()  # cash is spent, so buys exceed sells by that much
+            expected = account.available_cash()  # cash is spent, so buys exceed sells by that much
             assert net == expected, (
                 f"{account.name}: trades net {net}, expected {expected} "
                 f"(account total {account.total_value()})"
@@ -313,23 +315,23 @@ class TestPerAccountConservation:
             account(
                 "Roth IRA", "Fidelity Roth", TaxTreatment.TAX_ADVANTAGED,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", 20_000),
-                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", 10_000),
-                    holding(FundType.DOMESTIC_BOND, "BND", 0),
+                    holding(FundType.US_STOCK, "VTI", 20_000),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
+                    holding(FundType.US_BOND, "BND", 0),
                 ],
             ),
             account(
                 "Traditional 401(k)", "Acme 401k", TaxTreatment.TAX_ADVANTAGED,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", 40_000),
-                    holding(FundType.DOMESTIC_BOND, "BND", 10_000),
+                    holding(FundType.US_STOCK, "VTI", 40_000),
+                    holding(FundType.US_BOND, "BND", 10_000),
                 ],
             ),
             account(
                 "Taxable Brokerage", "Fidelity Brokerage", TaxTreatment.TAXABLE,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", 25_000),
-                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", 5_000),
+                    holding(FundType.US_STOCK, "VTI", 25_000),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 5_000),
                     holding(FundType.CASH, "", 5_000),
                 ],
             ),
@@ -337,8 +339,8 @@ class TestPerAccountConservation:
         result = compute_trades(
             accounts,
             TargetAllocation(
-                domestic_equity_pct=Decimal("49.52"),
-                international_equity_pct=Decimal("30.48"),
+                us_stock_pct=Decimal("49.52"),
+                international_stock_pct=Decimal("30.48"),
                 bond_pct=Decimal(20),
             ),
         )
@@ -349,46 +351,46 @@ class TestPerAccountConservation:
         )
         assert taxable_buys == Decimal("5000.00")
 
-    def test_odd_cent_balances_still_conserve(self):
+    def test_odd_cent_values_still_conserve(self):
         accounts = [
             account(
                 "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", Decimal("3333.33")),
-                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", Decimal("3333.33")),
-                    holding(FundType.DOMESTIC_BOND, "BND", Decimal("3333.34")),
+                    holding(FundType.US_STOCK, "VTI", Decimal("3333.33")),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", Decimal("3333.33")),
+                    holding(FundType.US_BOND, "BND", Decimal("3333.34")),
                 ],
             )
         ]
         result = compute_trades(
             accounts,
             TargetAllocation(
-                domestic_equity_pct=Decimal("49.52"),
-                international_equity_pct=Decimal("30.48"),
+                us_stock_pct=Decimal("49.52"),
+                international_stock_pct=Decimal("30.48"),
                 bond_pct=Decimal(20),
             ),
         )
         self.assert_conserved(accounts, result)
 
-    def test_thirds_split_across_uneven_accounts_conserves(self):
+    def test_thirds_across_uneven_accounts_conserve(self):
         # A 1/3-each target over accounts whose totals don't divide evenly is
         # the classic largest-remainder stress case.
         accounts = [
             account(
                 "Roth IRA", f"Acct{i}", TaxTreatment.TAX_ADVANTAGED,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", balance),
-                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", 0),
-                    holding(FundType.DOMESTIC_BOND, "BND", 0),
+                    holding(FundType.US_STOCK, "VTI", value),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                    holding(FundType.US_BOND, "BND", 0),
                 ],
             )
-            for i, balance in enumerate([Decimal("1000.01"), Decimal("2000.02"), Decimal("3000.07")])
+            for i, value in enumerate([Decimal("1000.01"), Decimal("2000.02"), Decimal("3000.07")])
         ]
         result = compute_trades(
             accounts,
             TargetAllocation(
-                domestic_equity_pct=Decimal("33.34"),
-                international_equity_pct=Decimal("33.33"),
+                us_stock_pct=Decimal("33.34"),
+                international_stock_pct=Decimal("33.33"),
                 bond_pct=Decimal("33.33"),
             ),
         )
@@ -401,8 +403,8 @@ class TestMinimumTradeThreshold:
             account(
                 "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
                 [
-                    holding(FundType.DOMESTIC_EQUITY, "VTI", Decimal("600.50")),
-                    holding(FundType.INTERNATIONAL_EQUITY, "VXUS", Decimal("399.50")),
+                    holding(FundType.US_STOCK, "VTI", Decimal("600.50")),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", Decimal("399.50")),
                 ],
             )
         ]

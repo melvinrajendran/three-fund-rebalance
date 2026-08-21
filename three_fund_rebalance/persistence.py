@@ -1,6 +1,6 @@
 """Local JSON persistence for account/fund structure (and other reusable
 inputs) between runs, so the user isn't retyping their account setup every
-time. Dollar balances are persisted too, as a "last known snapshot" with an
+time. Dollar values are persisted too, as a "last known snapshot" with an
 as-of date, but the interactive flow always re-offers them as an *editable
 default* rather than silently trusting stale numbers -- see prompts.py.
 """
@@ -15,7 +15,13 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from three_fund_rebalance.config import SCHEMA_VERSION
-from three_fund_rebalance.models import Account, FundType, Holding, TaxTreatment, TDFAllocation
+from three_fund_rebalance.models import (
+    Account,
+    FundType,
+    Holding,
+    TargetDateAllocation,
+    TaxTreatment,
+)
 
 
 class PersistenceError(Exception):
@@ -31,9 +37,9 @@ class PersistedConfig:
     bond_pct: Decimal | None = None
     vt_us_pct: Decimal | None = None
     vt_as_of: str | None = None
-    # Set whenever accounts (including balances) are saved; shown to the
-    # user so they know how stale a pre-filled balance might be.
-    balances_as_of: str | None = None
+    # Set whenever accounts (including values) are saved; shown to the
+    # user so they know how stale a pre-filled value might be.
+    values_as_of: str | None = None
     accounts: list[Account] = field(default_factory=list)
 
 
@@ -50,45 +56,45 @@ def _decimal_from_json(value: str | None, *, field_name: str) -> Decimal | None:
         raise PersistenceError(f"Could not parse {field_name!r} as a number: {value!r}") from exc
 
 
-def _tdf_allocation_to_dict(tdf: TDFAllocation) -> dict:
+def _target_date_allocation_to_dict(allocation: TargetDateAllocation) -> dict:
     return {
-        "domestic_equity_pct": str(tdf.domestic_equity_pct),
-        "international_equity_pct": str(tdf.international_equity_pct),
-        "bond_pct": str(tdf.bond_pct),
+        "us_stock_pct": str(allocation.us_stock_pct),
+        "international_stock_pct": str(allocation.international_stock_pct),
+        "bond_pct": str(allocation.bond_pct),
     }
 
 
-def _tdf_allocation_from_dict(data: dict) -> TDFAllocation:
+def _target_date_allocation_from_dict(data: dict) -> TargetDateAllocation:
     try:
-        return TDFAllocation(
-            domestic_equity_pct=Decimal(data["domestic_equity_pct"]),
-            international_equity_pct=Decimal(data["international_equity_pct"]),
+        return TargetDateAllocation(
+            us_stock_pct=Decimal(data["us_stock_pct"]),
+            international_stock_pct=Decimal(data["international_stock_pct"]),
             bond_pct=Decimal(data["bond_pct"]),
         )
     except (KeyError, InvalidOperation, ValueError) as exc:
-        raise PersistenceError(f"Invalid tdf_allocation in config: {data!r}") from exc
+        raise PersistenceError(f"Invalid target_date_allocation in config: {data!r}") from exc
 
 
 def _holding_to_dict(holding: Holding) -> dict:
-    data = {"fund_type": holding.fund_type.value, "name": holding.name, "balance": str(holding.balance)}
-    if holding.tdf_allocation is not None:
-        data["tdf_allocation"] = _tdf_allocation_to_dict(holding.tdf_allocation)
+    data = {"fund_type": holding.fund_type.value, "name": holding.name, "value": str(holding.value)}
+    if holding.target_date_allocation is not None:
+        data["target_date_allocation"] = _target_date_allocation_to_dict(holding.target_date_allocation)
     return data
 
 
 def _holding_from_dict(data: dict) -> Holding:
     try:
         fund_type = FundType(data["fund_type"])
-        balance = Decimal(data["balance"])
+        value = Decimal(data["value"])
     except (KeyError, ValueError, InvalidOperation) as exc:
         raise PersistenceError(f"Invalid holding in config: {data!r}") from exc
-    tdf_data = data.get("tdf_allocation")
+    allocation_data = data.get("target_date_allocation")
     try:
         return Holding(
             fund_type=fund_type,
             name=data.get("name", ""),
-            balance=balance,
-            tdf_allocation=_tdf_allocation_from_dict(tdf_data) if tdf_data else None,
+            value=value,
+            target_date_allocation=_target_date_allocation_from_dict(allocation_data) if allocation_data else None,
         )
     except ValueError as exc:
         raise PersistenceError(f"Invalid holding in config: {data!r}: {exc}") from exc
@@ -124,17 +130,81 @@ def config_to_dict(config: PersistedConfig) -> dict:
         "bond_pct": _decimal_to_json(config.bond_pct),
         "vt_us_pct": _decimal_to_json(config.vt_us_pct),
         "vt_as_of": config.vt_as_of,
-        "balances_as_of": config.balances_as_of,
+        "values_as_of": config.values_as_of,
         "accounts": [_account_to_dict(a) for a in config.accounts],
     }
 
 
+# What each v1 fund type is called in v2. v1 named the three asset classes
+# after the academic terms ("domestic equity"); v2 uses the words a brokerage
+# statement uses, matching what the CLI now prints.
+_V1_FUND_TYPES = {
+    "domestic_equity": "us_stock",
+    "international_equity": "international_stock",
+    "domestic_bond": "us_bond",
+    "tdf": "target_date",
+    "cash": "cash",
+}
+
+_V1_ALLOCATION_KEYS = {
+    "domestic_equity_pct": "us_stock_pct",
+    "international_equity_pct": "international_stock_pct",
+    "bond_pct": "bond_pct",
+}
+
+
+def _upgrade_v1(data: dict) -> dict:
+    """Translate a schema v1 payload into v2's spelling, without validating
+    it -- anything still wrong is caught by the normal parse afterwards, so a
+    corrupt v1 file reports the same error a corrupt v2 file would. Unknown
+    fund types are passed through untouched for that reason.
+
+    Copies at every level rather than mutating: `data` is the caller's parsed
+    JSON, and a failed load must not leave it half-renamed.
+    """
+    upgraded = dict(data)
+    upgraded["values_as_of"] = upgraded.pop("balances_as_of", None)
+    accounts = []
+    for account in upgraded.get("accounts") or []:
+        if not isinstance(account, dict):
+            accounts.append(account)
+            continue
+        account = dict(account)
+        holdings = []
+        for holding in account.get("holdings") or []:
+            if not isinstance(holding, dict):
+                holdings.append(holding)
+                continue
+            holding = dict(holding)
+            holding["fund_type"] = _V1_FUND_TYPES.get(
+                holding.get("fund_type"), holding.get("fund_type")
+            )
+            if "balance" in holding:
+                holding["value"] = holding.pop("balance")
+            allocation = holding.pop("tdf_allocation", None)
+            if isinstance(allocation, dict):
+                holding["target_date_allocation"] = {
+                    _V1_ALLOCATION_KEYS.get(key, key): value for key, value in allocation.items()
+                }
+            elif allocation is not None:
+                holding["target_date_allocation"] = allocation
+            holdings.append(holding)
+        account["holdings"] = holdings
+        accounts.append(account)
+    upgraded["accounts"] = accounts
+    upgraded["schema_version"] = SCHEMA_VERSION
+    return upgraded
+
+
 def config_from_dict(data: dict) -> PersistedConfig:
     schema_version = data.get("schema_version")
+    if schema_version == 1:
+        data = _upgrade_v1(data)
+        schema_version = data["schema_version"]
     if schema_version != SCHEMA_VERSION:
         raise PersistenceError(
             f"Unsupported config schema_version {schema_version!r} "
-            f"(this version of three-fund-rebalance understands {SCHEMA_VERSION})"
+            f"(this version of three-fund-rebalance understands 1 and {SCHEMA_VERSION})"
         )
     return PersistedConfig(
         schema_version=schema_version,
@@ -142,7 +212,7 @@ def config_from_dict(data: dict) -> PersistedConfig:
         bond_pct=_decimal_from_json(data.get("bond_pct"), field_name="bond_pct"),
         vt_us_pct=_decimal_from_json(data.get("vt_us_pct"), field_name="vt_us_pct"),
         vt_as_of=data.get("vt_as_of"),
-        balances_as_of=data.get("balances_as_of"),
+        values_as_of=data.get("values_as_of"),
         accounts=[_account_from_dict(a) for a in data.get("accounts", [])],
     )
 

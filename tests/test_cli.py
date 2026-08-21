@@ -31,18 +31,18 @@ class ScriptedPrompter(Prompter):
 def new_account_responses(
     account_type_index: str,
     nickname: str,
-    domestic_balance: str,
-    intl_balance: str,
-    bond_balance: str,
+    us_stock_value: str,
+    intl_value: str,
+    bond_value: str,
     cash: str = "0",
 ) -> list[str]:
     return [
         account_type_index,
         nickname,
-        "y", "VTI", domestic_balance,
-        "y", "VXUS", intl_balance,
-        "y", "BND", bond_balance,
-        "n",  # TDF
+        "y", "VTI", us_stock_value,
+        "y", "VXUS", intl_value,
+        "y", "BND", bond_value,
+        "n",  # target-date fund
         cash,
     ]
 
@@ -62,8 +62,8 @@ class TestArgParsing:
 
 
 class TestEndToEndRun:
-    def test_run_without_vt_flag_uses_resolve_vt_split_offline_path(self, tmp_path):
-        # Without --vt-us-pct, run() should go through resolve_vt_split(); using
+    def test_run_without_vt_flag_uses_resolve_vt_weighting_offline_path(self, tmp_path):
+        # Without --vt-us-pct, run() should go through resolve_vt_weighting(); using
         # --offline with no cache exercises the manual-entry fallback without
         # touching the network.
         config_path = tmp_path / "config.json"
@@ -96,7 +96,7 @@ class TestEndToEndRun:
         )
 
         assert exit_code == 0
-        # domestic 80*75%=60, intl 20, bond 20 on a $10,000 account starting all-domestic
+        # U.S. 80*75%=60, international 20, bond 20 on a $10,000 account starting all-U.S.
         assert "Sell $4,000.00 of VTI" in prompter.full_output
         assert "Buy $2,000.00 of VXUS" in prompter.full_output
         assert "Buy $2,000.00 of BND" in prompter.full_output
@@ -106,9 +106,9 @@ class TestEndToEndRun:
         assert saved.bond_pct == Decimal(20)
         assert saved.vt_us_pct == Decimal(75)
         assert len(saved.accounts) == 1
-        # Persisted balances reflect what the user *entered* (current holdings),
+        # Persisted values reflect what the user *entered* (current holdings),
         # not the hypothetical post-trade recommendation.
-        assert saved.accounts[0].get_holding(FundType.DOMESTIC_EQUITY).balance == Decimal(10_000)
+        assert saved.accounts[0].get_holding(FundType.US_STOCK).value == Decimal(10_000)
 
     def test_already_balanced_reports_no_trades_needed(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -160,8 +160,8 @@ class TestEndToEndRun:
             "50", "50",  # 50% bond target
             "y",
             "1", "Roth",
-            "y", "VTI", "10000",  # only a domestic equity fund -- no bond slot
-            "n", "n", "n",  # no intl, no bond, no TDF
+            "y", "VTI", "10000",  # only a U.S. stock fund -- no bond slot
+            "n", "n", "n",  # no international, no bond, no target-date fund
             "0",
             "n",
         ]
