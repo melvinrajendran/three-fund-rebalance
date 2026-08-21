@@ -39,10 +39,24 @@ def new_account_responses(
     return [
         account_type_index,
         nickname,
+        "1",  # holds individual funds rather than a target-date fund
         "y", "VTI", us_stock_value,
         "y", "VXUS", intl_value,
         "y", "BND", bond_value,
-        "n",  # target-date fund
+        cash,
+    ]
+
+
+def target_date_account_responses(
+    account_type_index: str, nickname: str, value: str, cash: str = "0"
+) -> list[str]:
+    """The other kind of account: one target-date fund and nothing else."""
+    return [
+        account_type_index,
+        nickname,
+        "2",  # holds a single target-date fund
+        "Target 2050", value,
+        "60", "20", "20",  # its underlying allocation
         cash,
     ]
 
@@ -160,8 +174,9 @@ class TestEndToEndRun:
             "50", "50",  # 50% bond target
             "y",
             "1", "Roth",
+            "1",  # individual funds
             "y", "VTI", "10000",  # only a U.S. stock fund -- no bond slot
-            "n", "n", "n",  # no international, no bond, no target-date fund
+            "n", "n",  # no international, no bond
             "0",
             "n",
         ]

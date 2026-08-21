@@ -3,7 +3,13 @@ from decimal import Decimal
 import pytest
 
 from three_fund_rebalance import prompts as prompts_module
-from three_fund_rebalance.models import Account, FundType, Holding, TaxTreatment
+from three_fund_rebalance.models import (
+    Account,
+    FundType,
+    Holding,
+    TargetDateAllocation,
+    TaxTreatment,
+)
 from three_fund_rebalance.prompts import (
     Prompter,
     prompt_accounts,
@@ -210,10 +216,10 @@ class TestPromptAccounts:
             "y",  # Add an account?
             "1",  # account type -> Roth IRA
             "My Roth",  # nickname
+            "1",  # holds individual funds
             "y", "VTI", "6000",  # U.S. stock fund
             "y", "VXUS", "2000",  # international stock fund
             "y", "BND", "2000",  # bond
-            "n",  # target-date fund? no
             "0",  # cash
             "n",  # Add another account?
         ]
@@ -230,8 +236,8 @@ class TestPromptAccounts:
 
     def test_duplicate_nickname_is_rejected_and_retried(self):
         responses = [
-            "y", "1", "First", "n", "n", "n", "n", "0",
-            "y", "1", "First", "SecondUnique", "n", "n", "n", "n", "0",
+            "y", "1", "First", "1", "n", "n", "n", "0",
+            "y", "1", "First", "SecondUnique", "1", "n", "n", "n", "0",
             "n",
         ]
         p = ScriptedPrompter(responses)
@@ -241,8 +247,8 @@ class TestPromptAccounts:
     def test_target_date_allocation_must_sum_to_100_with_retry(self):
         responses = [
             "y", "1", "401k",
-            "n", "n", "n",  # no individual U.S./international/bond funds
-            "y", "Target 2050", "10000",  # target-date fund holding
+            "2",  # holds a single target-date fund
+            "Target 2050", "10000",
             "50", "30", "10",  # invalid sum (90)
             "60", "20", "20",  # valid
             "0",  # cash
@@ -265,7 +271,7 @@ class TestPromptAccounts:
         responses = [
             "y",  # Keep account 'My Roth'?
             "",  # value default (keep 6000)
-            "n", "n", "n",  # decline adding international/bond/target-date
+            "n", "n",  # decline adding international/bond
             "",  # cash default (0)
             "n",  # Add another account?
         ]
@@ -295,7 +301,8 @@ class TestPromptAccounts:
             "11",  # "Other" is the last entry in ACCOUNT_TYPE_CHOICES
             "y",  # is it tax-advantaged?
             "MyOtherAccount",
-            "n", "n", "n", "n",  # decline all four fund slots
+            "1",  # holds individual funds
+            "n", "n", "n",  # decline all three of them
             "50",  # nonzero cash
             "n",  # Add another account?
         ]
@@ -305,15 +312,63 @@ class TestPromptAccounts:
         assert accounts[0].tax_treatment == TaxTreatment.TAX_ADVANTAGED
         assert accounts[0].available_cash() == Decimal(50)
 
-    def test_updating_existing_account_covers_target_date_update_new_slot_and_cash(self):
-        from three_fund_rebalance.models import TargetDateAllocation
-
+    def test_updating_an_individual_fund_account_offers_only_the_missing_ones(self):
         existing = Account(
             account_type="Roth 401(k)",
             name="401k",
             tax_treatment=TaxTreatment.TAX_ADVANTAGED,
             holdings=[
                 Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
+                Holding(fund_type=FundType.CASH, name="", value=Decimal(100)),
+            ],
+        )
+        responses = [
+            "y",  # Keep account '401k'?
+            "",  # VTI value -> keep default 6000
+            "y", "VXUS", "500",  # add international stock fund (not previously declared)
+            "n",  # decline adding a U.S. bond fund
+            "200",  # cash -> update to 200
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [existing])
+        assert p.all_consumed()
+        updated = accounts[0]
+        assert updated.get_holding(FundType.INTERNATIONAL_STOCK).value == Decimal(500)
+        assert updated.available_cash() == Decimal(200)
+        # A target-date fund was never offered -- this account holds individual
+        # funds, so adding one would make it a mix.
+        assert updated.get_holding(FundType.TARGET_DATE) is None
+
+    def test_updating_a_cash_only_account_asks_which_kind_it_is_now(self):
+        """A saved account with no funds hasn't committed to either kind yet,
+        so it gets the same question a brand new account does."""
+        existing = Account(
+            account_type="Roth IRA",
+            name="Empty Roth",
+            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            holdings=[Holding(fund_type=FundType.CASH, name="", value=Decimal(500))],
+        )
+        responses = [
+            "y",  # Keep account 'Empty Roth'?
+            "2",  # it now holds a single target-date fund
+            "Target 2050", "500",
+            "60", "20", "20",
+            "0",  # cash -> all invested
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [existing])
+        assert p.all_consumed()
+        assert accounts[0].get_holding(FundType.TARGET_DATE).value == Decimal(500)
+        assert accounts[0].available_cash() == Decimal(0)
+
+    def test_updating_a_target_date_account_offers_no_other_funds(self):
+        existing = Account(
+            account_type="Roth 401(k)",
+            name="401k",
+            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            holdings=[
                 Holding(
                     fund_type=FundType.TARGET_DATE,
                     name="Target 2050",
@@ -329,30 +384,33 @@ class TestPromptAccounts:
         )
         responses = [
             "y",  # Keep account '401k'?
-            "",  # VTI value -> keep default 6000
             "",  # target-date fund value -> keep default 3000
             "y",  # update the fund's underlying allocation?
             "70", "15", "15",  # new underlying allocation
-            "y", "VXUS", "500",  # add international stock fund (not previously declared)
-            "n",  # decline adding a U.S. bond fund
             "200",  # cash -> update to 200
             "n",  # Add another account?
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [existing])
-        assert len(accounts) == 1
+        assert p.all_consumed()
         updated = accounts[0]
         assert updated.get_holding(FundType.TARGET_DATE).target_date_allocation.us_stock_pct == Decimal(70)
-        assert updated.get_holding(FundType.INTERNATIONAL_STOCK).value == Decimal(500)
         assert updated.available_cash() == Decimal(200)
+        assert [h.fund_type for h in updated.holdings] == [FundType.TARGET_DATE, FundType.CASH]
+        # The mix being replaced is shown, so the answer isn't from memory. It
+        # is the *old* one: the question hasn't been answered yet at that point.
+        assert any(
+            "Currently 60% U.S. stocks / 20% international stocks / 20% bonds" in line
+            for line in p.said
+        )
 
     def test_taxable_account_with_bonds_prints_a_note(self):
         responses = [
             "y", "10",  # account type "Taxable Brokerage" is index 10 in ACCOUNT_TYPE_CHOICES
             "Brokerage",
+            "1",  # holds individual funds
             "n", "n",  # no U.S./international stock funds
             "y", "BND", "1000",  # bond fund
-            "n",  # no target-date fund
             "0",  # cash
             "n",
         ]

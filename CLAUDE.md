@@ -65,8 +65,19 @@ It is excluded from the tradeable slots and from `_TARGET_FUND_TYPES`.
 
 **A target-date fund is one position holding a fixed internal ratio,** not three
 positions. `_fund_type_coefficient` is what lets a single slot contribute
-fractionally to all three targets, so a target-date fund can coexist with
-individual funds in the same account.
+fractionally to all three targets.
+
+**An account holds a target-date fund *or* individual funds, never both** (cash may
+sit alongside either). `Account.__post_init__` enforces it, `prompts` asks which kind
+up front instead of offering a fourth yes/no, and `INDIVIDUAL_FUND_TYPES` is the set
+that clashes with `TARGET_DATE`.
+
+The consequence worth holding onto: **a target-date account has exactly one slot, so
+the per-account budget equality pins it outright.** No objective can reach inside it.
+That is what stops the solver from liquidating a taxable target-date fund to relocate
+the bond sleeve within it — which it used to do even for a portfolio already sitting
+on its target. It also means such an account sets a *floor* under every asset class,
+not just a ceiling, which is why `_check_capacity_feasible` checks both.
 
 ### The solver (`rebalance.py`)
 
@@ -88,7 +99,9 @@ do free (non-taxable) rearrangement to fix placement; below phase 2 so it will n
 open a taxable trade to chase a credit worth a couple of basis points against a
 realized gain we cannot even measure. It also tests `slot.fund_type` directly rather
 than going through `_fund_type_coefficient` — a target-date fund is not
-majority-foreign, so it passes no credit through from either kind of account.
+majority-foreign, so it passes no credit through from either kind of account, and
+counting its international sleeve makes the solver liquidate half a TDF for nothing
+(`test_target_date_international_sleeve_is_left_alone` pins this).
 
 A caution when testing placement: this LP is degenerate, so a scenario where the
 preferred placement merely *ties* proves nothing — the old solver often picked it
@@ -99,8 +112,15 @@ anyway. A test earns its keep only if it fails against the previous ranking; see
 optimum can spuriously reject the next phase's true optimum. Don't tighten it to zero.
 
 `_check_capacity_feasible` deliberately fails early with an actionable message rather
-than letting scipy surface a generic "infeasible". Trades below `MIN_TRADE_DOLLARS`
-are dropped as impractical.
+than letting scipy surface a generic "infeasible". It bounds each asset class by the
+smallest and largest coefficient among an account's own slots, because the account
+must spend exactly its own total across them — so a single-fund account's floor and
+ceiling are the same number. All three ceilings are checked before any floor: one
+account holding one fund breaches both at once, and "nothing you hold can be bonds"
+points at the missing piece, while "you are stuck holding this much U.S. stock"
+describes the same problem from the side the user can do least about.
+
+Trades below `MIN_TRADE_DOLLARS` are dropped as impractical.
 
 ### VT weighting (`vt_allocation.py`)
 
@@ -142,6 +162,12 @@ where they can, and `config_from_dict` wraps the lot in a catch-all that convert
 anything unanticipated (re-raising `PersistenceError` untouched so specific
 messages survive). `tests/test_persistence.py::MALFORMED` is the table to extend
 when a new shape shows up.
+
+A config saved before accounts became one-kind-or-the-other can hold a mix, and no
+longer loads; `Account`'s message names the account, and `cli.run()` warns and starts
+blank as it does for any `PersistenceError`. That is deliberate — splitting such an
+account automatically would invent an account boundary that is a hard constraint on
+the solver.
 
 The file is at v2. v1 spelled the fund types after the academic asset classes
 (`domestic_equity`, `tdf`, `balance`, `balances_as_of`); v2 uses the same words the

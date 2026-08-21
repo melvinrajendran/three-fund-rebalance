@@ -44,6 +44,13 @@ phase's priority):
 Each account's total value is treated as fixed -- a rebalance only moves
 money between funds *within* an account (including investing any cash
 sitting there); it never moves money between accounts.
+
+One consequence of an account holding either a target-date fund or
+individual funds (never both): a target-date account has exactly one slot,
+so the per-account budget constraint pins it outright. Its only possible
+"trade" is investing its own cash into the fund it already holds, and no
+objective can reach it. That is what keeps the solver from ever proposing
+to liquidate a target-date fund to relocate the bond sleeve inside it.
 """
 
 from __future__ import annotations
@@ -156,22 +163,59 @@ def _check_names_unique(accounts: list[Account]) -> None:
 
 
 def _check_capacity_feasible(
-    slots: list[_Slot], bounds: list[tuple[float, float]], dollar_targets: dict[str, Decimal]
+    accounts: list[Account], slots: list[_Slot], dollar_targets: dict[str, Decimal]
 ) -> None:
     """Fail fast with a specific, actionable message when the target simply
     cannot be reached given which fund types are declared where -- rather
-    than surfacing scipy's generic 'infeasible' message."""
+    than surfacing scipy's generic 'infeasible' message.
+
+    Each account has to allocate exactly its own total across its own slots,
+    so its contribution to one asset class is bounded by the smallest and the
+    largest coefficient among those slots. Both bounds matter. An account
+    holding a single fund -- a target-date fund, or one individual fund --
+    has one coefficient, so its floor and ceiling are the same number:
+    whatever that fund holds, the portfolio holds, and no target below that
+    is reachable.
+    """
+    slots_by_account: dict[int, list[_Slot]] = {}
+    for slot in slots:
+        slots_by_account.setdefault(slot.account_index, []).append(slot)
+
+    reach = {}
     for fund_type in _TARGET_FUND_TYPES:
-        max_capacity = sum(
-            _fund_type_coefficient(slot, fund_type) * upper for slot, (_, upper) in zip(slots, bounds)
-        )
+        floor = ceiling = 0.0
+        for account_index, account_slots in slots_by_account.items():
+            total = float(accounts[account_index].total_value())
+            coefficients = [_fund_type_coefficient(s, fund_type) for s in account_slots]
+            floor += total * min(coefficients)
+            ceiling += total * max(coefficients)
+        reach[fund_type] = (floor, ceiling)
+
+    # Every ceiling before any floor. One account holding one fund breaches
+    # both at once -- "nothing you hold can be bonds" points at the missing
+    # piece, while "you are stuck holding this much U.S. stock" describes the
+    # same problem from the side the user can do least about.
+    for fund_type in _TARGET_FUND_TYPES:
+        ceiling = reach[fund_type][1]
         target = float(dollar_targets[_TARGET_KEYS[fund_type]])
-        if target > max_capacity + 0.01:
+        if target > ceiling + 0.01:
             raise RebalanceError(
                 f"Target {ASSET_CLASS_LABELS[fund_type]} allocation is "
                 f"${target:,.2f}, but no combination of the funds you listed can hold "
-                f"more than ${max_capacity:,.2f} -- add a matching fund (or a target-date "
-                "fund) to an account to make room."
+                f"more than ${ceiling:,.2f} -- add a matching fund to an account "
+                "that holds individual funds, or open one that does, to make room."
+            )
+
+    for fund_type in _TARGET_FUND_TYPES:
+        floor = reach[fund_type][0]
+        target = float(dollar_targets[_TARGET_KEYS[fund_type]])
+        if target < floor - 0.01:
+            raise RebalanceError(
+                f"Target {ASSET_CLASS_LABELS[fund_type]} allocation is ${target:,.2f}, but "
+                f"your accounts hold at least ${floor:,.2f} of it and cannot hold less -- "
+                "an account holding a single fund has to put its whole value into that "
+                "fund. Raise this target, or hold that fund in a smaller share of your "
+                "portfolio."
             )
 
 
@@ -289,7 +333,7 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
     ]
     aggregate_rhs = [float(dollar_targets[_TARGET_KEYS[ft]]) for ft in _TARGET_FUND_TYPES]
 
-    _check_capacity_feasible(slots, bounds, dollar_targets)
+    _check_capacity_feasible(accounts, slots, dollar_targets)
 
     A_eq = budget_rows + aggregate_rows
     b_eq = budget_rhs + aggregate_rhs
@@ -404,9 +448,10 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
     warnings = []
     if taxable_bond_dollars > 0:
         warnings.append(
-            "Your tax-advantaged accounts don't have enough room for the full bond target; "
-            f"${taxable_bond_dollars:,} in bonds will remain in taxable accounts "
-            "(minimized as much as possible)."
+            f"${taxable_bond_dollars:,} in bonds will remain in taxable accounts. Either "
+            "your tax-advantaged accounts have no room left for the full bond target, or "
+            "those bonds sit inside a target-date fund that can only be held whole. This "
+            "is the smallest amount reachable."
         )
 
     return RebalanceResult(trades=trades, warnings=warnings, taxable_bond_dollars=taxable_bond_dollars)

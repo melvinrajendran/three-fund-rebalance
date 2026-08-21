@@ -156,6 +156,30 @@ class TestValidation:
             compute_trades(accounts, target(50, 0, 50))
 
 
+    def test_target_below_what_a_single_fund_account_forces_raises_clear_error(self):
+        """A pinned account sets a floor as well as a ceiling: this fund is
+        20% bonds and the account holds nothing else, so the portfolio cannot
+        hold less than $2,000 of bonds however the rest is arranged."""
+        target_date_alloc = TargetDateAllocation(
+            us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
+        )
+        accounts = [
+            account(
+                "Roth 401(k)", "401k", TaxTreatment.TAX_ADVANTAGED,
+                [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
+            ),
+            account(
+                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                [
+                    holding(FundType.US_STOCK, "VTI", 10_000),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                ],
+            ),
+        ]
+        with pytest.raises(RebalanceError, match="hold at least"):
+            compute_trades(accounts, target(70, 30, 0))
+
+
 class TestBondsPreferTaxAdvantaged:
     def test_bonds_fill_tax_advantaged_before_taxable_when_room_exists(self):
         tax_adv_1 = account(
@@ -352,25 +376,63 @@ class TestTargetDateFunds:
         result = compute_trades(accounts, target(60, 20, 20))
         assert result.trades == []
 
-    def test_target_date_fund_plus_individual_fund_solved_correctly(self):
+    def test_a_target_date_account_is_pinned_so_the_rest_absorbs_the_drift(self):
+        """A target-date account has one slot, so its budget constraint fixes
+        it outright. Its sleeves still count toward the aggregate targets --
+        the individual-fund account has to work around them."""
         target_date_alloc = TargetDateAllocation(
             us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
             account(
-                "Roth 401(k)", "Mixed401k", TaxTreatment.TAX_ADVANTAGED,
+                "Roth 401(k)", "401k", TaxTreatment.TAX_ADVANTAGED,
+                [holding(FundType.TARGET_DATE, "TargetFund", 5000, allocation=target_date_alloc)],
+            ),
+            account(
+                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [
-                    holding(FundType.US_STOCK, "VTI", 7000),
-                    holding(FundType.TARGET_DATE, "TargetFund", 3000, allocation=target_date_alloc),
+                    holding(FundType.US_STOCK, "VTI", 5000),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                 ],
-            )
+            ),
         ]
-        # international and bonds can only come from the target-date fund, forcing it to $5,000
-        # (since 20% of $5,000 = $1,000 = each of the international/bond targets).
-        result = compute_trades(accounts, target(80, 10, 10))
+        # The fund contributes $3,000 US / $1,000 international / $1,000 bonds.
+        # A 60/30/10 target on $10,000 wants $3,000 of international overall, so
+        # the brokerage supplies the missing $2,000 and the fund is untouched.
+        result = compute_trades(accounts, target(60, 30, 10))
         trades = trades_by_key(result)
-        assert trades[("Mixed401k", "VTI")] == ("sell", Decimal("2000.00"))
-        assert trades[("Mixed401k", "TargetFund")] == ("buy", Decimal("2000.00"))
+        assert ("401k", "TargetFund") not in trades
+        assert trades[("Brokerage", "VXUS")] == ("buy", Decimal("2000.00"))
+        assert trades[("Brokerage", "VTI")] == ("sell", Decimal("2000.00"))
+
+    def test_a_taxable_target_date_fund_is_never_liquidated_to_relocate_its_bonds(self):
+        """Phase 1 wants no bonds in a taxable account, and $1,000 of this
+        fund is bonds. Before accounts were one-kind-or-the-other it would
+        sell the whole position to get at them -- realizing a gain on $5,000
+        to relocate $1,000, in a portfolio already sitting on its target.
+        Pinning the account makes that unreachable rather than merely
+        undesirable."""
+        target_date_alloc = TargetDateAllocation(
+            us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
+        )
+        accounts = [
+            account(
+                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                [holding(FundType.TARGET_DATE, "Target 2050", 5000, allocation=target_date_alloc)],
+            ),
+            account(
+                "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
+                [
+                    holding(FundType.US_STOCK, "VTI", 5000),
+                    holding(FundType.US_BOND, "BND", 0),
+                ],
+            ),
+        ]
+        result = compute_trades(accounts, target(80, 10, 10))
+        assert result.trades == []
+        # The bonds are stuck in taxable, and the tool says so rather than trading.
+        assert result.taxable_bond_dollars == Decimal(1000)
+        assert result.warnings
 
     def test_target_date_fund_in_taxable_account_counts_toward_taxable_bonds(self):
         target_date_alloc = TargetDateAllocation(

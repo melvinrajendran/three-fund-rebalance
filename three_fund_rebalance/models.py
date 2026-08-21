@@ -41,14 +41,18 @@ class FundType(Enum):
     CASH = "cash"
 
 
-# Fund types that represent a single, directly tradeable fund with its own
-# name/ticker (as opposed to CASH, which is not a security).
-TRADEABLE_FUND_TYPES = (
+# The three asset classes held as separate funds. An account holds some
+# combination of these *or* a single target-date fund, never both -- see
+# Account.__post_init__.
+INDIVIDUAL_FUND_TYPES = (
     FundType.US_STOCK,
     FundType.INTERNATIONAL_STOCK,
     FundType.US_BOND,
-    FundType.TARGET_DATE,
 )
+
+# Fund types that represent a single, directly tradeable fund with its own
+# name/ticker (as opposed to CASH, which is not a security).
+TRADEABLE_FUND_TYPES = (*INDIVIDUAL_FUND_TYPES, FundType.TARGET_DATE)
 
 
 class TaxTreatment(Enum):
@@ -137,7 +141,12 @@ class Account:
     """One investment account: a 401(k), an IRA, a taxable brokerage account,
     etc. `name` is a user-chosen nickname that must be unique across the
     whole portfolio (this is how multiple accounts of the same type, e.g.
-    two 401(k)s from different employers, are distinguished)."""
+    two 401(k)s from different employers, are distinguished).
+
+    An account holds *either* a single target-date fund or some combination
+    of the three individual funds -- never a mix of the two. Cash is allowed
+    alongside either.
+    """
 
     account_type: str
     name: str
@@ -147,6 +156,16 @@ class Account:
     def __post_init__(self) -> None:
         if not self.name.strip():
             raise ValueError("Account name cannot be empty")
+        fund_types = {h.fund_type for h in self.holdings}
+        if FundType.TARGET_DATE in fund_types and fund_types & set(INDIVIDUAL_FUND_TYPES):
+            mixed = ", ".join(
+                sorted(f.value for f in fund_types & {FundType.TARGET_DATE, *INDIVIDUAL_FUND_TYPES})
+            )
+            raise ValueError(
+                f"Account {self.name!r} holds both a target-date fund and individual "
+                f"funds ({mixed}); an account holds one or the other, not a mix"
+            )
+
         seen_types = set()
         for holding in self.holdings:
             if holding.fund_type in seen_types:

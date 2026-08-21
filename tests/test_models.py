@@ -104,6 +104,65 @@ class TestHolding:
         assert holding.bond_component() == Decimal(0)
 
 
+class TestAccountHoldsOneKind:
+    """An account holds either a target-date fund or individual funds."""
+
+    def test_mixing_a_target_date_fund_with_individual_funds_is_rejected(self):
+        with pytest.raises(ValueError, match="one or the other"):
+            Account(
+                account_type="Roth 401(k)",
+                name="401k",
+                tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+                holdings=[
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
+                    Holding(
+                        fund_type=FundType.TARGET_DATE,
+                        name="Target 2050",
+                        value=Decimal(3000),
+                        target_date_allocation=make_target_date(),
+                    ),
+                ],
+            )
+
+    def test_the_message_names_the_account_and_the_funds_that_clashed(self):
+        with pytest.raises(ValueError) as exc_info:
+            Account(
+                account_type="Roth 401(k)",
+                name="Acme 401k",
+                tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+                holdings=[
+                    Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1)),
+                    Holding(
+                        fund_type=FundType.TARGET_DATE,
+                        name="Target 2050",
+                        value=Decimal(1),
+                        target_date_allocation=make_target_date(),
+                    ),
+                ],
+            )
+        message = str(exc_info.value)
+        assert "Acme 401k" in message
+        assert "target_date" in message and "us_bond" in message
+
+    def test_cash_may_sit_alongside_either_kind(self):
+        for funds in (
+            [Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1))],
+            [Holding(
+                fund_type=FundType.TARGET_DATE,
+                name="Target 2050",
+                value=Decimal(1),
+                target_date_allocation=make_target_date(),
+            )],
+        ):
+            built = Account(
+                account_type="Roth IRA",
+                name="Roth",
+                tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+                holdings=[*funds, Holding(fund_type=FundType.CASH, name="", value=Decimal(5))],
+            )
+            assert built.available_cash() == Decimal(5)
+
+
 class TestAccount:
     def test_total_value_sums_holdings(self):
         account = Account(

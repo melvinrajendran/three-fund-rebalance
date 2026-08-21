@@ -96,9 +96,9 @@ Useful flags:
 | `--version` | Print the installed version and exit |
 
 On each run you're asked for your target stock and bond allocation, then
-your accounts (type, a unique nickname, and which of a U.S. stock fund,
-international stock fund, U.S. bond fund, and/or target-date fund each one
-holds, plus any cash available to invest). If you've run it before, your
+your accounts (type, a unique nickname, whether the account holds individual
+funds or a single target-date fund, which of those funds it holds, and any
+cash available to invest). If you've run it before, your
 saved accounts are offered back with their last-known values pre-filled as
 editable defaults -- press Enter to keep a value or type a new one.
 
@@ -114,10 +114,17 @@ editable defaults -- press Enter to keep a value or type a new one.
   never guesses silently. The fund page's own HTML is deliberately not
   scraped: it's client-side rendered behind bot protection, so it would need
   a headless browser and would still break often.
+- **Each account holds one kind of thing**: either a single target-date fund
+  or some combination of a U.S. stock fund, an international stock fund and a
+  U.S. bond fund. Cash can sit alongside either. Different accounts in the
+  same portfolio can be of different kinds.
 - **Target-date funds** are entered as a single position with their own
   U.S. stock / international stock / bond mix (from the fund's fact sheet),
-  and are folded into the overall allocation math as a fixed-ratio bundle --
-  a target-date fund can coexist with individual funds in the same account.
+  and are folded into the overall allocation math as a fixed-ratio bundle.
+  Because such an account holds nothing else, its value is fixed: the tool
+  will never recommend selling a target-date fund, only investing that
+  account's cash into it. Its sleeves still count toward your overall
+  allocation, so the rest of the portfolio works around them.
 - **Cash available to invest** in an account counts toward that account's
   total and is always recommended to be fully invested.
 - **Rebalancing** is computed as a small linear program, solved in four

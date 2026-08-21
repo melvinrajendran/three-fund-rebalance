@@ -24,14 +24,22 @@ def sample_config() -> PersistedConfig:
     allocation = TargetDateAllocation(
         us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
     )
-    account = Account(
+    target_date_account = Account(
         account_type="Roth 401(k)",
         name="Acme 401k",
         tax_treatment=TaxTreatment.TAX_ADVANTAGED,
         holdings=[
-            Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal("6000.00")),
             Holding(fund_type=FundType.TARGET_DATE, name="Target 2050", value=Decimal(0), target_date_allocation=allocation),
             Holding(fund_type=FundType.CASH, name="", value=Decimal("125.50")),
+        ],
+    )
+    individual_fund_account = Account(
+        account_type="Taxable Brokerage",
+        name="Brokerage",
+        tax_treatment=TaxTreatment.TAXABLE,
+        holdings=[
+            Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal("6000.00")),
+            Holding(fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal("2000.00")),
         ],
     )
     return PersistedConfig(
@@ -40,7 +48,7 @@ def sample_config() -> PersistedConfig:
         vt_us_pct=Decimal("61.9"),
         vt_as_of="June 30, 2026",
         values_as_of="2026-08-18",
-        accounts=[account],
+        accounts=[target_date_account, individual_fund_account],
     )
 
 
@@ -56,7 +64,7 @@ class TestRoundTrip:
         assert loaded.vt_us_pct == original.vt_us_pct
         assert loaded.vt_as_of == original.vt_as_of
         assert loaded.values_as_of == original.values_as_of
-        assert len(loaded.accounts) == 1
+        assert len(loaded.accounts) == 2
 
         original_account = original.accounts[0]
         loaded_account = loaded.accounts[0]
@@ -188,6 +196,69 @@ class TestMalformedShapes:
             load_config(path)
 
 
+MIXED = {
+    "schema_version": 2,
+    "accounts": [
+        {
+            "account_type": "Roth 401(k)",
+            "name": "Acme 401k",
+            "tax_treatment": "tax_advantaged",
+            "holdings": [
+                {"fund_type": "us_stock", "name": "VTI", "value": "6000"},
+                {
+                    "fund_type": "target_date",
+                    "name": "Target 2050",
+                    "value": "3000",
+                    "target_date_allocation": {
+                        "us_stock_pct": "60",
+                        "international_stock_pct": "20",
+                        "bond_pct": "20",
+                    },
+                },
+            ],
+        }
+    ],
+}
+
+
+class TestMixedAccountsAreNoLongerLoadable:
+    """Accounts used to be allowed to hold a target-date fund alongside
+    individual funds. A config saved back then is now invalid, and the point
+    of these tests is that it says so clearly instead of failing obscurely --
+    cli.run() surfaces the message and starts blank."""
+
+
+    def test_message_names_the_account_and_the_rule(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(MIXED))
+        with pytest.raises(PersistenceError, match="one or the other"):
+            load_config(path)
+        with pytest.raises(PersistenceError, match="Acme 401k"):
+            load_config(path)
+
+    def test_a_v1_file_with_a_mixed_account_fails_the_same_way(self, tmp_path):
+        """The upgrade renames without validating, so a v1 mix reaches the
+        same check rather than dying somewhere less legible."""
+        payload = json.loads(json.dumps(MIXED))
+        payload["schema_version"] = 1
+        holdings = payload["accounts"][0]["holdings"]
+        holdings[0] = {"fund_type": "domestic_equity", "name": "VTI", "balance": "6000"}
+        holdings[1] = {
+            "fund_type": "tdf",
+            "name": "Target 2050",
+            "balance": "3000",
+            "tdf_allocation": {
+                "domestic_equity_pct": "60",
+                "international_equity_pct": "20",
+                "bond_pct": "20",
+            },
+        }
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(payload))
+        with pytest.raises(PersistenceError, match="one or the other"):
+            load_config(path)
+
+
 class TestSchemaV1Migration:
     """v1 named the fund types and the per-holding amount after the academic
     terms; v2 uses the words the CLI prints. Files written by v1 must keep
@@ -210,6 +281,14 @@ class TestSchemaV1Migration:
                         {"fund_type": "domestic_equity", "name": "VTI", "balance": "6000"},
                         {"fund_type": "international_equity", "name": "VXUS", "balance": "2000"},
                         {"fund_type": "domestic_bond", "name": "BND", "balance": "1000"},
+                        {"fund_type": "cash", "name": "", "balance": "500"},
+                    ],
+                },
+                {
+                    "account_type": "Roth 401(k)",
+                    "name": "Acme 401k",
+                    "tax_treatment": "tax_advantaged",
+                    "holdings": [
                         {
                             "fund_type": "tdf",
                             "name": "Target 2050",
@@ -220,9 +299,8 @@ class TestSchemaV1Migration:
                                 "bond_pct": "20",
                             },
                         },
-                        {"fund_type": "cash", "name": "", "balance": "500"},
                     ],
-                }
+                },
             ],
         }
 
@@ -234,13 +312,13 @@ class TestSchemaV1Migration:
 
         assert config.schema_version == 2
         assert config.values_as_of == "2026-08-01"
-        account = config.accounts[0]
-        assert account.total_value() == Decimal(12_500)
+        account, target_date_account = config.accounts
+        assert account.total_value() == Decimal(9500)
         assert account.available_cash() == Decimal(500)
         assert account.get_holding(FundType.US_STOCK).value == Decimal(6000)
         assert account.get_holding(FundType.INTERNATIONAL_STOCK).name == "VXUS"
         assert account.get_holding(FundType.US_BOND).value == Decimal(1000)
-        allocation = account.get_holding(FundType.TARGET_DATE).target_date_allocation
+        allocation = target_date_account.get_holding(FundType.TARGET_DATE).target_date_allocation
         assert allocation.us_stock_pct == Decimal(60)
         assert allocation.international_stock_pct == Decimal(20)
 
@@ -254,9 +332,11 @@ class TestSchemaV1Migration:
         assert written["schema_version"] == 2
         assert "balances_as_of" not in written
         holdings = {h["fund_type"]: h for h in written["accounts"][0]["holdings"]}
-        assert set(holdings) == {"us_stock", "international_stock", "us_bond", "target_date", "cash"}
+        assert set(holdings) == {"us_stock", "international_stock", "us_bond", "cash"}
         assert holdings["us_stock"]["value"] == "6000"
-        assert "target_date_allocation" in holdings["target_date"]
+        target_date = written["accounts"][1]["holdings"][0]
+        assert target_date["fund_type"] == "target_date"
+        assert "target_date_allocation" in target_date
 
     def test_migration_does_not_mutate_the_callers_dict(self):
         payload = self._v1_payload()
@@ -280,7 +360,7 @@ class TestSchemaV1Migration:
         for mangle in (
             lambda p: p.__setitem__("accounts", ["not an account"]),
             lambda p: p["accounts"][0].__setitem__("holdings", ["not a holding"]),
-            lambda p: p["accounts"][0]["holdings"][3].__setitem__("tdf_allocation", "not a dict"),
+            lambda p: p["accounts"][1]["holdings"][0].__setitem__("tdf_allocation", "not a dict"),
         ):
             v1 = self._v1_payload()
             mangle(v1)
