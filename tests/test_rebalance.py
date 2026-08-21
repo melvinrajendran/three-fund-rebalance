@@ -216,6 +216,128 @@ class TestBondsPreferTaxAdvantaged:
         assert taxable_bond.amount == Decimal("3900.00")
 
 
+class TestInternationalPlacement:
+    """Phase 3 prefers the international fund in taxable accounts, where its
+    foreign withholding can be claimed as a credit. It ranks below the
+    taxable-trading objective, so it is a tie-break and never a reason to
+    trade."""
+
+    TARGET_DATE_ALLOCATION = TargetDateAllocation(
+        us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
+    )
+
+    def test_international_is_bought_in_taxable_when_placement_costs_nothing(self):
+        """Both accounts hold cash that has to be invested either way, so
+        every placement costs the same amount of trading. A degenerate LP can
+        satisfy this by luck -- see the test above it for the case that only
+        phase 3 can produce -- but it pins the outcome against a future
+        re-ranking that would leave the choice to the solver again."""
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.CASH, "", 10_000),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.CASH, "", 10_000),
+            ]),
+        ]
+        trades = trades_by_key(compute_trades(accounts, target(50, 50, 0)))
+        assert trades[("Brokerage", "VXUS")] == ("buy", Decimal("10000.00"))
+        assert trades[("Roth", "VTI")] == ("buy", Decimal("10000.00"))
+        assert ("Brokerage", "VTI") not in trades
+
+    def test_international_is_moved_out_of_tax_advantaged_when_the_trades_are_free(self):
+        """The discriminating case for phase 3. The Roth already holds all the
+        international, and leaving it there needs one trade ($10,000 of VTI in
+        taxable) against three for relocating it -- so the total-volume
+        tie-break alone prefers leaving it. Phase 3 outranks that tie-break,
+        and the two extra trades happen inside a Roth where they cost nothing,
+        so the international moves to where its foreign tax is claimable."""
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.CASH, "", 10_000),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
+            ]),
+        ]
+        trades = trades_by_key(compute_trades(accounts, target(50, 50, 0)))
+        assert trades[("Brokerage", "VXUS")][0] == "buy"
+        assert trades[("Roth", "VXUS")][0] == "sell"
+        assert trades[("Roth", "VTI")][0] == "buy"
+        assert ("Brokerage", "VTI") not in trades
+
+    def test_never_sells_taxable_stock_to_move_international_in(self):
+        """The same $10,000 of international is needed, but here buying it in
+        taxable means selling appreciated stock there. Phase 2 outranks phase
+        3, so the whole purchase happens in the Roth and taxable is untouched
+        -- a couple of basis points of credit is not worth a realized gain."""
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 10_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+                holding(FundType.US_STOCK, "VTI", 10_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+            ]),
+        ]
+        result = compute_trades(accounts, target(50, 50, 0))
+        assert not any(t.account_name == "Brokerage" for t in result.trades)
+        trades = trades_by_key(result)
+        assert trades[("Roth", "VXUS")] == ("buy", Decimal("10000.00"))
+
+    def test_bonds_leaving_taxable_and_international_entering_it_cooperate(self):
+        """The two placement objectives push the same way -- both displace
+        U.S. stock from taxable -- so satisfying phase 1 fully still leaves
+        phase 3 fully satisfied."""
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.US_BOND, "BND", 0),
+                holding(FundType.CASH, "", 10_000),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.US_BOND, "BND", 0),
+                holding(FundType.CASH, "", 10_000),
+            ]),
+        ]
+        result = compute_trades(accounts, target(40, 30, 30))
+        trades = trades_by_key(result)
+        assert result.taxable_bond_dollars == Decimal(0)
+        assert trades[("Brokerage", "VXUS")] == ("buy", Decimal("6000.00"))
+        assert ("Brokerage", "BND") not in trades
+        assert ("Roth", "VXUS") not in trades
+
+    def test_a_target_date_fund_sleeve_is_out_of_phase_3s_reach(self):
+        """The Roth's international exposure sits inside a target-date fund,
+        and that account holds nothing else -- so the budget constraint pins
+        it and phase 3 cannot relocate a cent of it, whatever it would prefer.
+        The taxable account has an empty VXUS slot it could buy into, but the
+        aggregate international target is already met, so nothing moves."""
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 10_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+                holding(FundType.TARGET_DATE, "Target 2050", 10_000,
+                        allocation=self.TARGET_DATE_ALLOCATION),
+            ]),
+        ]
+        result = compute_trades(accounts, target(80, 10, 10))
+        assert result.trades == []
+
+
 class TestTargetDateFunds:
     def test_target_date_fund_only_account_already_balanced(self):
         target_date_alloc = TargetDateAllocation(

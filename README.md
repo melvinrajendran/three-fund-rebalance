@@ -27,6 +27,11 @@ Some limits worth knowing about specifically:
   rebalance minimizes taxable trade *volume* as a proxy for tax cost -- a
   heuristic, not a gains calculation. Selling in a taxable account may realize
   a tax liability this tool never sees.
+- Preferring international funds in taxable accounts is a rule of thumb, not
+  a calculation. The credit is worth a couple of basis points a year and is
+  partly offset by international funds' higher, less-qualified dividends; the
+  tool weighs neither, and does not check that a given fund is majority-foreign
+  and therefore actually eligible to pass the credit through.
 - It knows nothing about wash sales, contribution or withdrawal limits,
   holding periods, early-withdrawal penalties, or restrictions on what a given
   account can actually hold -- a 401(k)'s fixed fund menu, for instance.
@@ -115,15 +120,19 @@ editable defaults -- press Enter to keep a value or type a new one.
   a target-date fund can coexist with individual funds in the same account.
 - **Cash available to invest** in an account counts toward that account's
   total and is always recommended to be fully invested.
-- **Rebalancing** is computed as a small linear program, solved in three
+- **Rebalancing** is computed as a small linear program, solved in four
   lexicographic phases: (1) minimize bonds left in taxable accounts --
   bonds fill tax-advantaged capacity first and only spill into taxable once
   that's exhausted; (2) minimize $ trade volume within taxable accounts, as
   a proxy for avoiding capital gains (no cost-basis data is collected, so
-  this is an approximation, not an exact gains calculation); (3) tie-break
-  by minimizing total trade volume everywhere. Each account's total value is
-  fixed -- a rebalance only reallocates *within* an account, never moves
-  money between accounts. Trades under $1 (Fidelity's fractional-share
+  this is an approximation, not an exact gains calculation); (3) prefer to
+  hold the international fund in taxable accounts, where the foreign tax
+  withheld on it can be claimed as a credit that a tax-advantaged account
+  forfeits -- ranked below (2), so it decides which fund to buy when an
+  account is being traded anyway and never opens a taxable trade of its own;
+  (4) tie-break by minimizing total trade volume everywhere. Each account's
+  total value is fixed -- a rebalance only reallocates *within* an account,
+  never moves money between accounts. Trades under $1 (Fidelity's fractional-share
   minimum, the smaller of its Roth IRA and taxable brokerage minimums) are
   dropped as impractical.
 

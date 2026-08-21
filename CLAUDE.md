@@ -70,7 +70,7 @@ individual funds in the same account.
 
 ### The solver (`rebalance.py`)
 
-One decision variable per existing (account, holding) slot, solved as three
+One decision variable per existing (account, holding) slot, solved as four
 **lexicographic** phases — each phase's optimum is carried forward as a `<=` bound so
 later phases refine but never undo earlier ones:
 
@@ -78,8 +78,22 @@ later phases refine but never undo earlier ones:
 2. Minimize trade volume *within taxable accounts* — the proxy for avoiding capital
    gains. **No cost-basis data is collected**, so this is an approximation, not a
    gains calculation. Do not describe it as one in user-facing text.
-3. Tie-break by minimizing total trade volume everywhere, so the recommendation
+3. Minimize the international fund held in *tax-advantaged* accounts, i.e. prefer it
+   in taxable, where its foreign withholding is claimable as a credit.
+4. Tie-break by minimizing total trade volume everywhere, so the recommendation
    disturbs the fewest positions.
+
+**Phase 3's rank is the whole design, in both directions.** Above phase 4 so it will
+do free (non-taxable) rearrangement to fix placement; below phase 2 so it will never
+open a taxable trade to chase a credit worth a couple of basis points against a
+realized gain we cannot even measure. It also tests `slot.fund_type` directly rather
+than going through `_fund_type_coefficient` — a target-date fund is not
+majority-foreign, so it passes no credit through from either kind of account.
+
+A caution when testing placement: this LP is degenerate, so a scenario where the
+preferred placement merely *ties* proves nothing — the old solver often picked it
+anyway. A test earns its keep only if it fails against the previous ranking; see
+`test_international_is_moved_out_of_tax_advantaged_when_the_trades_are_free`.
 
 `_OBJECTIVE_SLACK` exists because HiGHS is not bit-exact — a hard `<=` against a raw
 optimum can spuriously reject the next phase's true optimum. Don't tighten it to zero.

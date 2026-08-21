@@ -2,7 +2,7 @@
 
 Formulates the rebalance as a small linear program with one decision
 variable per (account, holding) "slot" that currently exists, and solves it
-in three sequential phases (lexicographic optimization -- each phase's
+in four sequential phases (lexicographic optimization -- each phase's
 optimal objective value is carried forward as a "no worse than this" bound
 for the next phase, so later phases can only refine, never undo, an earlier
 phase's priority):
@@ -16,10 +16,28 @@ phase's priority):
     proxy for "avoid triggering capital gains tax": we don't have cost-basis
     data, so we approximate "minimize gains" as "minimize taxable trading".
 
-  Phase 3 -- tie-break by minimizing total $ trade volume across *all*
-    accounts (subject to not giving up phases 1 or 2). Phases 1 and 2 alone
+  Phase 3 -- minimize the $ of the international fund held in *tax-advantaged*
+    accounts, i.e. prefer it in taxable. A fund that is majority-foreign can
+    pass the foreign tax withheld on its holdings through to you as a credit
+    you can claim; held in an IRA or 401(k), that credit is simply lost.
+
+    Ranked deliberately *below* phase 2, not above it. The credit is worth a
+    couple of basis points a year, while selling appreciated stock in a
+    taxable account to chase it can realize a far larger gain today -- and we
+    have no cost-basis data, so we cannot even see that trade-off. Sitting
+    under the taxable-trading objective makes this a tie-break: it decides
+    which fund to buy when a taxable account is being traded anyway, and
+    never starts a taxable trade of its own.
+
+    Only a dedicated international fund counts. A target-date fund is not
+    majority-foreign, so it cannot pass the credit through from either kind
+    of account, and there is nothing to be gained by shuffling it around --
+    hence the direct fund-type test below rather than _fund_type_coefficient.
+
+  Phase 4 -- tie-break by minimizing total $ trade volume across *all*
+    accounts (subject to not giving up phases 1-3). The earlier phases alone
     can have multiple equally-good solutions (e.g. which of several
-    tax-advantaged accounts absorbs a shift); phase 3 picks the one that
+    tax-advantaged accounts absorbs a shift); phase 4 picks the one that
     disturbs the fewest existing positions, which reads as the "nicest"
     recommendation.
 
@@ -324,13 +342,32 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
     A_ub3 = A_ub2 + [c2]
     b_ub3 = b_ub2 + [phase2.fun + _OBJECTIVE_SLACK]
 
-    # --- phase 3: tie-break by minimizing total trade volume everywhere --
-    c3 = [0.0] * n + [1.0] * n
+    # --- phase 3: prefer the international fund in taxable accounts ------
+    # Stated as "minimize international held in tax-advantaged accounts",
+    # which is the same thing as maximizing it in taxable (the aggregate
+    # international equality fixes the total), but phrased as a minimization
+    # so it carries forward as a "<=" bound like every other phase.
+    c3 = [
+        1.0
+        if slot.fund_type == FundType.INTERNATIONAL_STOCK
+        and accounts[slot.account_index].tax_treatment != TaxTreatment.TAXABLE
+        else 0.0
+        for slot in slots
+    ] + [0.0] * n
     phase3 = _solve(
-        c3, A_eq2, b_eq2, A_ub3, b_ub3, bounds2, "phase 3: minimizing total trade volume"
+        c3, A_eq2, b_eq2, A_ub3, b_ub3, bounds2, "phase 3: placing international in taxable"
     )
 
-    raw_values = [_to_decimal(v) for v in phase3.x[:n]]
+    A_ub4 = A_ub3 + [c3]
+    b_ub4 = b_ub3 + [phase3.fun + _OBJECTIVE_SLACK]
+
+    # --- phase 4: tie-break by minimizing total trade volume everywhere --
+    c4 = [0.0] * n + [1.0] * n
+    phase4 = _solve(
+        c4, A_eq2, b_eq2, A_ub4, b_ub4, bounds2, "phase 4: minimizing total trade volume"
+    )
+
+    raw_values = [_to_decimal(v) for v in phase4.x[:n]]
     new_values = [Decimal(0)] * n
     for account_index, account in enumerate(accounts):
         indices = [i for i, s in enumerate(slots) if s.account_index == account_index]
