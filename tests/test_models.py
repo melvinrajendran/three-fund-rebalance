@@ -112,7 +112,7 @@ class TestAccountHoldsOneKind:
             Account(
                 account_type="Roth 401(k)",
                 name="401k",
-                tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+                tax_treatment=TaxTreatment.TAX_DEFERRED,
                 holdings=[
                     Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
                     Holding(
@@ -129,7 +129,7 @@ class TestAccountHoldsOneKind:
             Account(
                 account_type="Roth 401(k)",
                 name="Acme 401k",
-                tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+                tax_treatment=TaxTreatment.TAX_DEFERRED,
                 holdings=[
                     Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1)),
                     Holding(
@@ -157,7 +157,7 @@ class TestAccountHoldsOneKind:
             built = Account(
                 account_type="Roth IRA",
                 name="Roth",
-                tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+                tax_treatment=TaxTreatment.TAX_DEFERRED,
                 holdings=[*funds, Holding(fund_type=FundType.CASH, name="", value=Decimal(5))],
             )
             assert built.available_cash() == Decimal(5)
@@ -168,7 +168,7 @@ class TestAccount:
         account = Account(
             account_type="Roth IRA",
             name="My Roth",
-            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
             holdings=[
                 Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(100)),
                 Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(50)),
@@ -181,7 +181,7 @@ class TestAccount:
             Account(
                 account_type="Roth IRA",
                 name="My Roth",
-                tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+                tax_treatment=TaxTreatment.TAX_DEFERRED,
                 holdings=[
                     Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(100)),
                     Holding(fund_type=FundType.US_STOCK, name="VOO", value=Decimal(50)),
@@ -190,7 +190,7 @@ class TestAccount:
 
     def test_rejects_empty_name(self):
         with pytest.raises(ValueError, match="cannot be empty"):
-            Account(account_type="Roth IRA", name="", tax_treatment=TaxTreatment.TAX_ADVANTAGED)
+            Account(account_type="Roth IRA", name="", tax_treatment=TaxTreatment.TAX_DEFERRED)
 
     def test_available_cash_defaults_to_zero(self):
         account = Account(
@@ -212,14 +212,14 @@ class TestAccount:
             account_type="Taxable Brokerage", name="B", tax_treatment=TaxTreatment.TAXABLE
         )
         sheltered = Account(
-            account_type="Roth IRA", name="R", tax_treatment=TaxTreatment.TAX_ADVANTAGED
+            account_type="Roth IRA", name="R", tax_treatment=TaxTreatment.TAX_DEFERRED
         )
         assert not taxable.is_tax_advantaged()
         assert sheltered.is_tax_advantaged()
 
     def test_get_holding_returns_none_when_absent(self):
         account = Account(
-            account_type="Roth IRA", name="R", tax_treatment=TaxTreatment.TAX_ADVANTAGED
+            account_type="Roth IRA", name="R", tax_treatment=TaxTreatment.TAX_DEFERRED
         )
         assert account.get_holding(FundType.US_BOND) is None
 

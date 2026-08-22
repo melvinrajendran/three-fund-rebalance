@@ -2,7 +2,11 @@ from decimal import Decimal
 
 import pytest
 
-from three_fund_rebalance.allocation import compute_target_allocation, target_dollar_amounts
+from three_fund_rebalance.allocation import (
+    compute_target_allocation,
+    target_dollar_amounts,
+    target_dollar_bounds,
+)
 from three_fund_rebalance.models import TargetAllocation
 
 
@@ -71,3 +75,39 @@ class TestTargetDollarAmounts:
         )
         amounts = target_dollar_amounts(target, Decimal(37_500))
         assert sum(amounts.values()) == Decimal(37_500)
+
+
+class TestTargetDollarBounds:
+    def _target(self):
+        return TargetAllocation(
+            us_stock_pct=Decimal(50), international_stock_pct=Decimal(30), bond_pct=Decimal(20)
+        )
+
+    def test_band_is_applied_in_points_of_the_whole_portfolio(self):
+        """One number has to mean the same thing for every asset class, so
+        the band is points of the portfolio rather than a share of each
+        target: 5 points of $100,000 is $5,000 for all three."""
+        bounds = target_dollar_bounds(self._target(), Decimal(100_000), Decimal(5))
+        assert bounds["us_stock"] == (Decimal(45_000), Decimal(55_000))
+        assert bounds["international_stock"] == (Decimal(25_000), Decimal(35_000))
+        assert bounds["bond"] == (Decimal(15_000), Decimal(25_000))
+
+    def test_a_band_of_zero_collapses_both_edges_onto_the_target(self):
+        bounds = target_dollar_bounds(self._target(), Decimal(100_000), Decimal(0))
+        amounts = target_dollar_amounts(self._target(), Decimal(100_000))
+        for key, (low, high) in bounds.items():
+            assert low == high == amounts[key]
+
+    def test_edges_are_clamped_to_what_a_portfolio_can_actually_hold(self):
+        """A 2% target with a 5-point band would otherwise ask for at least
+        -3% of the portfolio, and the solver reads these as real bounds."""
+        target = TargetAllocation(
+            us_stock_pct=Decimal(98), international_stock_pct=Decimal(0), bond_pct=Decimal(2)
+        )
+        bounds = target_dollar_bounds(target, Decimal(100_000), Decimal(5))
+        assert bounds["bond"] == (Decimal(0), Decimal(7_000))
+        assert bounds["us_stock"] == (Decimal(93_000), Decimal(100_000))
+
+    def test_a_negative_band_is_rejected(self):
+        with pytest.raises(ValueError, match="cannot be negative"):
+            target_dollar_bounds(self._target(), Decimal(100_000), Decimal(-1))

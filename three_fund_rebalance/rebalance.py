@@ -1,22 +1,51 @@
 """The core rebalancing engine.
 
-Formulates the rebalance as a small linear program with one decision
-variable per (account, holding) "slot" that currently exists, and solves it
-in four sequential phases (lexicographic optimization -- each phase's
-optimal objective value is carried forward as a "no worse than this" bound
-for the next phase, so later phases can only refine, never undo, an earlier
-phase's priority):
+Formulates the rebalance as a small linear program and solves it in six
+sequential phases (lexicographic optimization -- each phase's optimal
+objective value is carried forward as a "no worse than this" bound for the
+next phase, so later phases can only refine, never undo, an earlier phase's
+priority):
 
   Phase 1 -- minimize the total $ of bonds left sitting in taxable accounts.
-    This fills tax-advantaged bond capacity first; taxable accounts only end
-    up holding bonds once tax-advantaged room is exhausted.
+    This fills sheltered bond capacity first; taxable accounts only end up
+    holding bonds once tax-advantaged room is exhausted.
 
   Phase 2 -- minimize $ trade volume *within taxable accounts*, subject to
     not giving up any of phase 1's bond-minimization result. This is the
     proxy for "avoid triggering capital gains tax": we don't have cost-basis
     data, so we approximate "minimize gains" as "minimize taxable trading".
 
-  Phase 3 -- minimize the $ of the international fund held in *tax-advantaged*
+    Worth knowing what this is equivalent to. Each account's total is fixed
+    and its cash is always fully invested, so within one taxable account
+    buys minus sells is a constant; minimizing buys plus sells is therefore
+    the same thing as minimizing dollars *sold*. Investing available cash
+    costs nothing under this objective, which is what makes new money the
+    first thing spent.
+
+  Phase 3 -- minimize wash-sale exposure: the $ of any one fund sold in a
+    taxable account while the same fund is bought in a tax-advantaged one.
+    Selling at a loss and buying a substantially identical security within
+    30 days either way is a wash sale, and when the replacement lands inside
+    an IRA or 401(k) the disallowed loss is *not* added back to basis the
+    way an ordinary wash sale's is -- it is gone for good (Rev. Rul. 2008-5).
+    Ranked above both placement phases below because a permanently destroyed
+    loss costs more than either placement is worth, and below phase 2 so it
+    never opens a taxable trade of its own.
+
+  Phase 4 -- minimize the $ of bonds held in *tax-free* accounts, i.e. hold
+    them in tax-deferred space instead. Both shelter the interest from tax
+    today, but a Roth or HSA never taxes qualified withdrawals, so its space
+    is worth the most held against the highest expected return -- stocks.
+    Bonds belong in the account that will be taxed as ordinary income on the
+    way out regardless.
+
+    Unlike phase 5 below, this counts a target-date fund's bond sleeve via
+    _fund_type_coefficient. Bonds inside a Roth's target-date fund really
+    are bonds occupying tax-free space, exactly as phase 1 counts them, and
+    such an account is pinned by its own budget row anyway -- so counting
+    them states the truth without giving the solver anything to act on.
+
+  Phase 5 -- minimize the $ of the international fund held in tax-advantaged
     accounts, i.e. prefer it in taxable. A fund that is majority-foreign can
     pass the foreign tax withheld on its holdings through to you as a credit
     you can claim; held in an IRA or 401(k), that credit is simply lost.
@@ -26,20 +55,37 @@ phase's priority):
     taxable account to chase it can realize a far larger gain today -- and we
     have no cost-basis data, so we cannot even see that trade-off. Sitting
     under the taxable-trading objective makes this a tie-break: it decides
-    which fund to buy when a taxable account is being traded anyway, and
-    never starts a taxable trade of its own.
+    which funds an account already being traded ends up holding -- the sell
+    side as much as the buy side -- and never starts a taxable trade of its
+    own.
 
     Only a dedicated international fund counts. A target-date fund is not
     majority-foreign, so it cannot pass the credit through from either kind
     of account, and there is nothing to be gained by shuffling it around --
     hence the direct fund-type test below rather than _fund_type_coefficient.
 
-  Phase 4 -- tie-break by minimizing total $ trade volume across *all*
-    accounts (subject to not giving up phases 1-3). The earlier phases alone
+  Phase 6 -- tie-break by minimizing total $ trade volume across *all*
+    accounts (subject to not giving up phases 1-5). The earlier phases alone
     can have multiple equally-good solutions (e.g. which of several
-    tax-advantaged accounts absorbs a shift); phase 4 picks the one that
+    tax-advantaged accounts absorbs a shift); phase 6 picks the one that
     disturbs the fewest existing positions, which reads as the "nicest"
-    recommendation.
+    plan.
+
+All six run *after* `_resolve_allocation` has settled what each asset class
+should be worth, and against that as a hard equality. The order matters:
+**what to hold is decided before where to hold it, and never by it.**
+
+That is what the rebalancing band buys. Trading to an exact target means
+every drift, however small, generates trades, and in a taxable account those
+cost real money to correct a rounding error; inside the band the allocation
+is simply left where it is. But a band stated as a *range* the six phases
+below could see would be a range they could spend: every one of them is
+phrased as "minimize this asset class in that kind of account", which only
+means "relocate it" while the class total is fixed. Given slack, they will
+satisfy themselves by holding less of the asset class instead of moving it.
+Deciding the totals up front leaves the phases exactly the freedom they were
+designed for -- moving a holding between accounts never changes an asset
+class total -- and none of the freedom they were not.
 
 Each account's total value is treated as fixed -- a rebalance only moves
 money between funds *within* an account (including investing any cash
@@ -60,7 +106,7 @@ from decimal import Decimal
 
 from scipy.optimize import linprog
 
-from three_fund_rebalance.allocation import target_dollar_amounts
+from three_fund_rebalance.allocation import target_dollar_amounts, target_dollar_bounds
 from three_fund_rebalance.config import MIN_TRADE_DOLLARS
 from three_fund_rebalance.formatting import ASSET_CLASS_LABELS
 from three_fund_rebalance.models import (
@@ -77,8 +123,19 @@ from three_fund_rebalance.models import (
 # Slack allowed when carrying one phase's optimal objective value forward as
 # a "<=" bound for the next phase. HiGHS (scipy's default LP solver) is not
 # bit-exact, so a hard "<=" against the raw optimum can spuriously reject the
-# true optimum of the next phase over floating point noise.
-_OBJECTIVE_SLACK = 0.01
+# true optimum of the next phase over floating point noise. Don't set it to
+# zero.
+#
+# Every carried bound is also a budget a later phase can spend: giving up
+# this much of an earlier priority is allowed, so the volume-minimizing
+# phase at the bottom will happily do it. At a cent, with five bounds
+# stacked up, that surfaced as trades like "sell $5,999.99" where
+# the answer is $6,000.00 -- the drift was under a cent per phase, but it
+# landed just below the rounding boundary. A tenth of a cent stays well
+# clear of HiGHS's noise (verified against portfolios from $100k to $8B)
+# while sitting below the cent grid every displayed amount rounds to, so it
+# cannot produce a visible artifact.
+_OBJECTIVE_SLACK = 0.001
 
 # Fund types whose dollar target we're solving for (CASH is excluded: it is
 # not a security, and its target is implicitly zero -- see _build_slots).
@@ -109,6 +166,28 @@ class _Slot:
         return self.holding.fund_type
 
 
+@dataclass(frozen=True)
+class _ShelteredPurchase:
+    """One extra decision variable measuring the dollars *bought* into one
+    sheltered slot, ignoring any movement the other way.
+
+    A wash sale is directional -- selling fund X in taxable only matters
+    alongside buying fund X in a shelter -- and the absolute-value variables
+    the other phases share cannot tell a buy from a sell. Only the buy side
+    gets one of these. The taxable sale is the leg that realizes the loss,
+    but it is also the leg phase 2 has already minimized and the one the
+    portfolio usually has no choice about; what the shelter buys instead is
+    free to change, so that is the lever phase 3 pulls. Penalizing the sale
+    as well would put phase 3 in opposition to phase 1, which exists to sell
+    exactly those taxable bonds.
+
+    One is created only for a slot that could actually take part in a wash
+    sale, so in the common case there are none at all.
+    """
+
+    slot_index: int
+
+
 @dataclass
 class RebalanceResult:
     trades: list[Trade]
@@ -116,6 +195,11 @@ class RebalanceResult:
     # Total $ of bonds left in taxable accounts in the final solution (0 if
     # tax-advantaged capacity was sufficient to hold the whole bond target).
     taxable_bond_dollars: Decimal
+    # How many moves were wanted but left out for being smaller than
+    # MIN_TRADE_DOLLARS. The report says so: with them dropped, the orders
+    # shown do not reach the target exactly, and silence about that reads as
+    # a rounding error nobody can account for.
+    dropped_trades: int = 0
 
 
 def _to_decimal(value: float) -> Decimal:
@@ -162,12 +246,69 @@ def _check_names_unique(accounts: list[Account]) -> None:
         raise RebalanceError(f"Account names must be unique; duplicated: {listed}")
 
 
-def _check_capacity_feasible(
-    accounts: list[Account], slots: list[_Slot], dollar_targets: dict[str, Decimal]
-) -> None:
-    """Fail fast with a specific, actionable message when the target simply
-    cannot be reached given which fund types are declared where -- rather
-    than surfacing scipy's generic 'infeasible' message.
+def _normalized_fund_name(holding: Holding) -> str:
+    """The key two holdings must share to count as the same security. Case
+    and surrounding space are noise a user shouldn't have to get right;
+    anything beyond that is a judgment we can't make from a name alone --
+    VTI and VTSAX track the same index and would be substantially identical
+    to the IRS, but VTI and VOO merely look similar. Matching literally
+    means the check never cries wolf, and the warning says what it misses."""
+    return holding.name.strip().casefold()
+
+
+def _wash_sale_variables(accounts: list[Account], slots: list[_Slot]) -> list[_ShelteredPurchase]:
+    """One variable per sheltered slot holding a fund that is *also* held in
+    a taxable account -- the only purchases that could complete a wash sale.
+    Returns an empty list for the common portfolio where no fund name
+    straddles that line, in which case phase 3 has nothing to do.
+
+    A taxable holding of zero is skipped: you cannot sell what you do not
+    own, so no purchase can pair with it into a wash sale. That matters --
+    without the check, an empty taxable slot standing ready to receive a fund
+    would suppress the very purchase phase 5 wants to make, over a sale that
+    can never happen.
+
+    Beyond that this is blind to whether the taxable side is actually sold,
+    which no linear objective can condition on: whether a position shrinks is
+    decided by the same solve. The residue is that phase 3 also mildly
+    prefers not to accumulate, in a shelter, a fund you already hold in
+    taxable. That costs nothing -- it sits below both objectives that spend
+    money, and it points the same way as phases 4 and 5 far more often than
+    not.
+    """
+    taxable_names: set[str] = set()
+    sheltered_slots: dict[str, list[int]] = {}
+    for index, slot in enumerate(slots):
+        name = _normalized_fund_name(slot.holding)
+        if not name:
+            continue
+        if accounts[slot.account_index].tax_treatment == TaxTreatment.TAXABLE:
+            if slot.holding.value > 0:
+                taxable_names.add(name)
+        else:
+            sheltered_slots.setdefault(name, []).append(index)
+
+    return [
+        _ShelteredPurchase(index)
+        for name in sorted(taxable_names & set(sheltered_slots))
+        for index in sheltered_slots[name]
+    ]
+
+
+def _band_note(target: Decimal, edge: Decimal) -> str:
+    """Name the band edge in an infeasibility message, but only when the band
+    is what makes the number binding -- with no band the edge *is* the
+    target, and printing the same figure twice reads like a mistake."""
+    if edge == target:
+        return ""
+    return f" (${edge:,.2f} at the edge of your rebalancing band)"
+
+
+def _asset_class_reach(
+    accounts: list[Account], slots: list[_Slot]
+) -> dict[FundType, tuple[float, float]]:
+    """The smallest and largest dollar total each asset class can reach given
+    which fund types are declared where.
 
     Each account has to allocate exactly its own total across its own slots,
     so its contribution to one asset class is bounded by the smallest and the
@@ -176,6 +317,10 @@ def _check_capacity_feasible(
     has one coefficient, so its floor and ceiling are the same number:
     whatever that fund holds, the portfolio holds, and no target below that
     is reachable.
+
+    This is a relaxation -- it bounds each class on its own, ignoring that an
+    account has to satisfy all three at once -- so it is sound for rejecting
+    the impossible, not for certifying the possible.
     """
     slots_by_account: dict[int, list[_Slot]] = {}
     for slot in slots:
@@ -190,33 +335,144 @@ def _check_capacity_feasible(
             floor += total * min(coefficients)
             ceiling += total * max(coefficients)
         reach[fund_type] = (floor, ceiling)
+    return reach
 
+
+def _check_capacity_feasible(
+    dollar_targets: dict[str, Decimal],
+    dollar_bounds: dict[str, tuple[Decimal, Decimal]],
+    reach: dict[FundType, tuple[float, float]],
+) -> None:
+    """Fail fast with a specific, actionable message when the target simply
+    cannot be reached -- rather than surfacing scipy's generic 'infeasible'.
+
+    What has to be reachable is the nearest edge of the band, not the target
+    itself: a band the portfolio can satisfy is satisfiable even when the
+    exact target is not, which is one of the things a band is for.
+    """
     # Every ceiling before any floor. One account holding one fund breaches
     # both at once -- "nothing you hold can be bonds" points at the missing
     # piece, while "you are stuck holding this much U.S. stock" describes the
     # same problem from the side the user can do least about.
     for fund_type in _TARGET_FUND_TYPES:
         ceiling = reach[fund_type][1]
-        target = float(dollar_targets[_TARGET_KEYS[fund_type]])
-        if target > ceiling + 0.01:
+        target = dollar_targets[_TARGET_KEYS[fund_type]]
+        lowest_allowed = dollar_bounds[_TARGET_KEYS[fund_type]][0]
+        if float(lowest_allowed) > ceiling + 0.01:
             raise RebalanceError(
                 f"Target {ASSET_CLASS_LABELS[fund_type]} allocation is "
-                f"${target:,.2f}, but no combination of the funds you listed can hold "
-                f"more than ${ceiling:,.2f} -- add a matching fund to an account "
-                "that holds individual funds, or open one that does, to make room."
+                f"${target:,.2f}{_band_note(target, lowest_allowed)}, but no combination of "
+                f"the funds you listed can hold more than ${ceiling:,.2f} -- add a matching "
+                "fund to an account that holds individual funds, or open one that does, to "
+                "make room."
             )
 
     for fund_type in _TARGET_FUND_TYPES:
         floor = reach[fund_type][0]
-        target = float(dollar_targets[_TARGET_KEYS[fund_type]])
-        if target < floor - 0.01:
+        target = dollar_targets[_TARGET_KEYS[fund_type]]
+        highest_allowed = dollar_bounds[_TARGET_KEYS[fund_type]][1]
+        if float(highest_allowed) < floor - 0.01:
             raise RebalanceError(
-                f"Target {ASSET_CLASS_LABELS[fund_type]} allocation is ${target:,.2f}, but "
-                f"your accounts hold at least ${floor:,.2f} of it and cannot hold less -- "
-                "an account holding a single fund has to put its whole value into that "
-                "fund. Raise this target, or hold that fund in a smaller share of your "
-                "portfolio."
+                f"Target {ASSET_CLASS_LABELS[fund_type]} allocation is ${target:,.2f}"
+                f"{_band_note(target, highest_allowed)}, but your accounts hold at least "
+                f"${floor:,.2f} of it and cannot hold less -- an account holding a single "
+                "fund has to put its whole value into that fund. Raise this target, or hold "
+                "that fund in a smaller share of your portfolio."
             )
+
+
+def _current_asset_class_dollars(accounts: list[Account]) -> dict[str, Decimal]:
+    """What each asset class is worth right now, target-date sleeves included."""
+    holdings = [h for account in accounts for h in account.holdings]
+    return {
+        "us_stock": sum((h.us_stock_component() for h in holdings), Decimal(0)),
+        "international_stock": sum(
+            (h.international_stock_component() for h in holdings), Decimal(0)
+        ),
+        "bond": sum((h.bond_component() for h in holdings), Decimal(0)),
+    }
+
+
+def _resolve_allocation(
+    current: dict[str, Decimal],
+    dollar_targets: dict[str, Decimal],
+    dollar_bounds: dict[str, tuple[Decimal, Decimal]],
+    reach: dict[FundType, tuple[float, float]],
+    total_value: Decimal,
+) -> dict[str, Decimal]:
+    """Decide what each asset class should be worth, before deciding where to
+    hold it. Two objectives, lexicographic:
+
+      1. Move as little as possible from where the portfolio already sits.
+      2. Among the ties, sit as close to target as possible.
+
+    (1) is what a rebalancing band *means*: inside it, stay put; outside it,
+    move to the nearest edge. (2) only has room to act when something has to
+    move anyway -- most importantly when there is cash to invest, which it
+    steers toward whichever class is furthest below target. Directing new
+    money at the underweight class is the one way of rebalancing that costs
+    nothing at all.
+
+    Running this first is not an optimization, it is what keeps the band
+    honest. The location phases below are *stated* as "minimize this asset
+    class in that kind of account", which only means "relocate it" while the
+    class total is fixed. Left as a range, they can satisfy themselves by
+    holding less of the asset class outright -- so a portfolio that was
+    merely a little heavy in international would have it sold off rather than
+    moved, and a portfolio underweight bonds would have its bond fund
+    liquidated to clear tax-free space. Pinning the totals here restores the
+    equality those phases assume, and costs them nothing they should have:
+    moving a holding between accounts never changes an asset class total.
+    """
+    keys = [_TARGET_KEYS[fund_type] for fund_type in _TARGET_FUND_TYPES]
+
+    # p_0..p_2 are the class totals; the rest track distance from current and
+    # from target, by the same absolute-value linearization used elsewhere.
+    bounds = []
+    for fund_type in _TARGET_FUND_TYPES:
+        low, high = dollar_bounds[_TARGET_KEYS[fund_type]]
+        floor, ceiling = reach[fund_type]
+        lower, upper = max(float(low), floor), min(float(high), ceiling)
+        # _check_capacity_feasible has already rejected a genuine gap between
+        # the band and what the accounts can hold;;it tolerates a cent of
+        # float slop, so only that much can survive to invert these.
+        bounds.append((min(lower, upper), upper))
+    bounds += [(0.0, None)] * 6
+
+    A_eq = [[1.0, 1.0, 1.0] + [0.0] * 6]
+    b_eq = [float(total_value)]
+
+    A_ub, b_ub = [], []
+    for offset, anchor in ((3, current), (6, dollar_targets)):
+        for index, key in enumerate(keys):
+            rising = [0.0] * 9
+            rising[index], rising[offset + index] = 1.0, -1.0
+            A_ub.append(rising)
+            b_ub.append(float(anchor[key]))
+
+            falling = [0.0] * 9
+            falling[index], falling[offset + index] = -1.0, -1.0
+            A_ub.append(falling)
+            b_ub.append(-float(anchor[key]))
+
+    stay_put = [0.0] * 3 + [1.0] * 3 + [0.0] * 3
+    toward_target = [0.0] * 6 + [1.0] * 3
+
+    solution = _solve(stay_put, A_eq, b_eq, A_ub, b_ub, bounds, "leaving your allocation as near to where it is as your band allows")
+    if solution.fun <= _OBJECTIVE_SLACK:
+        # Nothing has to move: every class is already inside its band and
+        # there is no cash to place. Say so exactly, rather than handing the
+        # second objective a solver's-worth of slack to spend drifting a
+        # fraction of a cent toward target -- "leave it alone" is the answer,
+        # and it should come back as the number the portfolio already holds.
+        return dict(current)
+
+    A_ub.append(stay_put)
+    b_ub.append(solution.fun + _OBJECTIVE_SLACK)
+    solution = _solve(
+        toward_target, A_eq, b_eq, A_ub, b_ub, bounds, "bringing your allocation toward target"
+    )
+    return {key: _to_decimal(solution.x[index]) for index, key in enumerate(keys)}
 
 
 def _distribute_residual(
@@ -245,7 +501,7 @@ def _distribute_residual(
 
 def _finalize_account_values(
     account: Account, indices: list[int], slots: list[_Slot], raw_values: list[Decimal]
-) -> dict[int, Decimal]:
+) -> tuple[dict[int, Decimal], int]:
     """Turn one account's solved (fractional) slot values into final cent
     amounts that both round cleanly and leave the account summing to exactly
     its own total.
@@ -253,7 +509,7 @@ def _finalize_account_values(
     Two things have to hold together here, and doing them in sequence breaks
     them: rounding each slot independently can leave an account a cent off
     its real value, and dropping a sub-minimum trade afterwards reopens the
-    same gap from the other side. Together those produced recommendations
+    same gap from the other side. Together those produced trades
     like "buy $5,000.01" against exactly $5,000.00 of cash -- the offsetting
     $0.01 sell was filtered out as too small while the extra cent of buying
     survived.
@@ -264,16 +520,21 @@ def _finalize_account_values(
     the minimum. Preserving the per-account total is the hard constraint --
     you cannot spend money you don't have -- while the aggregate allocation
     targets are approximate goals, so any leftover cent is absorbed there.
+
+    Returns the final values and a count of the moves dropped for being too
+    small -- moves the solver actually wanted, not slots that were never
+    going to trade, which is the distinction the report has to disclose.
     """
     target_total = to_cents(account.total_value())
     current = {i: to_cents(slots[i].holding.value) for i in indices}
     held: set[int] = set()  # slots pinned at their current value (no trade)
+    dropped = 0
 
     # Each pass pins at least one more slot, so this runs at most once per slot.
     for _ in range(len(indices) + 1):
         tradeable = [i for i in indices if i not in held]
         if not tradeable:
-            return current
+            return current, dropped
 
         budget = target_total - sum((current[i] for i in held), Decimal(0))
         values = {i: to_cents(raw_values[i]) for i in tradeable}
@@ -281,23 +542,73 @@ def _finalize_account_values(
 
         too_small = [i for i in tradeable if abs(values[i] - current[i]) < MIN_TRADE_DOLLARS]
         if not too_small:
-            return {**{i: current[i] for i in held}, **values}
+            return {**{i: current[i] for i in held}, **values}, dropped
+        dropped += sum(1 for i in too_small if values[i] != current[i])
         held.update(too_small)
 
     # Unreachable: every pass either returns or pins at least one more slot,
     # so the loop runs out of tradeable slots (and returns above) first. Kept
     # as a backstop so a future change can't fall through to an implicit None.
-    return current  # pragma: no cover
+    return current, dropped  # pragma: no cover
 
 
 def _solve(c, A_eq, b_eq, A_ub, b_ub, bounds, context: str):
     result = linprog(c=c, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method="highs")
     if not result.success:
-        raise RebalanceError(f"Could not find a feasible rebalance ({context}): {result.message}")
+        # `context` says what the solver was doing in the user's terms, not
+        # in the vocabulary of the phase list -- this message is printed
+        # straight to whoever is running the CLI.
+        raise RebalanceError(
+            f"no arrangement of the funds you hold reaches your target while {context}. "
+            f"(Solver detail: {result.message})"
+        )
     return result
 
 
-def compute_trades(accounts: list[Account], target: TargetAllocation) -> RebalanceResult:
+def _wash_sale_warnings(accounts: list[Account], trades: list[Trade]) -> list[str]:
+    """Flag any fund this plan sells in a taxable account while buying it in
+    a sheltered one. Phase 3 avoids this arrangement whenever an equally good
+    alternative exists, so anything left here was unavoidable given what the
+    accounts hold -- which is exactly when the user needs to be told."""
+    treatment = {a.name: a.tax_treatment for a in accounts}
+    sold_in_taxable: dict[str, Decimal] = {}
+    bought_in_shelter: dict[str, Decimal] = {}
+    display: dict[str, str] = {}
+
+    for trade in trades:
+        key = trade.fund_name.strip().casefold()
+        if not key:
+            continue
+        display.setdefault(key, trade.fund_name.strip())
+        taxable = treatment[trade.account_name] == TaxTreatment.TAXABLE
+        if taxable and trade.action == "sell":
+            sold_in_taxable[key] = sold_in_taxable.get(key, Decimal(0)) + trade.amount
+        elif not taxable and trade.action == "buy":
+            bought_in_shelter[key] = bought_in_shelter.get(key, Decimal(0)) + trade.amount
+
+    warnings = []
+    for key in sorted(set(sold_in_taxable) & set(bought_in_shelter)):
+        overlap = min(sold_in_taxable[key], bought_in_shelter[key])
+        warnings.append(
+            f"This plan sells {display[key]} in a taxable account and buys it in a "
+            f"tax-advantaged one, overlapping by ${overlap:,}. If any of the shares you "
+            "sell are at a loss, this may be a wash sale. The IRS has taken the position "
+            "(Rev. Rul. 2008-5) that where the replacement is bought inside an IRA, the "
+            "disallowed loss is not added back to basis the way it otherwise would be. No "
+            "cost-basis data is collected here, so confirm with a tax professional before "
+            "placing these orders; buying a different fund in the tax-advantaged account "
+            "avoids the question entirely. Funds are matched by name, so two share classes "
+            "of the same index (VTI and VTSAX, say) are not caught by this check."
+        )
+    return warnings
+
+
+def compute_trades(
+    accounts: list[Account], target: TargetAllocation, band_pct: Decimal = Decimal(0)
+) -> RebalanceResult:
+    """Solve for the trades that bring `accounts` to `target`, allowing each
+    asset class to land anywhere within `band_pct` percentage points of it.
+    The default of zero is the exact target."""
     _check_names_unique(accounts)
 
     total_value = sum((a.total_value() for a in accounts), Decimal(0))
@@ -305,119 +616,167 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
         return RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
 
     dollar_targets = target_dollar_amounts(target, total_value)
+    dollar_bounds = target_dollar_bounds(target, total_value, band_pct)
     slots = _build_slots(accounts)
     # n cannot be 0 here: total_value > 0 (checked above) means at least one
     # account has a positive value, and _build_slots already rejects any
     # positive-value account that declares no tradeable holdings.
     n = len(slots)
 
+    reach = _asset_class_reach(accounts, slots)
+    _check_capacity_feasible(dollar_targets, dollar_bounds, reach)
+
+    # What each asset class should be worth is settled here, once, before any
+    # objective about *where* to hold it gets a say -- see _resolve_allocation.
+    resolved = _resolve_allocation(
+        _current_asset_class_dollars(accounts), dollar_targets, dollar_bounds, reach, total_value
+    )
+
+    # --- variable layout -------------------------------------------------
+    # [ x_0..x_n-1 | y_0..y_n-1 | w_0..w_k-1 ]
+    #   slot value  |x - current|  one-directional trade sizes (phase 3)
+    # Built once and shared by every phase, so an objective is just a vector
+    # over the same columns and a solved optimum is a row appended to A_ub.
+    wash_variables = _wash_sale_variables(accounts, slots)
+    k = len(wash_variables)
+    width = 2 * n + k
+
     current = [float(slot.holding.value) for slot in slots]
-    bounds = [(0.0, float(accounts[s.account_index].total_value())) for s in slots]
+    bounds = (
+        [(0.0, float(accounts[s.account_index].total_value())) for s in slots]
+        + [(0.0, None)] * n
+        + [(0.0, None)] * k
+    )
 
-    # --- equality constraints shared by all three phases -----------------
-    # One row per account: that account's slots must sum to its fixed total.
-    budget_rows, budget_rhs = [], []
+    def row() -> list[float]:
+        return [0.0] * width
+
+    # --- equalities: each account spends exactly its own total -----------
+    A_eq, b_eq = [], []
     for account_index, account in enumerate(accounts):
         indices = [i for i, s in enumerate(slots) if s.account_index == account_index]
         if not indices:
             continue
-        row = [0.0] * n
+        budget = row()
         for i in indices:
-            row[i] = 1.0
-        budget_rows.append(row)
-        budget_rhs.append(float(account.total_value()))
+            budget[i] = 1.0
+        A_eq.append(budget)
+        b_eq.append(float(account.total_value()))
 
-    # Three rows: aggregate U.S. stock / international stock / bond dollar targets.
-    aggregate_rows = [
-        [_fund_type_coefficient(slot, fund_type) for slot in slots] for fund_type in _TARGET_FUND_TYPES
-    ]
-    aggregate_rhs = [float(dollar_targets[_TARGET_KEYS[ft]]) for ft in _TARGET_FUND_TYPES]
+    # --- inequalities shared by every phase ------------------------------
+    A_ub, b_ub = [], []
 
-    _check_capacity_feasible(accounts, slots, dollar_targets)
+    # Each asset class hits the total _resolve_allocation settled on. An
+    # equality, not a pair of inequalities meeting in the middle: the two
+    # describe the same set, but not to the solver, which is free to land a
+    # fraction of a cent inside a matched pair -- and with several phases of
+    # carried-forward objective slack above them, that fraction survives to
+    # the final rounding as an exact $40,000.00 turned into "$39,999.99".
+    for fund_type in _TARGET_FUND_TYPES:
+        aggregate = row()
+        for i, slot in enumerate(slots):
+            aggregate[i] = _fund_type_coefficient(slot, fund_type)
+        A_eq.append(aggregate)
+        b_eq.append(float(resolved[_TARGET_KEYS[fund_type]]))
 
-    A_eq = budget_rows + aggregate_rows
-    b_eq = budget_rhs + aggregate_rhs
-
-    # --- phase 1: minimize $ of bonds left in taxable accounts -----------
-    c1 = [
-        _fund_type_coefficient(slot, FundType.US_BOND)
-        if accounts[slot.account_index].tax_treatment == TaxTreatment.TAXABLE
-        else 0.0
-        for slot in slots
-    ]
-    phase1 = _solve(c1, A_eq, b_eq, None, None, bounds, "phase 1: minimizing taxable bonds")
-
-    # --- phases 2 & 3 extend the variable vector with y_i = |x_i - current_i| ---
-    # Standard LP linearization of absolute value: minimizing y_i subject to
-    # y_i >= x_i - current_i and y_i >= current_i - x_i forces y_i to exactly
-    # |x_i - current_i| at the optimum (since the objective always wants y_i
-    # as small as the constraints allow).
-    def pad(row):
-        return list(row) + [0.0] * n
-
-    A_eq2 = [pad(row) for row in A_eq]
-    b_eq2 = list(b_eq)
-    bounds2 = bounds + [(0.0, None)] * n
-
-    A_ub2, b_ub2 = [], []
+    # Standard LP linearization of absolute value: y_i >= x_i - current_i and
+    # y_i >= current_i - x_i force y_i to exactly |x_i - current_i| at the
+    # optimum of any objective that wants y_i small.
     for i in range(n):
-        row = [0.0] * (2 * n)
-        row[i], row[n + i] = 1.0, -1.0
-        A_ub2.append(row)  # x_i - y_i <= current_i
-        b_ub2.append(current[i])
+        rising = row()
+        rising[i], rising[n + i] = 1.0, -1.0
+        A_ub.append(rising)  # x_i - y_i <= current_i
+        b_ub.append(current[i])
 
-        row = [0.0] * (2 * n)
-        row[i], row[n + i] = -1.0, -1.0
-        A_ub2.append(row)  # -x_i - y_i <= -current_i
-        b_ub2.append(-current[i])
+        falling = row()
+        falling[i], falling[n + i] = -1.0, -1.0
+        A_ub.append(falling)  # -x_i - y_i <= -current_i
+        b_ub.append(-current[i])
 
-    # Carry phase 1's optimum forward: don't allow taxable bonds to regress.
-    A_ub2.append(pad(c1))
-    b_ub2.append(phase1.fun + _OBJECTIVE_SLACK)
+    # Half of the same trick, for the wash-sale variables: only w_j >= x_i -
+    # current_i is stated, so w_j tracks dollars bought and a slot moving the
+    # other way contributes nothing to phase 3.
+    for j, purchase in enumerate(wash_variables):
+        i = purchase.slot_index
+        bought = row()
+        bought[i], bought[2 * n + j] = 1.0, -1.0
+        A_ub.append(bought)  # x_i - w_j <= current_i
+        b_ub.append(current[i])
 
-    taxable_mask = [accounts[s.account_index].tax_treatment == TaxTreatment.TAXABLE for s in slots]
+    # --- objectives, in priority order -----------------------------------
+    taxable = [accounts[s.account_index].tax_treatment == TaxTreatment.TAXABLE for s in slots]
+    tax_free = [accounts[s.account_index].tax_treatment == TaxTreatment.TAX_FREE for s in slots]
 
-    # --- phase 2: minimize $ trade volume within taxable accounts --------
-    c2 = [0.0] * n + [1.0 if taxable else 0.0 for taxable in taxable_mask]
-    phase2 = _solve(
-        c2, A_eq2, b_eq2, A_ub2, b_ub2, bounds2, "phase 2: minimizing taxable trade volume"
-    )
+    def over_slots(weights: list[float]) -> list[float]:
+        return weights + [0.0] * (n + k)
 
-    A_ub3 = A_ub2 + [c2]
-    b_ub3 = b_ub2 + [phase2.fun + _OBJECTIVE_SLACK]
+    phases = [
+        (
+            over_slots(
+                [
+                    _fund_type_coefficient(slot, FundType.US_BOND) if is_taxable else 0.0
+                    for slot, is_taxable in zip(slots, taxable)
+                ]
+            ),
+            "moving bonds out of your taxable accounts",
+        ),
+        (
+            [0.0] * n + [1.0 if is_taxable else 0.0 for is_taxable in taxable] + [0.0] * k,
+            "holding down the amount sold in your taxable accounts",
+        ),
+        (
+            [0.0] * (2 * n) + [1.0] * k,
+            "steering clear of a wash sale",
+        ),
+        (
+            over_slots(
+                [
+                    _fund_type_coefficient(slot, FundType.US_BOND) if is_tax_free else 0.0
+                    for slot, is_tax_free in zip(slots, tax_free)
+                ]
+            ),
+            "holding your bonds in tax-deferred rather than tax-free accounts",
+        ),
+        (
+            over_slots(
+                [
+                    1.0
+                    if slot.fund_type == FundType.INTERNATIONAL_STOCK and not is_taxable
+                    else 0.0
+                    for slot, is_taxable in zip(slots, taxable)
+                ]
+            ),
+            "holding your international stock in taxable accounts",
+        ),
+        (
+            [0.0] * n + [1.0] * n + [0.0] * k,
+            "keeping the total amount traded down",
+        ),
+    ]
 
-    # --- phase 3: prefer the international fund in taxable accounts ------
-    # Stated as "minimize international held in tax-advantaged accounts",
-    # which is the same thing as maximizing it in taxable (the aggregate
-    # international equality fixes the total), but phrased as a minimization
-    # so it carries forward as a "<=" bound like every other phase.
-    c3 = [
-        1.0
-        if slot.fund_type == FundType.INTERNATIONAL_STOCK
-        and accounts[slot.account_index].tax_treatment != TaxTreatment.TAXABLE
-        else 0.0
-        for slot in slots
-    ] + [0.0] * n
-    phase3 = _solve(
-        c3, A_eq2, b_eq2, A_ub3, b_ub3, bounds2, "phase 3: placing international in taxable"
-    )
+    solution = None
+    for objective, context in phases:
+        # An objective with no nonzero coefficient has nothing to say about
+        # this portfolio -- no taxable accounts, no wash-sale exposure, no
+        # Roth. Solving it would only re-find a feasible point, and the bound
+        # it carried forward would be vacuous. Phase 6 always has something
+        # to minimize, so `solution` is never left unset.
+        if not any(objective):
+            continue
+        solution = _solve(objective, A_eq, b_eq, A_ub, b_ub, bounds, context)
+        A_ub.append(objective)
+        b_ub.append(solution.fun + _OBJECTIVE_SLACK)
 
-    A_ub4 = A_ub3 + [c3]
-    b_ub4 = b_ub3 + [phase3.fun + _OBJECTIVE_SLACK]
-
-    # --- phase 4: tie-break by minimizing total trade volume everywhere --
-    c4 = [0.0] * n + [1.0] * n
-    phase4 = _solve(
-        c4, A_eq2, b_eq2, A_ub4, b_ub4, bounds2, "phase 4: minimizing total trade volume"
-    )
-
-    raw_values = [_to_decimal(v) for v in phase4.x[:n]]
+    raw_values = [_to_decimal(v) for v in solution.x[:n]]
     new_values = [Decimal(0)] * n
+    dropped_trades = 0
     for account_index, account in enumerate(accounts):
         indices = [i for i, s in enumerate(slots) if s.account_index == account_index]
         if not indices:
             continue
-        for i, value in _finalize_account_values(account, indices, slots, raw_values).items():
+        finalized, dropped = _finalize_account_values(account, indices, slots, raw_values)
+        dropped_trades += dropped
+        for i, value in finalized.items():
             new_values[i] = value
 
     # _finalize_account_values already snapped every sub-minimum move back to
@@ -451,7 +810,13 @@ def compute_trades(accounts: list[Account], target: TargetAllocation) -> Rebalan
             f"${taxable_bond_dollars:,} in bonds will remain in taxable accounts. Either "
             "your tax-advantaged accounts have no room left for the full bond target, or "
             "those bonds sit inside a target-date fund that can only be held whole. This "
-            "is the smallest amount reachable."
+            "is the smallest amount reachable given the accounts you entered."
         )
+    warnings.extend(_wash_sale_warnings(accounts, trades))
 
-    return RebalanceResult(trades=trades, warnings=warnings, taxable_bond_dollars=taxable_bond_dollars)
+    return RebalanceResult(
+        trades=trades,
+        warnings=warnings,
+        taxable_bond_dollars=taxable_bond_dollars,
+        dropped_trades=dropped_trades,
+    )
