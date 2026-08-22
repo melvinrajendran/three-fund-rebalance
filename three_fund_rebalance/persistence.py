@@ -38,6 +38,7 @@ class PersistedConfig:
     vt_us_pct: Decimal | None = None
     vt_as_of: str | None = None
     rebalance_band_pct: Decimal | None = None
+    rebalance_relative_band_pct: Decimal | None = None
     # Set whenever accounts (including values) are saved; shown to the
     # user so they know how stale a pre-filled value might be.
     values_as_of: str | None = None
@@ -132,6 +133,7 @@ def config_to_dict(config: PersistedConfig) -> dict:
         "vt_us_pct": _decimal_to_json(config.vt_us_pct),
         "vt_as_of": config.vt_as_of,
         "rebalance_band_pct": _decimal_to_json(config.rebalance_band_pct),
+        "rebalance_relative_band_pct": _decimal_to_json(config.rebalance_relative_band_pct),
         "values_as_of": config.values_as_of,
         "accounts": [_account_to_dict(a) for a in config.accounts],
     }
@@ -205,6 +207,13 @@ def _upgrade_v1(data: dict) -> dict:
 #: The v2 spelling for "sheltered, but we didn't record which kind".
 _V2_TAX_ADVANTAGED = "tax_advantaged"
 
+#: Account types v3 spelled differently. _upgrade_v2 looks account types up
+#: in the *current* ACCOUNT_TYPE_TAX_TREATMENT, which no longer has the v3
+#: spellings -- safe only because that lookup runs solely for accounts marked
+#: `tax_advantaged`, and nothing renamed here is a shelter. A future rename
+#: that touches one will need _upgrade_v2 to carry its own frozen v2-era map.
+_V3_ACCOUNT_TYPES = {"Taxable Brokerage": "Brokerage"}
+
 
 def _upgrade_v2(data: dict) -> dict:
     """Translate a schema v2 payload into v3's spelling. Same contract as
@@ -239,7 +248,36 @@ def _upgrade_v2(data: dict) -> dict:
             )
         accounts.append(account)
     upgraded["accounts"] = accounts
-    upgraded["schema_version"] = SCHEMA_VERSION
+    upgraded["schema_version"] = 3  # literal, not SCHEMA_VERSION -- see _upgrade_v1
+    return upgraded
+
+
+def _upgrade_v3(data: dict) -> dict:
+    """Translate a schema v3 payload into v4's spelling. Same contract as the
+    hops above: translate without validating, and copy at every level.
+
+    v3 called the taxable account type "Taxable Brokerage". Every other entry
+    on the list is the account's actual name -- Roth IRA, 403(b), HSA --
+    while "Taxable" is a descriptor, and Title-Casing it put the one word the
+    report otherwise always writes lowercase (beside "tax-free" and
+    "tax-deferred") into a proper noun. v4 stores "Brokerage" and lets the
+    account heading state ", taxable" the way it does for every other type.
+
+    An account type this doesn't recognize is left exactly as it is -- "Other"
+    and anything hand-edited included.
+    """
+    upgraded = dict(data)
+    accounts = []
+    for account in upgraded.get("accounts") or []:
+        if not isinstance(account, dict):
+            accounts.append(account)
+            continue
+        account = dict(account)
+        if account.get("account_type") in _V3_ACCOUNT_TYPES:
+            account["account_type"] = _V3_ACCOUNT_TYPES[account["account_type"]]
+        accounts.append(account)
+    upgraded["accounts"] = accounts
+    upgraded["schema_version"] = 4  # literal, not SCHEMA_VERSION -- see _upgrade_v1
     return upgraded
 
 
@@ -255,6 +293,9 @@ def config_from_dict(data: dict) -> PersistedConfig:
         if schema_version == 2:
             data = _upgrade_v2(data)
             schema_version = data["schema_version"]
+        if schema_version == 3:
+            data = _upgrade_v3(data)
+            schema_version = data["schema_version"]
         if schema_version != SCHEMA_VERSION:
             raise PersistenceError(
                 f"Unsupported config schema_version {schema_version!r} (this version of "
@@ -268,6 +309,14 @@ def config_from_dict(data: dict) -> PersistedConfig:
             vt_as_of=data.get("vt_as_of"),
             rebalance_band_pct=_decimal_from_json(
                 data.get("rebalance_band_pct"), field_name="rebalance_band_pct"
+            ),
+            # No schema hop for this one: it translates nothing. A v3 file
+            # written before the relative band existed simply lacks the key,
+            # which means "never chosen" exactly as an absent
+            # rebalance_band_pct does, and step 2 offers the default.
+            rebalance_relative_band_pct=_decimal_from_json(
+                data.get("rebalance_relative_band_pct"),
+                field_name="rebalance_relative_band_pct",
             ),
             values_as_of=data.get("values_as_of"),
             accounts=[_account_from_dict(a) for a in data.get("accounts", [])],

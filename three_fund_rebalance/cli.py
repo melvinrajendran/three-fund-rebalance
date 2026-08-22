@@ -32,15 +32,17 @@ from three_fund_rebalance.persistence import (
     save_config,
 )
 from three_fund_rebalance.prompts import (
+    BAND_EXPLANATION,
     Prompter,
     prompt_accounts,
     prompt_rebalance_band,
+    prompt_relative_rebalance_band,
     prompt_stock_bond_allocation,
     prompt_yes_no,
     resolve_vt_allocation,
 )
 from three_fund_rebalance.rebalance import RebalanceError, compute_trades
-from three_fund_rebalance.report import RebalanceInputs, format_report
+from three_fund_rebalance.report import DISCLAIMER, RebalanceInputs, format_report
 from three_fund_rebalance.vt_allocation import VTAllocationResult
 
 #: How many numbered steps the user is asked to walk through. The report
@@ -59,6 +61,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="three-fund-rebalance",
         description="Calculate the trades needed to rebalance a three-fund portfolio across your accounts.",
+        # Someone who runs --help and stops there never sees a report, so the
+        # report's own disclaimer goes here -- the same string, not a second
+        # wording of it, so the two cannot drift apart. argparse reflows it,
+        # so it has to read as prose rather than rely on a line break.
+        epilog=DISCLAIMER,
     )
     parser.add_argument(
         "--version",
@@ -75,25 +82,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--config",
         type=Path,
         default=DEFAULT_CONFIG_PATH,
-        help="Where your saved portfolio is read from and written to (default: %(default)s)",
+        help="Portfolio file to read and write (default: %(default)s)",
     )
     parser.add_argument(
-        "--fresh", action="store_true", help="Ignore any existing config file and start blank"
+        "--fresh", action="store_true", help="Ignore your saved portfolio and start blank"
     )
     parser.add_argument(
-        "--no-save", action="store_true", help="Don't persist changes to the config file at the end"
+        "--no-save", action="store_true", help="Don't offer to save this run's answers"
     )
     parser.add_argument(
         "--offline",
         action="store_true",
-        help="Skip the live VT fetch; use the cached or manually entered value instead",
+        help="Skip the live VT fetch; use the cached or a manually entered value instead",
     )
     parser.add_argument(
         "--vt-us-pct",
         type=_decimal_arg,
         default=None,
         metavar="PCT",
-        help="Manually set VT's U.S. stock allocation %% and skip looking it up or prompting for it",
+        help="Set VT's U.S. stock allocation %% directly, skipping the lookup and the prompt",
     )
     return parser.parse_args(argv)
 
@@ -145,7 +152,13 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
     prompter.say("\n" + format_section_header(2, _INPUT_STEPS, "When to rebalance"))
 
     prompter.say("\n" + format_subheading("Rebalancing band"))
+    # The one place the flow explains before it asks; see BAND_EXPLANATION.
+    prompter.say_wrapped(BAND_EXPLANATION)
+    prompter.say("")
     band_pct = prompt_rebalance_band(prompter, default=config.rebalance_band_pct)
+    relative_band_pct = prompt_relative_rebalance_band(
+        prompter, default=config.rebalance_relative_band_pct
+    )
 
     prompter.say("\n" + format_section_header(3, _INPUT_STEPS, "Account holdings"))
     accounts = prompt_accounts(prompter, config.accounts)
@@ -154,7 +167,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
         return 0
 
     try:
-        result = compute_trades(accounts, target, band_pct)
+        result = compute_trades(accounts, target, band_pct, relative_band_pct)
     except RebalanceError as exc:
         prompter.say_wrapped(f"\nCould not compute a rebalance: {exc}")
         return 1
@@ -165,6 +178,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
         vt=vt_result,
         target=target,
         band_pct=band_pct,
+        relative_band_pct=relative_band_pct,
         accounts=accounts,
         values_as_of=config.values_as_of,
     )
@@ -183,6 +197,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
                 vt_us_pct=vt_result.us_pct,
                 vt_as_of=vt_result.as_of,
                 rebalance_band_pct=band_pct,
+                rebalance_relative_band_pct=relative_band_pct,
                 values_as_of=datetime.now(tz=timezone.utc).date().isoformat(),
                 accounts=accounts,
             )

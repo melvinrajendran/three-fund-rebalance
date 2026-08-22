@@ -144,7 +144,7 @@ class TestValidation:
     def test_cash_with_no_fund_holdings_rejected(self):
         accounts = [
             account(
-                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [holding(FundType.CASH, "", 500)],
             )
         ]
@@ -155,7 +155,7 @@ class TestValidation:
         # No account declares a bond-capable slot anywhere.
         accounts = [
             account(
-                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [holding(FundType.US_STOCK, "VTI", 10_000)],
             )
         ]
@@ -176,7 +176,7 @@ class TestValidation:
                 [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
             ),
             account(
-                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [
                     holding(FundType.US_STOCK, "VTI", 10_000),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
@@ -198,7 +198,7 @@ class TestBondsPreferTaxAdvantaged:
             [holding(FundType.US_STOCK, "VTI", 3000), holding(FundType.US_BOND, "BND", 0)],
         )
         taxable = account(
-            "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+            "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
             [holding(FundType.US_STOCK, "VTI", 5000), holding(FundType.US_BOND, "BND", 0)],
         )
         result = compute_trades([tax_adv_1, tax_adv_2, taxable], target(60, 0, 40))
@@ -225,7 +225,7 @@ class TestBondsPreferTaxAdvantaged:
             [holding(FundType.US_STOCK, "VTI", 100), holding(FundType.US_BOND, "BND", 0)],
         )
         big_taxable = account(
-            "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+            "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
             [holding(FundType.US_STOCK, "VTI", 9900), holding(FundType.US_BOND, "BND", 0)],
         )
         # U.S. stock 60 / bond 40 on a $10,000 portfolio -> $4,000 bonds needed,
@@ -264,7 +264,7 @@ class TestInternationalPlacement:
         phase 3 can produce -- but it pins the outcome against a future
         re-ranking that would leave the choice to the solver again."""
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 0),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                 holding(FundType.CASH, "", 10_000),
@@ -288,7 +288,7 @@ class TestInternationalPlacement:
         and the two extra trades happen inside a Roth where they cost nothing,
         so the international moves to where its foreign tax is claimable."""
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 0),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                 holding(FundType.CASH, "", 10_000),
@@ -310,7 +310,7 @@ class TestInternationalPlacement:
         3, so the whole purchase happens in the Roth and taxable is untouched
         -- a couple of basis points of credit is not worth a realized gain."""
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 10_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
             ]),
@@ -329,7 +329,7 @@ class TestInternationalPlacement:
         U.S. stock from taxable -- so satisfying phase 1 fully still leaves
         phase 3 fully satisfied."""
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 0),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                 holding(FundType.US_BOND, "BND", 0),
@@ -356,7 +356,7 @@ class TestInternationalPlacement:
         The taxable account has an empty VXUS slot it could buy into, but the
         aggregate international target is already met, so nothing moves."""
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 10_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
             ]),
@@ -396,7 +396,7 @@ class TestTargetDateFunds:
                 [holding(FundType.TARGET_DATE, "TargetFund", 5000, allocation=target_date_alloc)],
             ),
             account(
-                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [
                     holding(FundType.US_STOCK, "VTI", 5000),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
@@ -424,7 +424,7 @@ class TestTargetDateFunds:
         )
         accounts = [
             account(
-                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [holding(FundType.TARGET_DATE, "Target 2050", 5000, allocation=target_date_alloc)],
             ),
             account(
@@ -447,7 +447,7 @@ class TestTargetDateFunds:
         )
         accounts = [
             account(
-                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
             )
         ]
@@ -463,7 +463,7 @@ class TestCashInvestment:
     def test_available_cash_gets_fully_invested(self):
         accounts = [
             account(
-                "Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [
                     holding(FundType.US_STOCK, "VTI", 0),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
@@ -519,7 +519,7 @@ class TestPerAccountConservation:
                 ],
             ),
             account(
-                "Taxable Brokerage", "Fidelity Brokerage", TaxTreatment.TAXABLE,
+                "Brokerage", "Fidelity Brokerage", TaxTreatment.TAXABLE,
                 [
                     holding(FundType.US_STOCK, "VTI", 25_000),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 5_000),
@@ -619,7 +619,7 @@ class TestShelterTypeBondLocation:
                 holding(FundType.US_STOCK, "VTI", 50_000),
                 holding(FundType.US_BOND, "BND", 0),
             ]),
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 40_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 60_000),
             ]),
@@ -647,7 +647,7 @@ class TestShelterTypeBondLocation:
             account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
                 holding(FundType.US_BOND, "BND", 20_000),
             ]),
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 30_000),
             ]),
         ]
@@ -666,7 +666,7 @@ class TestShelterTypeBondLocation:
             account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
                 holding(FundType.US_STOCK, "VTI", 20_000),
             ]),
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 60_000),
             ]),
         ]
@@ -685,7 +685,7 @@ class TestWashSaleAvoidance:
 
     def test_warns_when_a_taxable_sale_and_a_sheltered_purchase_cannot_be_separated(self):
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 90_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
             ]),
@@ -704,10 +704,20 @@ class TestWashSaleAvoidance:
         assert "VTI" in warning
         assert "wash sale" in warning
         assert "$10,000.00" in warning
+        # The rule, its window and its standard. Without them "matched by
+        # name" is a caveat about nothing in particular, and the reader has
+        # no way to tell whether their own second fund is far enough away.
+        assert "section 1091" in warning
+        assert "substantially identical" in warning
+        assert "within 30 days either side of the sale" in warning
+        assert "in any account you control" in warning
+        # Conditional and attributed, never "this is a wash sale".
+        assert "this may be a wash sale" in warning
+        assert "the IRS has taken the position (Rev. Rul. 2008-5)" in warning
 
     def test_no_warning_when_the_taxable_sale_is_of_a_different_fund(self):
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 60_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 40_000),
             ]),
@@ -723,10 +733,10 @@ class TestWashSaleAvoidance:
         """Two taxable accounts are not the sheltered leg the rule is about --
         an ordinary wash sale between them at least preserves the basis."""
         accounts = [
-            account("Taxable Brokerage", "One", TaxTreatment.TAXABLE, [
+            account("Brokerage", "One", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 50_000),
             ]),
-            account("Taxable Brokerage", "Two", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Two", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 20_000),
                 holding(FundType.US_BOND, "BND", 30_000),
             ]),
@@ -736,7 +746,7 @@ class TestWashSaleAvoidance:
 
     def test_fund_names_are_matched_ignoring_case_and_surrounding_space(self):
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, " vti ", 90_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
             ]),
@@ -753,7 +763,7 @@ class TestWashSaleAvoidance:
         wash sale -- and must not stand in the way of the international fund
         being moved out of tax-advantaged space, which is phase 5's job."""
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 0),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                 holding(FundType.CASH, "", 10_000),
@@ -769,13 +779,14 @@ class TestWashSaleAvoidance:
 
 
 class TestRebalancingBand:
-    """The three asset-class targets are ranges, not points."""
+    """The band decides *whether* to rebalance. Once it says yes, the target
+    is a point like any other."""
 
     def _drifted(self):
         # 51.67/31.67/16.67 against a 49.6/30.4/20 target: at most 3.3 points
         # out, which a 5-point band tolerates and an exact target does not.
         return [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 58_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 38_000),
             ]),
@@ -799,7 +810,7 @@ class TestRebalancingBand:
         whatever the band says -- new money is the cheapest way to rebalance
         and the band must not suppress it."""
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 50_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 30_000),
                 holding(FundType.CASH, "", 10_000),
@@ -813,6 +824,82 @@ class TestRebalancingBand:
         sold = sum(t.amount for t in result.trades if t.action == "sell")
         assert bought - sold == Decimal("10000.00")
 
+    def test_an_unreachable_target_stops_at_what_the_accounts_can_hold(self):
+        """Not at the band edge. The 401(k) holds one fund, pinning U.S.
+        stock at 60% against a 50% target, so bonds cannot reach 25% however
+        the rest is arranged -- but they get to 15%, which is where the
+        accounts run out, and nowhere near the 5% their 20-point band would
+        have allowed."""
+        accounts = [
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_STOCK, "VTI", 60_000),
+            ]),
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 38_000),
+                holding(FundType.US_BOND, "BND", 2_000),  # below its 5% floor
+            ]),
+        ]
+        result = compute_trades(accounts, target(50, 25, 25), Decimal(20))
+        assert trades_by_key(result)[("Brokerage", "BND")] == ("buy", Decimal("13000.00"))
+
+    def test_cash_alone_does_not_trigger_a_rebalance(self):
+        """Cash is handled first and the band is then asked about what it
+        leaves behind -- not about the portfolio still holding it. Every
+        class here is inside its band, so the $100 goes to work in the
+        laggard and nothing else moves. Asking the band about the cash
+        instead meant a dividend swept up overnight rebalanced a portfolio
+        that had nothing wrong with it, taxable sales included."""
+        accounts = [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 52_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 29_000),
+                holding(FundType.CASH, "", 100),
+            ]),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_BOND, "BND", 17_000),
+                holding(FundType.US_STOCK, "VTI", 1_900),
+            ]),
+        ]
+        result = compute_trades(accounts, target(50, 30, 20), Decimal(5))
+        assert not [t for t in result.trades if t.account_name == "Brokerage" and t.action == "sell"]
+        # The $100 reaches bonds, the class furthest below target, by way of
+        # a free swap in the 401(k) -- the taxable account has no bond fund.
+        assert trades_by_key(result) == {
+            ("Brokerage", "VTI"): ("buy", Decimal("100.00")),
+            ("401k", "VTI"): ("sell", Decimal("100.00")),
+            ("401k", "BND"): ("buy", Decimal("100.00")),
+        }
+
+    def test_a_relative_band_catches_a_small_target_the_absolute_one_cannot(self):
+        """5 points below a 5% bond target is zero bonds, so the absolute
+        rule alone will watch a sleeve fall to a fifth of its target and call
+        it fine. A quarter of the target puts the floor at 3.75%."""
+        accounts = [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "FZROX", 58_800),
+                holding(FundType.INTERNATIONAL_STOCK, "FZILX", 40_000),
+                holding(FundType.US_BOND, "FXNAX", 1_200),
+            ]),
+        ]
+        goal = target("58.8", "36.2", 5)
+        assert compute_trades(accounts, goal, Decimal(5)).trades == []
+        result = compute_trades(accounts, goal, Decimal(5), Decimal(25))
+        assert trades_by_key(result)[("Roth", "FXNAX")] == ("buy", Decimal("3800.00"))
+
+    def test_a_relative_band_does_not_tighten_a_large_target(self):
+        """A quarter of a 58.8% target is 14.7 points, which would let the
+        dominant class drift three times as far as the absolute rule allows.
+        The tighter of the two binds, so nothing changes here."""
+        accounts = [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "FZROX", 62_000),  # +3.2 points
+                holding(FundType.INTERNATIONAL_STOCK, "FZILX", 33_000),
+                holding(FundType.US_BOND, "FXNAX", 5_000),
+            ]),
+        ]
+        goal = target("58.8", "36.2", 5)
+        assert compute_trades(accounts, goal, Decimal(5), Decimal(25)).trades == []
+
     def test_a_band_can_make_an_otherwise_unreachable_target_reachable(self):
         """An account holding a single fund pins that fund's share of the
         portfolio: $60,000 of a $100,000 portfolio is 60% U.S. stock and
@@ -822,7 +909,7 @@ class TestRebalancingBand:
             account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
                 holding(FundType.US_STOCK, "VTI", 60_000),
             ]),
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 20_000),
                 holding(FundType.US_BOND, "BND", 20_000),
             ]),
@@ -834,7 +921,7 @@ class TestRebalancingBand:
 
     def test_the_band_edge_is_named_when_it_is_what_makes_a_target_unreachable(self):
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", 100_000),
             ]),
         ]
@@ -853,7 +940,7 @@ class TestCentResidualDistribution:
         most scenarios, so nothing else in this file exercises the path.
         """
         accounts = [
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", "3333.33"),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", "3333.33"),
                 holding(FundType.US_BOND, "BND", "3333.35"),
@@ -901,7 +988,7 @@ class TestAllocationIsSettledBeforeLocation:
                 holding(FundType.INTERNATIONAL_STOCK, "FZILX", "15491.08"),
                 holding(FundType.US_BOND, "FXNAX", "400.67"),
             ]),
-            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", "6663.90"),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", "4895.78"),
             ]),
@@ -958,12 +1045,10 @@ class TestResolveAllocation:
         )
         assert resolved == current
 
-    def test_an_allocation_outside_the_band_moves_only_as_far_as_the_edge(self):
-        """Not all the way back to target: the band edge is the point at
-        which there is no longer anything to correct. Only U.S. stock is
-        determined here -- once it stops at its ceiling the remaining
-        $45,000 can be split anywhere the two other bands allow, and every
-        such split is equally far from target."""
+    def test_an_allocation_outside_the_band_goes_all_the_way_back_to_target(self):
+        """The band decides *whether* to rebalance, not how far. Stopping at
+        the edge would leave the portfolio on the boundary, one small drift
+        from tripping the band again."""
         targets, bounds = self._bounds(band=5)
         current = {
             "us_stock": Decimal(65_000),
@@ -973,12 +1058,84 @@ class TestResolveAllocation:
         resolved = _resolve_allocation(
             current, targets, bounds, self._unconstrained_reach(), Decimal(100_000)
         )
-        # To the cent: the two objectives are carried forward with the
-        # solver's usual slack, which is deliberately finer than a cent but
-        # not exact. Everything downstream rounds to cents anyway.
-        assert to_cents(resolved["us_stock"]) == Decimal("55000.00")  # ceiling, not 50,000
-        for key, (low, high) in bounds.items():
-            assert low <= resolved[key] <= high
+        assert {key: to_cents(value) for key, value in resolved.items()} == {
+            "us_stock": Decimal("50000.00"),  # target, not the 55,000 ceiling
+            "international_stock": Decimal("30000.00"),
+            "bond": Decimal("20000.00"),
+        }
+
+    def test_one_class_out_of_band_rebalances_all_three(self):
+        """The trigger is per class; the correction is not. U.S. stock is the
+        only class outside its band here, and international -- comfortably
+        inside its own -- is returned to target along with it."""
+        targets, bounds = self._bounds(band=5)
+        current = {
+            "us_stock": Decimal(56_000),  # ceiling is 55,000
+            "international_stock": Decimal(29_000),  # inside
+            "bond": Decimal(15_000),  # exactly on its floor, so inside
+        }
+        resolved = _resolve_allocation(
+            current, targets, bounds, self._unconstrained_reach(), Decimal(100_000)
+        )
+        assert to_cents(resolved["international_stock"]) == Decimal("30000.00")
+        assert to_cents(resolved["bond"]) == Decimal("20000.00")
+
+    def test_cash_that_brings_every_class_into_band_is_invested_without_a_sale(self):
+        """Cash is spent before anything is sold, and it is enough on its own
+        here: bonds start below their floor, and the $15,000 lifts all three
+        classes to target without selling a dollar of anything."""
+        targets, bounds = self._bounds(band=5)
+        current = {
+            "us_stock": Decimal(45_000),
+            "international_stock": Decimal(27_000),
+            "bond": Decimal(13_000),  # floor is 15,000
+        }
+        resolved = _resolve_allocation(
+            current, targets, bounds, self._unconstrained_reach(), Decimal(100_000)
+        )
+        assert all(resolved[key] >= current[key] for key in current)
+        assert to_cents(resolved["bond"]) == Decimal("20000.00")
+
+    def test_cash_that_cannot_settle_the_band_falls_through_to_a_rebalance(self):
+        """Cash only ever adds to a class, so it cannot pull one back under
+        its ceiling. U.S. stock is 20 points over here and the $5,000 is no
+        help, so the whole portfolio goes back to target as it would with no
+        cash at all."""
+        targets, bounds = self._bounds(band=5)
+        current = {
+            "us_stock": Decimal(70_000),  # ceiling is 55,000
+            "international_stock": Decimal(20_000),
+            "bond": Decimal(5_000),
+        }  # $5,000 short of the $100,000 total: that is the cash
+        resolved = _resolve_allocation(
+            current, targets, bounds, self._unconstrained_reach(), Decimal(100_000)
+        )
+        assert {key: to_cents(value) for key, value in resolved.items()} == {
+            "us_stock": Decimal("50000.00"),
+            "international_stock": Decimal("30000.00"),
+            "bond": Decimal("20000.00"),
+        }
+
+    def test_an_unreachable_target_settles_nearest_to_where_the_portfolio_sits(self):
+        """An account holding a single fund pins that fund's share of the
+        portfolio, so the closest reachable points to target are a whole face
+        rather than a vertex -- with U.S. stock stuck at 60%, every split of
+        the remaining $40,000 that keeps both classes inside their bands is
+        exactly as far from target as every other. Moving least breaks the
+        tie; without that the split is whichever vertex HiGHS returns."""
+        targets, bounds = self._bounds(band=10)
+        reach = dict(self._unconstrained_reach())
+        reach[FundType.US_STOCK] = (60_000.0, 60_000.0)
+        current = {
+            "us_stock": Decimal(60_000),
+            "international_stock": Decimal(38_000),
+            "bond": Decimal(2_000),  # below its floor of 10,000
+        }
+        resolved = _resolve_allocation(current, targets, bounds, reach, Decimal(100_000))
+        assert to_cents(resolved["us_stock"]) == Decimal("60000.00")
+        # 30,000/10,000 moves $16,000; every other tied split moves more.
+        assert to_cents(resolved["international_stock"]) == Decimal("30000.00")
+        assert to_cents(resolved["bond"]) == Decimal("10000.00")
 
     def test_cash_is_steered_at_whatever_is_furthest_below_target(self):
         """Investing new money is the one way of rebalancing that costs
