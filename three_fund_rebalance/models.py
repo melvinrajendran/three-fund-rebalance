@@ -56,12 +56,26 @@ TRADEABLE_FUND_TYPES = (*INDIVIDUAL_FUND_TYPES, FundType.TARGET_DATE)
 
 
 class TaxTreatment(Enum):
-    """Whether an account shelters gains/interest from current taxation.
-    Roth/Traditional IRA & 401(k), HSA, etc. are TAX_ADVANTAGED; a regular
-    brokerage account is TAXABLE."""
+    """How an account is taxed. Two shelters, not one: they are equally
+    exempt from tax *today*, but they differ in what a dollar of growth
+    inside them is worth, which is what decides where bonds belong.
 
-    TAX_ADVANTAGED = "tax_advantaged"
+    TAX_DEFERRED (traditional 401(k)/IRA, 403(b), 457(b), SEP, SIMPLE) is
+    taxed as ordinary income on the way out, so growth there is shared with
+    the government -- the natural home for the low-return asset class.
+    TAX_FREE (Roth IRA, Roth 401(k), HSA) never taxes qualified withdrawals,
+    so it is the most valuable space in the portfolio and should hold the
+    highest expected return, i.e. stocks. TAXABLE is a regular brokerage
+    account.
+
+    Anything that is not TAXABLE is a shelter; `Account.is_tax_advantaged`
+    is the test for that, and the solver's taxable-vs-sheltered objectives
+    are written as comparisons against TAXABLE so they read the same way.
+    """
+
     TAXABLE = "taxable"
+    TAX_DEFERRED = "tax_deferred"
+    TAX_FREE = "tax_free"
 
 
 @dataclass(frozen=True)
@@ -186,13 +200,13 @@ class Account:
         return holding.value if holding else Decimal(0)
 
     def is_tax_advantaged(self) -> bool:
-        return self.tax_treatment == TaxTreatment.TAX_ADVANTAGED
+        return self.tax_treatment != TaxTreatment.TAXABLE
 
 
 @dataclass(frozen=True)
 class TargetAllocation:
     """The whole-portfolio target mix, in percent, across the three fund
-    types. Derived from a stock and bond target plus VT's U.S. weighting --
+    types. Derived from a stock and bond target plus VT's U.S. allocation --
     see allocation.py."""
 
     us_stock_pct: Decimal
@@ -211,7 +225,7 @@ class TargetAllocation:
 
 @dataclass(frozen=True)
 class Trade:
-    """One recommended buy or sell of a specific fund within a specific
+    """One buy or sell of a specific fund within a specific
     account. `amount` is always positive; `action` says which direction."""
 
     account_name: str

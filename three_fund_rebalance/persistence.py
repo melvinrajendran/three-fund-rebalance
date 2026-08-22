@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from three_fund_rebalance.config import SCHEMA_VERSION
+from three_fund_rebalance.config import ACCOUNT_TYPE_TAX_TREATMENT, SCHEMA_VERSION
 from three_fund_rebalance.models import (
     Account,
     FundType,
@@ -37,6 +37,7 @@ class PersistedConfig:
     bond_pct: Decimal | None = None
     vt_us_pct: Decimal | None = None
     vt_as_of: str | None = None
+    rebalance_band_pct: Decimal | None = None
     # Set whenever accounts (including values) are saved; shown to the
     # user so they know how stale a pre-filled value might be.
     values_as_of: str | None = None
@@ -130,6 +131,7 @@ def config_to_dict(config: PersistedConfig) -> dict:
         "bond_pct": _decimal_to_json(config.bond_pct),
         "vt_us_pct": _decimal_to_json(config.vt_us_pct),
         "vt_as_of": config.vt_as_of,
+        "rebalance_band_pct": _decimal_to_json(config.rebalance_band_pct),
         "values_as_of": config.values_as_of,
         "accounts": [_account_to_dict(a) for a in config.accounts],
     }
@@ -161,6 +163,10 @@ def _upgrade_v1(data: dict) -> dict:
 
     Copies at every level rather than mutating: `data` is the caller's parsed
     JSON, and a failed load must not leave it half-renamed.
+
+    Stops at v2 rather than jumping to the current version: each upgrade
+    knows one hop, and config_from_dict chains them. A v1 file still carries
+    v2's single `tax_advantaged` treatment, which is _upgrade_v2's job.
     """
     upgraded = dict(data)
     upgraded["values_as_of"] = upgraded.pop("balances_as_of", None)
@@ -192,6 +198,47 @@ def _upgrade_v1(data: dict) -> dict:
         account["holdings"] = holdings
         accounts.append(account)
     upgraded["accounts"] = accounts
+    upgraded["schema_version"] = 2
+    return upgraded
+
+
+#: The v2 spelling for "sheltered, but we didn't record which kind".
+_V2_TAX_ADVANTAGED = "tax_advantaged"
+
+
+def _upgrade_v2(data: dict) -> dict:
+    """Translate a schema v2 payload into v3's spelling. Same contract as
+    _upgrade_v1: translate without validating, and copy at every level so a
+    failed load never leaves the caller's parsed JSON half-renamed.
+
+    v2 had one `tax_advantaged` treatment; v3 splits it into `tax_deferred`
+    and `tax_free`, because which one an account is decides whether bonds
+    belong there. The account's own persisted `account_type` says which for
+    everything on the known list. For anything else -- an "Other" account,
+    whose v2 answer was a yes/no that never recorded the difference -- it
+    becomes `tax_deferred`: bonds fill that space first, which is where they
+    belong, so guessing this way costs nothing if it's wrong and the user can
+    correct the account type on the next run either way.
+
+    `rebalance_band_pct` is deliberately left absent rather than defaulted
+    here. A missing value means "never chosen", and the step 2 prompt offers
+    the default; writing one in would make a guess look like the user's own
+    saved answer.
+    """
+    upgraded = dict(data)
+    accounts = []
+    for account in upgraded.get("accounts") or []:
+        if not isinstance(account, dict):
+            accounts.append(account)
+            continue
+        account = dict(account)
+        if account.get("tax_treatment") == _V2_TAX_ADVANTAGED:
+            treatment = ACCOUNT_TYPE_TAX_TREATMENT.get(account.get("account_type"))
+            account["tax_treatment"] = (
+                treatment.value if treatment is not None else TaxTreatment.TAX_DEFERRED.value
+            )
+        accounts.append(account)
+    upgraded["accounts"] = accounts
     upgraded["schema_version"] = SCHEMA_VERSION
     return upgraded
 
@@ -200,14 +247,18 @@ def config_from_dict(data: dict) -> PersistedConfig:
     """Parse a decoded config payload. Every way this can fail is reported as
     PersistenceError -- see the catch-all at the bottom for why."""
     try:
+        # One hop at a time, so a v1 file walks the same path a v2 file does.
         schema_version = data.get("schema_version")
         if schema_version == 1:
             data = _upgrade_v1(data)
             schema_version = data["schema_version"]
+        if schema_version == 2:
+            data = _upgrade_v2(data)
+            schema_version = data["schema_version"]
         if schema_version != SCHEMA_VERSION:
             raise PersistenceError(
-                f"Unsupported config schema_version {schema_version!r} "
-                f"(this version of three-fund-rebalance understands 1 and {SCHEMA_VERSION})"
+                f"Unsupported config schema_version {schema_version!r} (this version of "
+                f"three-fund-rebalance understands 1 through {SCHEMA_VERSION})"
             )
         return PersistedConfig(
             schema_version=schema_version,
@@ -215,6 +266,9 @@ def config_from_dict(data: dict) -> PersistedConfig:
             bond_pct=_decimal_from_json(data.get("bond_pct"), field_name="bond_pct"),
             vt_us_pct=_decimal_from_json(data.get("vt_us_pct"), field_name="vt_us_pct"),
             vt_as_of=data.get("vt_as_of"),
+            rebalance_band_pct=_decimal_from_json(
+                data.get("rebalance_band_pct"), field_name="rebalance_band_pct"
+            ),
             values_as_of=data.get("values_as_of"),
             accounts=[_account_from_dict(a) for a in data.get("accounts", [])],
         )
