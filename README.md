@@ -3,21 +3,27 @@
 An interactive CLI that computes the trades needed to rebalance a
 [three-fund portfolio](https://www.bogleheads.org/wiki/Three-fund_portfolio)
 (U.S. stocks / international stocks / bonds) to a target stock and bond
-allocation, across any number of investment accounts -- tax-advantaged
-(Roth/Traditional IRA, 401(k), HSA, ...) and taxable alike.
+allocation, across any number of investment accounts -- tax-deferred
+(traditional IRA, 401(k), ...), tax-free (Roth, HSA) and taxable alike.
 
 It asks for your target stock and bond allocation, derives the U.S. versus
 international stock mix from
 [VT](https://investor.vanguard.com/investment-products/etfs/profile/vt)'s
-current market-cap weighting, asks about each of your accounts and what they
-hold, and then prints the buy, sell, and exchange orders needed to reach your
-target -- favoring tax-advantaged accounts for both bonds and rebalancing
-trades, to minimize tax drag.
+current market-cap weighting, asks how far you'll let an asset class drift
+before correcting it, asks about each of your accounts and what they hold, and
+then prints the trades needed to reach your target -- buys, sells, exchanges --
+keeping bonds out of taxable accounts, keeping the rebalancing trades
+themselves inside tax-advantaged ones, and preferring tax-deferred space over
+Roth space for the bonds, to minimize tax drag.
 
 ## Disclaimer
 
+Not affiliated with, endorsed by, or sponsored by Vanguard, Fidelity, or any
+broker or fund company. Fund and product names are used only to identify what
+you hold.
+
 **This is not financial, investment, or tax advice.** It is a calculator that
-arithmetic-checks a portfolio against a target you choose. Review every trade
+arithmetic-checks a portfolio against a target you choose. Review every order
 it suggests before placing it, and consult a qualified professional if you
 want advice.
 
@@ -27,15 +33,21 @@ Some limits worth knowing about specifically:
   rebalance minimizes taxable trade *volume* as a proxy for tax cost -- a
   heuristic, not a gains calculation. Selling in a taxable account may realize
   a tax liability this tool never sees.
+- The wash-sale check is a warning, not a guarantee. It matches funds by the
+  name you type, so two share classes of the same index (VTI and VTSAX) are
+  not recognized as the same security even though the IRS may treat them as
+  substantially identical. And because it cannot see your cost basis, it
+  cannot tell whether a sale is at a loss -- which is the only case where the
+  rule bites. Check your lots before placing the orders.
 - Preferring international funds in taxable accounts is a rule of thumb, not
   a calculation. The credit is worth a couple of basis points a year and is
   partly offset by international funds' higher, less-qualified dividends; the
   tool weighs neither, and does not check that a given fund is majority-foreign
   and therefore actually eligible to pass the credit through.
-- It knows nothing about wash sales, contribution or withdrawal limits,
-  holding periods, early-withdrawal penalties, or restrictions on what a given
-  account can actually hold -- a 401(k)'s fixed fund menu, for instance.
-- VT's U.S./international weighting is fetched from Vanguard and may be
+- It knows nothing about contribution or withdrawal limits, holding periods,
+  early-withdrawal penalties, or restrictions on what a given account can
+  actually hold -- a 401(k)'s fixed fund menu, for instance.
+- VT's U.S./international allocation is fetched from Vanguard and may be
   stale, or may fail and fall back to a cached or manually entered value.
 
 ## Install
@@ -95,16 +107,17 @@ Useful flags:
 | `--vt-us-pct PCT` | Manually set VT's U.S. % and skip looking it up or prompting for it |
 | `--version` | Print the installed version and exit |
 
-On each run you're asked for your target stock and bond allocation, then
-your accounts (type, a unique nickname, whether the account holds individual
-funds or a single target-date fund, which of those funds it holds, and any
-cash available to invest). If you've run it before, your
-saved accounts are offered back with their last-known values pre-filled as
-editable defaults -- press Enter to keep a value or type a new one.
+Each run walks three numbered steps -- your target asset allocation, when to
+rebalance, and your account holdings -- and then prints a rebalancing summary.
+The third step asks for each account's type, a unique nickname, whether it
+holds individual funds or a single target-date fund, which of those funds it
+holds, and any cash available to invest. If you've run it before, your saved
+accounts are offered back with their last-known values pre-filled as editable
+defaults -- press Enter to keep a value or type a new one.
 
 ## How it works
 
-- **VT's U.S./international weighting** comes from two independent Vanguard
+- **VT's U.S./international allocation** comes from two independent Vanguard
   sources, tried in freshness order. First the JSON endpoint behind the fund
   profile page's country diversification table, refreshed **monthly**; if
   that fails, Vanguard's **quarterly** fact sheet PDF
@@ -122,24 +135,44 @@ editable defaults -- press Enter to keep a value or type a new one.
   U.S. stock / international stock / bond mix (from the fund's fact sheet),
   and are folded into the overall allocation math as a fixed-ratio bundle.
   Because such an account holds nothing else, its value is fixed: the tool
-  will never recommend selling a target-date fund, only investing that
-  account's cash into it. Its sleeves still count toward your overall
+  never sells a target-date fund, only invests that account's cash into it. Its sleeves still count toward your overall
   allocation, so the rest of the portfolio works around them.
 - **Cash available to invest** in an account counts toward that account's
-  total and is always recommended to be fully invested.
-- **Rebalancing** is computed as a small linear program, solved in four
+  total and is always fully invested by the plan.
+- **A rebalancing band** decides how far an asset class may drift from its
+  target before it's worth correcting, in percentage points of the whole
+  portfolio. Rebalancing to an exact target means every drift generates
+  trades, however small, and in a taxable account those cost real money to
+  correct a rounding error. The default is 5 points, the long-standing
+  Bogleheads convention; enter 0 to rebalance to the exact target. Inside the
+  band your allocation is left alone -- but cash is still invested, and free
+  trades in tax-advantaged accounts are still made. Outside it, the class
+  moves back to the nearest edge.
+- **What to hold is decided before where to hold it.** The band settles what
+  each asset class should be worth -- staying put when it's close enough,
+  and directing any available cash at whichever class is furthest below
+  target. Only then does the solver work out which accounts should hold it.
+  The phases below can move a holding between accounts, which never changes
+  an asset class total; they can't decide you should own less international
+  because it's inconveniently placed.
+- **Rebalancing** is computed as a small linear program, solved in six
   lexicographic phases: (1) minimize bonds left in taxable accounts --
-  bonds fill tax-advantaged capacity first and only spill into taxable once
+  bonds fill sheltered capacity first and only spill into taxable once
   that's exhausted; (2) minimize $ trade volume within taxable accounts, as
   a proxy for avoiding capital gains (no cost-basis data is collected, so
-  this is an approximation, not an exact gains calculation); (3) prefer to
+  this is an approximation, not an exact gains calculation); (3) avoid
+  selling a fund in a taxable account while buying the same fund in a
+  tax-advantaged one, which risks a wash sale; (4) hold bonds in tax-deferred
+  accounts rather than tax-free ones, since a Roth or HSA never taxes the
+  growth it shelters and is better spent on stocks; (5) prefer to
   hold the international fund in taxable accounts, where the foreign tax
   withheld on it can be claimed as a credit that a tax-advantaged account
-  forfeits -- ranked below (2), so it decides which fund to buy when an
-  account is being traded anyway and never opens a taxable trade of its own;
-  (4) tie-break by minimizing total trade volume everywhere. Each account's
+  forfeits; (6) tie-break by minimizing total trade volume everywhere.
+  Everything below (2) is free rearrangement only: those phases decide which
+  funds an account already being traded ends up holding, and never open a
+  taxable trade of their own. Each account's
   total value is fixed -- a rebalance only reallocates *within* an account,
-  never moves money between accounts. Trades under $1 (Fidelity's fractional-share
+  never moves money between accounts. Orders under $1 (Fidelity's fractional-share
   minimum, the smaller of its Roth IRA and taxable brokerage minimums) are
   dropped as impractical.
 
@@ -155,19 +188,16 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Note that `python3` on macOS may still be the system 3.9 -- use an explicit
-interpreter (e.g. `python3.12`) if so.
-
 With the venv active, run the CLI straight from your working copy:
 
 ```bash
-three-fund-rebalance                    # the venv's console script
-python -m three_fund_rebalance.cli      # equivalent, without the console script
+python -m three_fund_rebalance.cli
 ```
 
-This coexists with a pipx or uv install: activating the venv puts its
-`bin/` first on your PATH, so the working copy shadows the installed CLI for
-as long as the venv is active, and the installed one comes back when it isn't.
+Run it as a module rather than through the `three-fund-rebalance` console
+script. That always executes the working copy you are editing, whether or not
+a pipx or uv install of the same name is also on your PATH -- so there is
+never a question about which one you just tested.
 
 Editable mode means edited modules -- **and newly added ones** -- take effect
 on the next run with no reinstall. Rerun `pip install -e ".[dev]"` only when
