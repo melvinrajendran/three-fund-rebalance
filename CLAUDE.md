@@ -110,14 +110,51 @@ not just a ceiling, which is why `_check_capacity_feasible` checks both.
 Two stages. **`_resolve_allocation` decides what each asset class should be worth**,
 then six phases decide where to hold it.
 
-The first stage is its own tiny LP over three variables, also lexicographic: (1) move
-as little as possible from where the portfolio already sits — that is what a band
-*means*, stay put inside it and move only to the nearest edge outside it; (2) among
-the ties, sit as close to target as possible, which is what steers available cash at
-whichever class is furthest below target. It returns `dict(current)` outright when the
-first objective comes back at zero, so "leave it alone" is answered with the numbers
-the portfolio already holds rather than with the solver's slack spent drifting a
-fraction of a cent.
+**The band is a trigger, not a destination.** The first stage opens with a gate: with
+nothing uninvested it is plain `Decimal` and no solve at all — every class inside its
+band returns `dict(current)` outright, "leave it alone" answered with the numbers the
+portfolio already holds rather than with a solver's slack spent drifting a fraction of
+a cent. Anything that trips the gate sends the whole portfolio back to target, all
+three classes, not just the one that breached.
+
+Stopping at the nearest band edge instead is what this did once, and it was worse on
+two counts. It leaves the portfolio *on* the boundary, so the next small drift trips
+the band again — rebalancing to the centre buys a full band's worth of quiet. And it
+is under-determined: a class one point out of band can be brought back by selling
+either of the other two at identical cost, so which one got sold came down to
+whichever vertex HiGHS happened to return.
+
+**Cash is handled first, and the band is then asked about what it leaves behind** —
+not about the portfolio still holding it. That is `_place_cash`: a separate tiny LP
+constrained to `p >= current`, which is what "spend the cash and sell nothing" means,
+since only a sale can shrink a class total. It answers with the resulting totals when
+the cash alone leaves every class inside its band, and `None` when it does not, which
+is `_resolve_allocation`'s signal to rebalance properly.
+
+It is lexicographic too, and the order is the other way round from its caller's: (1)
+minimize how far outside its band each class is left; (2) among the ties, sit as close
+to target as possible. The band comes first because it is what the answer turns on —
+with two classes below target the cash could go to either and be equally close to
+target overall, while only one of those choices might get the laggard back inside its
+band.
+
+**Testing the cash itself instead is a bug that shipped and was caught in real use.**
+Treating any uninvested balance as grounds to reopen the question meant 24 cents swept
+up from a dividend rebalanced a portfolio that was comfortably inside its band on all
+three classes — $4,053 of trades, taxable sales included, over a quarter.
+`test_cash_alone_does_not_trigger_a_rebalance` is the guard, and it is written on the
+deterministic path: the cash reaches the laggard through a free swap in a shelter, so
+the taxable account only ever buys.
+
+Past the gate it is a tiny LP over three variables, lexicographic: (1) sit as close to
+target as the accounts allow; (2) among the ties, move as little as possible from where
+the portfolio already sits. (2) runs only when (1) comes back nonzero, i.e. only when
+the exact target is unreachable — an account holding a single fund pins that fund's
+share of the portfolio, and the closest reachable points are then a whole face rather
+than a vertex. With U.S. stock pinned at 60% against a 50/25/25 target, every split of
+the remaining 40% is exactly as far from target as every other;
+`test_an_unreachable_target_settles_nearest_to_where_the_portfolio_sits` fails without
+(2), which is what earns it its keep.
 
 **Skipping that stage and handing the band to the six phases below is a bug that was
 shipped once and caught in real use.** Given a portfolio inside its band but with
@@ -215,11 +252,72 @@ describes the same problem from the side the user can do least about.
 
 What has to be reachable is the nearest *band edge*, not the target — a band the
 portfolio can satisfy is satisfiable even when the exact target is not, which is one
-of the things a band is for. `_band_note` names that edge in the message only when the
-band is what makes the number binding; with no band the edge is the target, and
-printing the same figure twice reads like a bug.
+of the things a band is for. This is the band's **only** remaining role inside the LP:
+it is the feasibility envelope, not the destination, so a portfolio that trips the gate
+aims at target and is stopped short only by what the accounts can actually hold.
+`_band_note` names that edge in the message only when the band is what makes the number
+binding; with no band the edge is the target, and printing the same figure twice reads
+like a bug.
 
 Trades below `MIN_TRADE_DOLLARS` are dropped as impractical.
+
+### The rebalancing band (`allocation.effective_band_points`)
+
+Two rules, and a class has to satisfy **both**, so the tighter of the two is what
+binds — **the 5/25 rule**. `band_pct` is the *absolute band*, in points of the whole
+portfolio; `relative_band_pct` is the *relative band*, a share of the asset class's own
+target, so it scales with the target where the absolute one does not. Those three names
+are what the prompts, the report, the saved keys and the README all say, so a change to
+one of them is a change to all five places.
+
+Neither alone works for all three classes. Five points is a quarter of a 20% bond
+sleeve and far too loose for a 5% one — five points below a 5% target is *zero bonds*,
+which is how a portfolio holding 1.2% against a 5% target was reported as in-band and
+left alone. Twenty-five percent of a 58.8% U.S. target is 14.7 points, far too loose
+for the class that dominates the portfolio. Taking the lesser gives small targets the
+relative rule and large ones the absolute cap. The two cross at a 20% target, where
+both come to 5 points — which is why the convention is usually stated as "5 points at
+20% and above, 25% relative below": one rule, described twice.
+
+`relative_band_pct` of `None` means the rule was never configured and only `band_pct`
+applies. That is **distinct from `0`**, which like a `band_pct` of `0` tolerates no
+drift at all. The distinction is what lets `compute_trades`'s `band_pct`-only default
+keep meaning exactly what it did — every solver test that says nothing about the band
+still asserts exact-target behavior — and it is the same "absent means never chosen"
+that `rebalance_band_pct` uses in the config file.
+
+**The relative half is the one question in the flow that gets explained before it is
+asked.** Everything else is asked bare and explained where its effect is visible, in
+the report. That does not work here: "or by more than this share of its own target"
+reads as an alternative when it is a second, tighter limit, and the reason the rule
+exists — five points of drift is the whole of a 5% bond sleeve — is invisible from the
+prompt. So `prompts.BAND_EXPLANATION` states the policy above the pair, worded the way
+one is written in an investment policy statement — an asset class "deviates from its
+target" by more than "the lesser of" two bands. That one sentence carries all the
+semantics, which leaves each question below naming only its own unit (`pts` against
+`%`) — the part that was actually ambiguous. It stays one sentence: drafts that also
+named the 5/25 rule, said what the relative band is for and noted that zero turns the
+band off were all cut back to what a reader needs in order to answer the two questions.
+The report's "Rebalancing band" section is where the band's effect is visible, and it
+writes the resulting ranges out per class. The questions are "Absolute
+band" and "Relative band": the industry's own names for the two halves, and the words
+`rebalance_band_pct` and `rebalance_relative_band_pct` are already named after, so the
+prompt, the saved key and the report all say one thing. `TestRebalanceBandPrompts`
+holds this.
+
+The vocabulary throughout is the Bogleheads wiki's and Larry Swedroe's, because that
+is where a reader checking the defaults ends up: "rebalancing band", "asset class", an
+asset class that "deviates" from its target, and the pair of numbers as **the 5/25
+rule** — absolute 5, relative 25. The rule is named in `config.py`, the README and this
+file rather than in the prompt itself. Where the two traditions disagree, precision
+wins: Bogleheads writes the absolute half as "5%", which is 5 percentage *points*, so
+the prompt's unit stays `pts`.
+
+Because each class now has its own band, nothing user-facing may name a single number
+for it. `report._describe_band` writes the three ranges out; `_describe_band_extent`
+is the one place that decides between "your band of plus or minus X percentage points"
+(absolute only) and "its rebalancing band" (both rules), and the comparison table's
+footnote and the no-trades line both go through it.
 
 ### VT allocation (`vt_allocation.py`)
 
@@ -271,11 +369,18 @@ stays aligned. Nicknames are capped at input instead (`MAX_ACCOUNT_NAME_LENGTH`)
 those are labels the user invents, unlike a fund's real name, and they were what
 pushed the headings off the page.
 
-An account heading names the tax treatment *inside* the parentheses
-(`Fidelity Roth IRA (Roth IRA, tax-free)`) and only when the account type does not
-already say it. That is both shorter than a trailing dash and safe at the cap: the
-longest possible heading lands at 77 characters rather than wrapping and stranding a
-`--` at the end of a line.
+An account heading is always `nickname (type, treatment)` —
+`Fidelity Roth IRA (Roth IRA, tax-free)`, `Fidelity Brokerage (Brokerage, taxable)` —
+with the treatment *inside* the parentheses. Inside rather than after a dash because it
+is shorter and safe at the nickname cap: the longest possible heading lands well inside
+the page rather than wrapping and stranding a `--` at the end of a line. Uniform
+because one line shaped like the next is what lets the eye compare them down the page.
+
+There used to be a rule suppressing the treatment when the type already named it, for
+the sake of the account type then called `Taxable Brokerage`. Since v4 renamed that to
+plain `Brokerage`, **no account type names its own treatment**, and the branch was
+removed rather than left unreachable. Reintroducing a type that does — a
+`Tax-free Savings Account`, say — is what would bring the question back.
 
 ### Wording the output has to keep
 
@@ -284,20 +389,40 @@ loses them is a regression:
 
 - **The report always ends with the disclaimer.** It is the artifact that gets
   screenshotted and acted on days later; a disclaimer that lives only in the README
-  does not travel with it.
+  does not travel with it. `report.DISCLAIMER` is the one copy — `--help`'s epilog is
+  that same object rather than a second wording of it, so the two cannot drift apart
+  (`test_help_carries_the_report_s_own_disclaimer`). It is **two clauses**: not
+  investment, tax or legal advice, and **not a recommendation to buy or sell** — the
+  Reg BI / FINRA 2111 term of art, and the other half of never using the word above.
+
+  **It is two lines, and stays two lines.** A longer draft also disclaimed the advisory
+  relationship, order placement and trademark use. All true, all cut: eight lines of
+  legal prose at the foot of a page is something a reader learns to skip, which costs
+  the disclosure the one thing it is there for. The README's Disclaimer section carries
+  the full set, and `--version` carries non-affiliation. Adding a clause here means
+  finding one to cut. `TestRequiredWording` pins both the wording and the line count.
 - **Nothing is called a "recommendation" and no order is phrased as an instruction.**
   "Recommendation" is a term of art under Reg BI and FINRA Rule 2111. Hence "Orders to
   place" and "Review each order before placing it:" rather than "Recommended trades"
-  and "Place the following orders:".
+  and "Place the following orders:". The disclaimer's "not a recommendation to buy or
+  sell any security" is the explicit denial that goes with the avoidance.
 
 - **"Order" and "trade" are not synonyms — use the industry split.** An *order* is the
   instruction you submit to a broker; a *trade* is the transaction that results, and
   the activity in general. So: "Orders to place", "Review each order before placing
-  it", "before placing these orders", "these orders do not reach the target exactly",
-  "once these orders are filled" — all instructions. And: "After these trades",
-  "no trades needed", "the trades needed to rebalance", "taxable trade volume" — all
-  activity or outcome. The giveaway is the verb: you *place*, *submit* and *fill* an
-  order; you *make* a trade and live with its result.
+  it", "before placing these orders", "the above orders do not reach the target",
+  "once these orders are filled" — all instructions. And: "no trades needed", "the
+  trades needed to rebalance", "taxable trade volume" — all activity or outcome. The
+  giveaway is the verb: you *place*, *submit* and *fill* an order; you *make* a trade
+  and live with its result.
+
+  Note that "not yet submitted" does **not** make something a third kind of thing.
+  Everything under "Orders to place" is an order that has not been placed, so a
+  sub-minimum one that was dropped is simply an order missing from the list — "One
+  order smaller than $1.00 was left out", not "one move". A third noun for the same
+  object is a vocabulary the reader has to learn for no gain. It does force "so the
+  above orders do not reach the target exactly" at the end of that sentence: with a
+  dropped order named in the same breath, "these orders" points at either set.
 
   Code identifiers stay on "trade" (`Trade`, `compute_trades`, `MIN_TRADE_DOLLARS`)
   because in portfolio-rebalancing systems the computed output is a *trade list* --
@@ -306,16 +431,40 @@ loses them is a regression:
 - **Tax statements are conditional and attributed.** The wash-sale warning says a sale
   "may be" a wash sale and that "the IRS has taken the position (Rev. Rul. 2008-5)"
   -- never that it *is* one or that a loss *is* lost. The tool cannot see cost basis,
-  trade dates, or purchases made elsewhere in the 61-day window.
+  trade dates, or purchases made elsewhere in the 61-day window. It also names the
+  rule it is talking about -- section 1091, "substantially identical" securities,
+  "within 30 days before or after the sale, in any account you control" -- because
+  without the standard, "funds are matched by name here" is a caveat about nothing in
+  particular, and the reader has no way to judge whether their own replacement fund is
+  far enough away.
+- **A taxable sale is disclosed as a taxable event.** `report._describe_taxable_sales`
+  says it "may realize capital gains or losses" and that no cost basis is collected.
+  Phase 2 minimizes taxable *volume*, which is not the same as pricing the sale, so the
+  wording must neither skip the disclosure nor imply the solver costed it. Only the
+  sale leg triggers it; a taxable buy realizes nothing.
+- **The landing allocation is conditional on the orders filling.** "If filled at the
+  values you entered", not "After these trades": an order fills at the market's price
+  on the day, not at the figure typed into the prompts, so the number is arithmetic
+  rather than a promise.
 - **"Tax-free" is qualified once**, under "Your accounts", because Roth and HSA
-  withdrawals are tax-free only when qualified.
+  withdrawals are tax-free only when qualified. One line: naming the age,
+  holding-period and medical-expense conditions is the reader's plan documents' job,
+  not a rebalancer's.
+- **A prompt that classifies tax treatment says when the tax is paid, accurately.**
+  The "Other" account's three choices are the only place the program explains the
+  distinction, and they had said gains in a taxable account are taxed "every year".
+  They are also printed unwrapped by `prompt_choice`, so each has to fit
+  `prose_width()` -- `TestTaxTreatmentChoices` holds both lines.
 - **No claim implies future performance.** The asset-location note calls preferring
   tax-deferred space "a common asset-location convention, not a prediction" rather than
   asserting that stocks will out-grow bonds.
-- **Figures carry their provenance** -- "Values as entered", plus the last-saved date
-  when they came from a config file. The numbers are the user's, and can be stale.
+- **Figures carry their provenance** -- "Values as entered, not live market prices.",
+  plus "Last saved <date>." as its own sentence when they came from a config file. The
+  numbers are the user's, and can be stale.
 - **Dropped sub-minimum moves are disclosed**, so trades that do not reach the target
-  exactly are explained rather than looking like an arithmetic error.
+  exactly are explained rather than looking like an arithmetic error. The count is
+  spelled out through nine (`report._count`): the sentence opens on it, and "1 order
+  smaller than $1.00 was left out" reads as a fragment rather than a sentence.
 
 **Indentation is carried by `Prompter.indented()` and `INDENT_UNIT`, never spelled
 into a prompt string.** `_prompt_target_date_allocation` and `_prompt_new_holding` are
@@ -335,9 +484,10 @@ single door for asking one: it owns the 0-100 bounds, the `(%)` suffix, and the 
 formatting.
 
 A share of the portfolio is `%`; a distance between two percentages is **percentage
-points**, abbreviated `pts` in exactly one place -- the comparison table's `Drift (pts)`
-header, where the column cannot take the words. `TestPercentFormatting` asserts that
-count is one.
+points**, abbreviated `pts` only where the words will not fit: the comparison table's
+`Drift (pts)` header, and the absolute band prompt's unit suffix.
+`TestPercentFormatting` asserts the report's count is one; `prompt_percent`'s `unit`
+argument is the prompt side, and defaults to `%` so every other question is unaffected.
 
 **Dollar amounts are right-aligned in columns.** The comparison table and the
 per-account holdings list both compute their column widths from their own contents.
@@ -346,10 +496,13 @@ The point of putting figures in rows is to compare them down the page, which rag
 rather than `$0.00`: it is capacity the solver can use, not a holding, and `$0.00`
 gives it a precision it does not have.
 
-**The report ends with where the trades land** (`_describe_outcome`) — the question
-the rest of it only answers by implication. It is computed from the holdings rather
-than the class totals, so a trade in a target-date fund moves all three sleeves by
-their own fractions.
+**The orders close with where they land** (`_describe_outcome`) — the question the
+rest of the report only answers by implication. It is computed from the holdings
+rather than the class totals, so a trade in a target-date fund moves all three sleeves
+by their own fractions, and it is stated conditionally ("If these orders fill at the
+values you entered") for the reason in the wording section below. The disclosures that
+follow it — taxable sales, then costs — sit between it and the warnings, so everything
+qualifying the orders is in one run rather than split across the page.
 
 The report restates every answer it was given — target allocation and where it came
 from, the band, the accounts and their holdings — before the current-vs-target summary
@@ -387,9 +540,9 @@ blank as it does for any `PersistenceError`. That is deliberate — splitting su
 account automatically would invent an account boundary that is a hard constraint on
 the solver.
 
-The file is at v3, and upgrades run **one hop at a time** — `config_from_dict` chains
-`v1 → _upgrade_v1 → v2 → _upgrade_v2 → v3`, so a v1 file walks the same path a v2 file
-does. Each upgrade translates without validating: anything still wrong surfaces from
+The file is at v4, and upgrades run **one hop at a time** — `config_from_dict` chains
+`v1 → _upgrade_v1 → v2 → _upgrade_v2 → v3 → _upgrade_v3 → v4`, so a v1 file walks the
+same path a v3 file does. Each upgrade translates without validating: anything still wrong surfaces from
 the normal parse, so a corrupt old file reports what a corrupt current file would.
 Each copies at every level, because a failed load must not leave the caller's parsed
 JSON half-renamed. Any further rename of a persisted name needs another hop, not an
@@ -404,9 +557,27 @@ in-place edit of an existing one — and `_upgrade_v1` must keep returning `2`, 
   `ACCOUNT_TYPE_TAX_TREATMENT`. An unrecognized type — including `"Other"`, whose v2
   answer was a yes/no that never recorded the difference — becomes `tax_deferred`:
   bonds fill that space first, so guessing this way costs nothing if it is wrong.
+
+  Note `_upgrade_v2` looks types up in the *current* `ACCOUNT_TYPE_TAX_TREATMENT`, which
+  no longer holds v2's spellings. That is safe only because the lookup runs solely for
+  accounts marked `tax_advantaged`, and the one type v4 renamed is taxable. A rename
+  that touches a shelter will need `_upgrade_v2` to carry its own frozen v2-era map.
   `rebalance_band_pct` is deliberately left *absent* rather than defaulted, because
   absent means "never chosen" and the step 2 prompt offers the default; writing one in
   would make a guess look like the user's own saved answer.
+
+- **v3 → v4** renames the `Taxable Brokerage` account type to `Brokerage`. Every other
+  entry on the list is the account's actual name — Roth IRA, 403(b), HSA — while
+  "Taxable" is a descriptor, and Title-Casing it put the one word the report otherwise
+  always writes lowercase (beside "tax-free" and "tax-deferred") into a proper noun. An
+  account type the map does not know, `"Other"` included, is left exactly as it is.
+
+`rebalance_relative_band_pct` was added later **without a hop**, and deliberately: a
+new optional key translates nothing, and its absence already means "never chosen"
+exactly as an absent `rebalance_band_pct` does. A hop is for a name or a meaning that
+changed. Note that `_upgrade_v2` now writes the literal `3` rather than
+`SCHEMA_VERSION` — same trap as `_upgrade_v1`, harmless only until the next hop
+exists.
 
 ## Testing conventions
 
@@ -417,13 +588,15 @@ under test. Names are full sentences describing the behavior.
 driven by a scripted list of canned answers — **no monkeypatching of builtins**.
 `tests/test_cli.py::ScriptedPrompter` and `new_account_responses()` are the helpers;
 reuse them rather than writing new stdin plumbing. Adding a question to the flow means
-threading one more answer into every scripted list — the band's answer sits between
-the VT allocation and the first "Add an account?", and existing flows pass `"0"` so
-they keep testing exact-target behavior.
+threading one more answer into every scripted list — the band's two answers sit
+between the VT allocation and the first "Add an account?", and existing flows pass
+`"0"` for both so they keep testing exact-target behavior.
 
 `compute_trades`'s `band_pct` defaults to `Decimal(0)`, which is the exact target and
 therefore the pre-band behavior — solver tests that aren't about the band say nothing
-about it and keep asserting the same numbers.
+about it and keep asserting the same numbers. `relative_band_pct` defaults to `None`
+for the same reason: `0` there would collapse every one of those tests onto the exact
+target by a different route, and silently.
 
 Every network call is monkeypatched, including failure paths. The suite must stay
 runnable offline — CI depends on it.

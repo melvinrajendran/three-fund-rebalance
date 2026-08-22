@@ -15,10 +15,14 @@ from three_fund_rebalance.models import TaxTreatment
 # CLI puts on screen (us_stock/international_stock/us_bond/target_date, and
 # `value` for a holding's dollar amount). 3 split the single `tax_advantaged`
 # treatment into `tax_deferred` and `tax_free`, and added the rebalancing
-# band. Older files are still read -- persistence._upgrade_v1 and
-# _upgrade_v2 translate them on load -- and are rewritten at the current
-# version the next time the user saves.
-SCHEMA_VERSION = 3
+# band. 4 renamed the "Taxable Brokerage" account type to "Brokerage": every
+# other entry is the account's actual name, and Title-Casing the descriptor
+# "Taxable" put the one word the report otherwise always writes lowercase
+# ("taxable", beside "tax-free" and "tax-deferred") into a proper noun.
+# Older files are still read -- persistence._upgrade_v1 through _upgrade_v3
+# translate them on load -- and are rewritten at the current version the next
+# time the user saves.
+SCHEMA_VERSION = 4
 DEFAULT_CONFIG_PATH = Path.home() / ".three_fund_rebalance" / "config.json"
 
 # ---------------------------------------------------------------------------
@@ -40,10 +44,17 @@ MIN_TRADE_DOLLARS = Decimal("1.00")
 # correcting, in percentage points of the whole portfolio. Trading to an
 # exact target means every drift, however small, generates trades -- and in a
 # taxable account those trades cost real money to save a rounding error. The
-# long-standing Bogleheads convention is a 5-percentage-point band, so that
-# is the suggested default; 0 restores exact-target behavior.
+# 5 of the 5/25 rule, so that is the suggested default; 0 means correct any
+# drift at all. This is the *absolute band*, the name the prompt and the
+# report both give it.
 # https://www.bogleheads.org/wiki/Rebalancing
 DEFAULT_REBALANCE_BAND_PCT = Decimal(5)
+
+# The 25: the *relative band*, by which an asset class may also drift no more
+# than this share of its own target. The two are combined by taking whichever
+# is tighter, which is what makes one pair of numbers work for a 5% bond
+# sleeve and a 59% U.S. sleeve at once -- see allocation.effective_band_points.
+DEFAULT_REBALANCE_RELATIVE_BAND_PCT = Decimal(25)
 
 # ---------------------------------------------------------------------------
 # VT (Vanguard Total World Stock ETF) US / ex-US allocation
@@ -91,7 +102,7 @@ ACCOUNT_TYPE_TAX_TREATMENT: dict[str, TaxTreatment] = {
     "SEP IRA": TaxTreatment.TAX_DEFERRED,
     "SIMPLE IRA": TaxTreatment.TAX_DEFERRED,
     "HSA": TaxTreatment.TAX_FREE,
-    "Taxable Brokerage": TaxTreatment.TAXABLE,
+    "Brokerage": TaxTreatment.TAXABLE,
 }
 
 # Longest account nickname accepted. A nickname is a label the user makes up,
