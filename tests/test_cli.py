@@ -4,6 +4,8 @@ import pytest
 
 from three_fund_rebalance import __version__
 from three_fund_rebalance.cli import parse_args, run
+from three_fund_rebalance.config import VT_FACT_SHEET_URL
+from three_fund_rebalance.formatting import prose_width
 from three_fund_rebalance.models import FundType
 from three_fund_rebalance.persistence import load_config
 from three_fund_rebalance.prompts import Prompter
@@ -241,3 +243,54 @@ class TestEndToEndRun:
         )
         assert exit_code == 0
         assert "Keep account" not in prompter.full_output
+
+
+class TestLongMessagesWrap:
+    """Messages that interpolate a path, a URL or an exception have no length
+    of their own. The rebalance error was the worst: roughly 250 characters
+    on one line."""
+
+    def _unwrapped(self, prompter) -> list[str]:
+        """Lines that overrun and *could* have been broken. A line carrying a
+        single token longer than the page -- a URL, or pytest's own tmp_path --
+        is not a violation: wrap deliberately never splits a long word, since
+        half a URL is worse than a long line."""
+        return [
+            line
+            for block in prompter.output
+            for line in block.split("\n")
+            if len(line) > prose_width()
+            and max((len(word) for word in line.split()), default=0) <= prose_width()
+        ]
+
+    def test_a_corrupt_config_warning_wraps(self, tmp_path):
+        config_path = tmp_path / "a-fairly-long-config-file-name.json"
+        config_path.write_text("{not valid json")
+        prompter = ScriptedPrompter(["100", "0", "0", "n"])
+        run(["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter)
+        assert "could not read your saved portfolio" in prompter.full_output
+        assert self._unwrapped(prompter) == []
+
+    def test_an_infeasible_target_error_wraps(self, tmp_path):
+        prompter = ScriptedPrompter([
+            "50", "50",  # a bond target no declared fund can reach
+            "0",
+            "y", "1", "Roth", "1",
+            "y", "VTI", "10000",
+            "n", "n",
+            "0",
+            "n",
+        ])
+        exit_code = run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "100"], prompter=prompter
+        )
+        assert exit_code == 1
+        assert "Could not compute a rebalance" in prompter.full_output
+        assert self._unwrapped(prompter) == []
+
+    def test_the_manual_vt_prompt_wraps_without_breaking_the_url(self, tmp_path):
+        prompter = ScriptedPrompter(["100", "0", "62", "0", "n", "n"])
+        run(["--config", str(tmp_path / "c.json"), "--offline"], prompter=prompter)
+        output = prompter.full_output
+        assert VT_FACT_SHEET_URL in output, "the URL must survive wrapping intact"
+        assert self._unwrapped(prompter) == []
