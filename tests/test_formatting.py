@@ -1,5 +1,6 @@
 from three_fund_rebalance.formatting import (
     format_account_heading,
+    format_result_header,
     format_section_header,
     format_subheading,
 )
@@ -50,3 +51,20 @@ class TestAccountHeading:
         assert not any(rule_char in heading for rule_char in "=-~.")
         assert format_subheading("Saved accounts").split("\n")[1][0] == "-"
         assert format_section_header(1, 3, "Account holdings").split("\n")[0][0] == "="
+
+
+class TestResultHeader:
+    def test_banner_carries_no_step_number(self):
+        """The report is what the steps produced, not another one of them."""
+        rule, label, closing_rule = format_result_header("Your rebalancing plan").split("\n")
+        assert label == "YOUR REBALANCING PLAN"
+        assert "STEP" not in label
+        assert set(rule) == {"="}
+        assert rule == closing_rule
+
+    def test_ruled_to_the_same_width_as_a_step_banner(self):
+        """Both sit at the top level, so they have to line up as the run
+        scrolls past."""
+        result_rule = format_result_header("Your rebalancing plan").split("\n")[0]
+        step_rule = format_section_header(1, 3, "Target asset allocation").split("\n")[0]
+        assert len(result_rule) == len(step_rule)

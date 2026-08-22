@@ -76,14 +76,15 @@ class TestArgParsing:
 
 
 class TestEndToEndRun:
-    def test_run_without_vt_flag_uses_resolve_vt_weighting_offline_path(self, tmp_path):
-        # Without --vt-us-pct, run() should go through resolve_vt_weighting(); using
+    def test_run_without_vt_flag_uses_resolve_vt_allocation_offline_path(self, tmp_path):
+        # Without --vt-us-pct, run() should go through resolve_vt_allocation(); using
         # --offline with no cache exercises the manual-entry fallback without
         # touching the network.
         config_path = tmp_path / "config.json"
         responses = [
             "80", "20",  # stock/bond target
             "75",  # manual VT US % entry (offline, no cache)
+            "0",  # rebalancing band -- exact target, as before it existed
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
@@ -99,6 +100,7 @@ class TestEndToEndRun:
         config_path = tmp_path / "config.json"
         responses = [
             "80", "20",  # stock/bond target
+            "0",  # rebalancing band -- exact target, as before it existed
             "y",  # Add an account?
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",  # Add another account?
@@ -128,6 +130,7 @@ class TestEndToEndRun:
         config_path = tmp_path / "config.json"
         responses = [
             "100", "0",
+            "0",  # rebalancing band -- exact target, as before it existed
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
@@ -145,6 +148,7 @@ class TestEndToEndRun:
         config_path = tmp_path / "config.json"
         responses = [
             "100", "0",
+            "0",  # rebalancing band -- exact target, as before it existed
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
@@ -160,7 +164,7 @@ class TestEndToEndRun:
 
     def test_no_accounts_entered_exits_cleanly(self, tmp_path):
         config_path = tmp_path / "config.json"
-        responses = ["100", "0", "n"]  # decline to add any account
+        responses = ["100", "0", "0", "n"]  # band, then decline to add any account
         prompter = ScriptedPrompter(responses)
         exit_code = run(
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
@@ -172,6 +176,7 @@ class TestEndToEndRun:
         config_path = tmp_path / "config.json"
         responses = [
             "50", "50",  # 50% bond target
+            "0",  # rebalancing band -- exact target, as before it existed
             "y",
             "1", "Roth",
             "1",  # individual funds
@@ -192,6 +197,7 @@ class TestEndToEndRun:
         config_path.write_text("{not valid json")
         responses = [
             "100", "0",
+            "0",  # rebalancing band -- exact target, as before it existed
             "n",  # no accounts, just check it doesn't crash
         ]
         prompter = ScriptedPrompter(responses)
@@ -199,25 +205,27 @@ class TestEndToEndRun:
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
         )
         assert exit_code == 0
-        assert "could not read config" in prompter.full_output.lower()
+        assert "could not read your saved portfolio" in prompter.full_output.lower()
 
     def test_wrongly_shaped_config_falls_back_to_blank_with_warning(self, tmp_path):
         """Valid JSON, wrong shape -- the file parses, so the failure happens
         deeper than json.loads. It still has to be recoverable."""
         config_path = tmp_path / "config.json"
         config_path.write_text('{"schema_version": 2, "accounts": ["not an account"]}')
-        prompter = ScriptedPrompter(["100", "0", "n"])
+        prompter = ScriptedPrompter(["100", "0", "0", "n"])
         exit_code = run(
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
         )
         assert exit_code == 0
-        assert "could not read config" in prompter.full_output.lower()
+        assert "could not read your saved portfolio" in prompter.full_output.lower()
 
     def test_fresh_flag_ignores_existing_config(self, tmp_path):
         config_path = tmp_path / "config.json"
         # First run: create and save a config with one account.
         first_responses = [
-            "100", "0", "y",
+            "100", "0",
+            "0",  # rebalancing band -- exact target, as before it existed
+            "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n", "y",
         ]
@@ -226,7 +234,7 @@ class TestEndToEndRun:
 
         # Second run with --fresh should not see the saved account at all,
         # i.e. it should prompt to add a fresh one rather than offer to keep it.
-        second_responses = ["100", "0", "n"]
+        second_responses = ["100", "0", "0", "n"]
         prompter = ScriptedPrompter(second_responses)
         exit_code = run(
             ["--config", str(config_path), "--vt-us-pct", "100", "--fresh"], prompter=prompter
