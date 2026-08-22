@@ -110,8 +110,15 @@ class Prompter:
     def say_wrapped(self, message: str) -> None:
         """Say a paragraph reflowed to the page width *at the current depth*,
         so a note nested three levels deep still ends where every other line
-        on screen does."""
-        self.say(wrap(message, width=prose_width() - len(self._indent)))
+        on screen does.
+
+        Leading blank lines are kept rather than reflowed away: several
+        messages open with one as a separator, exactly as `_at_depth`
+        allows for.
+        """
+        blank_lead = len(message) - len(message.lstrip("\n"))
+        body = message[blank_lead:]
+        self.say("\n" * blank_lead + wrap(body, width=prose_width() - len(self._indent)))
 
 
 # --------------------------------------------------------------------------
@@ -309,7 +316,8 @@ def resolve_vt_allocation(
             if prompt_yes_no(prompter, "  Use this value?", default=True):
                 return result
         except VTFetchError as exc:
-            prompter.say(f"  Couldn't look up the current allocation ({exc}).")
+            with prompter.indented():
+                prompter.say_wrapped(f"Couldn't look up the current allocation ({exc}).")
 
     if cached_us_pct is not None:
         lead = "\n" if spoken else ""
@@ -323,7 +331,7 @@ def resolve_vt_allocation(
 
     suggested_default = cached_us_pct if cached_us_pct is not None else FALLBACK_VT_US_PCT
     lead = "\n" if spoken else ""
-    prompter.say(
+    prompter.say_wrapped(
         f"{lead}Please enter VT's U.S. stock allocation % manually "
         f"(see {VT_FACT_SHEET_URL} or Vanguard's fund page)."
     )
