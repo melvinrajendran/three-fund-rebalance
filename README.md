@@ -8,17 +8,20 @@ is taxed least.
 
 ## Disclaimer
 
-**This is not financial, investment, or tax advice.** It is a calculator that
-arithmetic-checks a portfolio against a target you choose. Review every order
-it suggests before placing it, and consult a qualified professional if you
-want advice. See [Limitations](#limitations) for what it cannot see.
+**Not investment, tax, or legal advice, and not a recommendation to buy or
+sell.** That is what the tool prints at the foot of every report, and it means
+what it says: this is a calculator that arithmetic-checks a portfolio against a
+target you choose. Using it creates no advisory or fiduciary relationship, and
+it places no orders -- it is not connected to your broker. Review each order
+before placing it, and consult a qualified professional if you want advice. See
+[Limitations](#limitations) for what it cannot see.
 
 Not affiliated with, endorsed by, or sponsored by Vanguard, Fidelity, or any
 broker or fund company. Fund and product names identify only what you hold.
 
 ## Example
 
-Three accounts, a 80/20 stock and bond target, and a 5-point rebalancing band:
+Three accounts, an 80/20 stock and bond target, and a 5/25 rebalancing band:
 
 ```
 Target asset allocation
@@ -27,18 +30,25 @@ Target asset allocation
   International stocks   30.4%
   Bonds                  20.0%
 
-  From 80.0% stocks / 20.0% bonds, with the stock side split by VT's 62.0%
-  U.S. allocation (June 30, 2026).
+  From 80.0% stocks / 20.0% bonds, where stocks are split on VT's 62.0% U.S.
+  allocation (June 30, 2026).
 
 Rebalancing band
 ----------------
-Plus or minus 5.0 percentage points. An asset class inside its band is left
-alone rather than traded back to the exact target.
+Plus or minus 5.0 percentage points, or 25.0% of an asset class's own target,
+whichever is tighter:
+
+  U.S. stocks           44.6% to 54.6%
+  International stocks  25.4% to 35.4%
+  Bonds                 15.0% to 25.0%
+
+No trades while every asset class is inside its band; once one falls outside,
+all three go back to target.
 
 Your accounts
 -------------
 
-  Fidelity Brokerage (Taxable Brokerage)
+  Fidelity Brokerage (Brokerage, taxable)
     VTI (U.S. stock fund)            $60,000.00
     VXUS (international stock fund)  $30,000.00
     Total                            $90,000.00
@@ -53,42 +63,45 @@ Your accounts
     BND (bond fund)        $10,000.00
     Total                  $40,000.00
 
-"Tax-free" means qualified withdrawals; Roth and HSA rules apply.
+"Tax-free" means qualified withdrawals only; Roth and HSA rules apply.
 
 Current vs. target allocation
 -----------------------------
 Total portfolio value: $150,000.00
-  Values as entered.
+  Values as entered, not live market prices.
 
                                     Current              Target  Drift (pts)
   U.S. stocks           $110,000.00 (73.3%)  $74,400.00 (49.6%)        +23.7 *
   International stocks   $30,000.00 (20.0%)  $45,600.00 (30.4%)        -10.4 *
   Bonds                   $10,000.00 (6.7%)  $30,000.00 (20.0%)        -13.3 *
 
-  * outside your band of plus or minus 5.0 percentage points
+  * outside its rebalancing band
 
 Orders to place
 ---------------
 Review each order before placing it:
 
-  Fidelity Brokerage (Taxable Brokerage)
-    Exchange $8,100.00 from VTI to VXUS
+  Fidelity Brokerage (Brokerage)
+    Exchange $15,600.00 from VTI to VXUS
 
   Employer 401(k) (Traditional 401(k))
     Exchange $20,000.00 from VTI to BND
 
-After these trades: 54.6% U.S. / 25.4% international / 20.0% bonds
+If filled at the values you entered: 49.6% U.S. / 30.4% international / 20.0%
+bonds
 
-Not investment or tax advice. This is a calculation from the accounts and
-values you entered; consult a tax or investment professional about your
-situation.
+Selling $15,600.00 in your taxable accounts may realize capital gains or
+losses; no cost basis is collected here, so that tax is not estimated.
+
+Not investment, tax, or legal advice, and not a recommendation to buy or sell.
+Consult a professional about your situation.
 ```
 
-Note where the bonds went. The 401(k) buys them rather than the Roth, because
-a Roth never taxes what it shelters and is better spent on stocks. The taxable
-account trades $8,100 while the sheltered one trades $20,000, because trading
-inside a shelter is free. And the result stops at the edge of the band rather
-than at the exact target, because that is what the band is for.
+Note where the bonds went. The whole $30,000 sleeve lands in the 401(k)
+rather than the Roth, because a Roth never taxes what it shelters and is
+better spent on stocks -- and the Roth's own $20,000 of U.S. stock is left
+untouched, because moving it would buy nothing. The taxable account sells only
+what the target requires.
 
 ## Install
 
@@ -135,10 +148,10 @@ or type a new one.
 | Flag | Effect |
 | --- | --- |
 | `--config PATH` | Portfolio file to read and write (default `~/.three_fund_rebalance/config.json`) |
-| `--fresh` | Ignore any saved portfolio and start blank |
+| `--fresh` | Ignore your saved portfolio and start blank |
 | `--no-save` | Don't offer to save this run's answers |
-| `--offline` | Skip the live VT fetch; use the cached or a manually entered value |
-| `--vt-us-pct PCT` | Set VT's U.S. % directly, skipping the lookup |
+| `--offline` | Skip the live VT fetch; use the cached or a manually entered value instead |
+| `--vt-us-pct PCT` | Set VT's U.S. stock allocation % directly, skipping the lookup and the prompt |
 | `--version` | Print the installed version and exit |
 
 ## How it works
@@ -151,17 +164,37 @@ Only the first two of those will ever open a taxable trade -- the rest decide
 which funds an account already being traded ends up holding.
 
 **What to hold is decided before where to hold it.** The band settles what
-each asset class should be worth -- staying put when it is close enough, and
-directing available cash at whichever class is furthest below target. Only
-then does the solver work out which accounts hold it.
+each asset class should be worth -- staying put when nothing has drifted far
+enough to matter, and directing available cash at whichever asset class is
+furthest below target. Only then does the solver work out which accounts hold
+it.
 
-**The rebalancing band** is how far an asset class may drift, in percentage
-points of the whole portfolio, before it is worth correcting. Trading to an
-exact target means every drift generates trades, and in a taxable account
-those cost real money to fix a rounding error. The default is 5 points, the
-long-standing Bogleheads convention; enter 0 for the exact target. Inside the
-band your allocation is left alone, though cash is still invested and free
-trades in sheltered accounts are still made.
+**The rebalancing band** is how far an asset class may drift before it is
+worth correcting. Trading to an exact target means every drift generates
+trades, and in a taxable account those cost real money to fix a rounding
+error.
+
+You set it with two numbers and an asset class has to satisfy both, so the
+tighter one binds -- the 5/25 rule. The *absolute band* is in percentage
+points of the whole portfolio; the *relative band* is a share of the asset
+class's own target. Those are the names the prompts and the report use too.
+Neither alone works for all three: 5 points below a 5% bond target is *zero
+bonds*, while 25% of a 59% U.S. target is 14.7 points, far looser than
+anything you'd want on the class that dominates the portfolio. The two cross
+at a 20% target, where both come to 5 points. Zero on either means no band at
+all, and every drift is corrected.
+
+It is a trigger, not a destination. While every asset class sits inside its
+band your allocation is left alone -- though free trades inside shelters are
+still made. Once any asset class falls outside, all three go back to target
+rather than to the band edge, which would leave you on the boundary and one
+small drift from trading again.
+
+Cash is spent before any of that is decided, and the band is then judged on
+what it leaves behind. So a dividend swept into your settlement fund gets
+invested at whichever asset class is furthest below target, and only
+rebalances the rest of the portfolio if it was going to need rebalancing
+anyway.
 
 **Accounts hold one kind of thing**: either a single target-date fund or some
 combination of a U.S. stock, international stock and U.S. bond fund. Cash sits
@@ -172,7 +205,7 @@ around its sleeves.
 
 **Money never moves between accounts.** Each account's total is fixed; a
 rebalance only reallocates within one, including investing its cash. Orders
-under $1 are dropped as impractical.
+under $1 are left out as impractical.
 
 **VT's U.S./international allocation** comes from Vanguard's monthly JSON
 endpoint, falling back to the quarterly fact sheet PDF, then your last cached
@@ -181,8 +214,12 @@ value, then manual entry. It never guesses silently.
 ## Limitations
 
 - **No cost basis.** It cannot compute capital gains, and minimizes taxable
-  trade *volume* as a proxy. Selling in a taxable account may realize a
-  liability this tool never sees.
+  trade *volume* as a proxy. Selling in a taxable account may realize capital
+  gains or losses this tool never sees.
+- **No costs.** Amounts exclude commissions, fees, bid-ask spreads and any
+  short-term redemption fees, and it does not know your broker's fund minimums
+  or trading restrictions. Prices move between the values you type and the
+  price an order fills at.
 - **The wash-sale check is a warning, not a guarantee.** It matches funds by
   the name you type, so two share classes of one index (VTI and VTSAX) are not
   recognized as the same security even though the IRS may treat them as

@@ -9,6 +9,7 @@ from three_fund_rebalance.formatting import (
     format_percent,
     prose_width,
     table_width,
+    wrap,
 )
 from three_fund_rebalance.models import (
     Account,
@@ -21,6 +22,7 @@ from three_fund_rebalance.models import (
 )
 from three_fund_rebalance.rebalance import RebalanceResult
 from three_fund_rebalance.report import (
+    DISCLAIMER,
     RebalanceInputs,
     allocation_after_trades,
     describe_account_trades,
@@ -31,7 +33,7 @@ from three_fund_rebalance.report import (
 from three_fund_rebalance.vt_allocation import VTAllocationResult
 
 
-def inputs(accounts, target, band_pct="0"):
+def inputs(accounts, target, band_pct="0", relative_band_pct=None):
     """The report recaps what it was asked, so it needs the whole set of
     answers -- not just the accounts and the target it computes against."""
     return RebalanceInputs(
@@ -41,6 +43,7 @@ def inputs(accounts, target, band_pct="0"):
         target=target,
         band_pct=Decimal(band_pct),
         accounts=accounts,
+        relative_band_pct=None if relative_band_pct is None else Decimal(relative_band_pct),
     )
 
 
@@ -83,7 +86,7 @@ class TestSummarizeAllocation:
     def test_includes_available_cash_in_total_but_not_any_category(self):
         accounts = [
             Account(
-                account_type="Taxable Brokerage",
+                account_type="Brokerage",
                 name="Brokerage",
                 tax_treatment=TaxTreatment.TAXABLE,
                 holdings=[
@@ -211,7 +214,7 @@ class TestFormatReport:
 
     def test_cash_investment_note_shown_when_present(self):
         account = Account(
-            account_type="Taxable Brokerage",
+            account_type="Brokerage",
             name="Brokerage",
             tax_treatment=TaxTreatment.TAXABLE,
             holdings=[
@@ -247,7 +250,7 @@ class TestReportRecap:
                 ],
             ),
             Account(
-                account_type="Taxable Brokerage",
+                account_type="Brokerage",
                 name="Brokerage",
                 tax_treatment=TaxTreatment.TAXABLE,
                 holdings=[
@@ -288,12 +291,12 @@ class TestReportRecap:
         assert "Cash available to invest" in text
         assert "$6,500.00" in text
 
-    def test_names_the_tax_treatment_only_when_the_account_type_does_not(self):
-        """"Fidelity Brokerage (Taxable Brokerage) -- taxable" says it twice."""
+    def test_every_account_heading_has_the_same_shape(self):
+        """`nickname (type, treatment)`, with no exceptions -- one line shaped
+        like the next is what lets the eye compare them down the page."""
         text = self._report()
         assert "(Roth IRA, tax-free)" in text
-        assert "(Taxable Brokerage)" in text
-        assert "taxable)" not in text.replace("(Taxable Brokerage)", "")
+        assert "(Brokerage, taxable)" in text
 
     def test_a_position_holding_nothing_is_shown_as_a_dash_not_as_zero(self):
         """It is capacity the solver can use, not a holding; "$0.00" gives it
@@ -434,7 +437,10 @@ class TestOutcomeLine:
             taxable_bond_dollars=Decimal(0),
         )
         text = format_report(inputs([account], target), result)
-        assert "After these trades: 50.0% U.S. / 0.0% international / 50.0% bonds" in text
+        assert (
+            "If filled at the values you entered: "
+            "50.0% U.S. / 0.0% international / 50.0% bonds" in " ".join(text.split())
+        )
 
     def test_a_target_date_sleeve_moves_by_its_own_fractions(self):
         allocation = TargetDateAllocation(
@@ -505,7 +511,8 @@ class TestRequiredWording:
         return format_report(report_inputs, result)
 
     def test_the_disclaimer_always_travels_with_the_report(self):
-        assert "Not investment or tax advice" in self._report()
+        text = self._report()
+        assert "Not investment, tax, or legal advice" in " ".join(text.split())
 
     def test_the_disclaimer_survives_a_report_that_has_trades_and_warnings(self):
         result = RebalanceResult(
@@ -515,6 +522,75 @@ class TestRequiredWording:
         )
         text = self._report(result)
         assert text.rstrip().endswith("situation.")
+
+    def test_the_disclaimer_disclaims_a_recommendation(self):
+        """"Recommendation" is the Reg BI / FINRA 2111 term of art, so
+        disclaiming it is the other half of never using the word above. It is
+        the one clause that survived the cut to two lines; the README's
+        Disclaimer section carries the rest."""
+        text = " ".join(self._report().split())
+        assert "not a recommendation to buy or sell" in text
+
+    def test_the_disclaimer_stays_short_enough_to_be_read(self):
+        """Eight lines of legal prose at the foot of a page is something a
+        reader learns to skip, which costs the disclosure the one thing it is
+        there for."""
+        assert len(wrap(DISCLAIMER).split("\n")) <= 2
+
+    def test_the_outcome_is_conditional_on_the_orders_filling(self):
+        """An order fills at the market's price, not at the figure typed in
+        here, so the landing allocation is arithmetic rather than a promise."""
+        result = RebalanceResult(
+            trades=[trade("Roth", FundType.US_STOCK, "VTI", "sell", "100.00")],
+            warnings=[],
+            taxable_bond_dollars=Decimal(0),
+        )
+        text = " ".join(self._report(result).split())
+        assert "If filled at the values you entered:" in text
+        assert "After these trades:" not in text
+
+    def _taxable_report(self, trades):
+        account = Account(
+            account_type="Brokerage",
+            name="Brokerage",
+            tax_treatment=TaxTreatment.TAXABLE,
+            holdings=[
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1000)),
+                Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1000)),
+            ],
+        )
+        return format_report(
+            inputs([account], self._target()),
+            RebalanceResult(trades=trades, warnings=[], taxable_bond_dollars=Decimal(0)),
+        )
+
+    def test_a_taxable_sale_is_disclosed_as_a_taxable_event(self):
+        """The solver holds taxable selling down but works from dollars
+        traded, not cost basis -- so the report says the sale is realizable
+        without implying it can price it."""
+        text = " ".join(self._taxable_report([
+            trade("Brokerage", FundType.US_STOCK, "VTI", "sell", "100.00"),
+            trade("Brokerage", FundType.US_BOND, "BND", "buy", "100.00"),
+        ]).split())
+        assert "Selling $100.00 in your taxable accounts" in text
+        assert "may realize capital gains or losses" in text
+        assert "no cost basis is collected here, so that tax is not estimated" in text
+
+    def test_a_taxable_purchase_alone_is_not_a_taxable_event(self):
+        """Only the sale leg realizes anything. Warning on a buy would train
+        the reader to scroll past the note that matters."""
+        text = self._taxable_report([
+            trade("Brokerage", FundType.US_BOND, "BND", "buy", "100.00"),
+        ])
+        assert "capital gains or losses" not in text
+
+    def test_a_sheltered_sale_raises_no_capital_gains_note(self):
+        result = RebalanceResult(
+            trades=[trade("Roth", FundType.US_STOCK, "VTI", "sell", "100.00")],
+            warnings=[],
+            taxable_bond_dollars=Decimal(0),
+        )
+        assert "capital gains or losses" not in self._report(result)
 
     def test_no_order_is_phrased_as_an_instruction(self):
         """"Recommendation" is a term of art, and "Place the following
@@ -530,12 +606,28 @@ class TestRequiredWording:
         assert "Recommended trades" not in text
         assert "Place the following orders" not in text
 
+    def test_an_asset_class_is_never_shortened_to_a_class(self):
+        """Bare "class" in a retail investing context reads as *share*
+        class -- Admiral against Investor, Class A against Class C -- and the
+        wash-sale warning uses it in exactly that sense a few lines away."""
+        result = RebalanceResult(
+            trades=[trade("Roth", FundType.US_STOCK, "VTI", "sell", "100.00")],
+            warnings=["two share classes of one index (VTI and VTSAX) slip past it"],
+            taxable_bond_dollars=Decimal(0),
+        )
+        text = " ".join(self._report(result, band_pct=Decimal(5)).split())
+        for bare in ("a class", "the class", "every class", "each class", "one class"):
+            assert bare not in text, bare
+        assert "asset class" in text
+        # ...and the other sense still says which kind of class it means.
+        assert "share classes" in text
+
     def test_tax_free_is_qualified_where_it_is_used(self):
         assert '"Tax-free" means qualified withdrawals' in self._report()
 
     def test_tax_free_is_not_qualified_when_no_account_is_tax_free(self):
         report_inputs = replace(
-            inputs([self._account(TaxTreatment.TAXABLE, "Taxable Brokerage")], self._target())
+            inputs([self._account(TaxTreatment.TAXABLE, "Brokerage")], self._target())
         )
         text = format_report(
             report_inputs, RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
@@ -543,14 +635,14 @@ class TestRequiredWording:
         assert "qualified withdrawals" not in text
 
     def test_figures_say_they_came_from_the_user(self):
-        assert "Values as entered." in self._report()
+        assert "Values as entered, not live market prices." in self._report()
 
     def test_figures_name_the_last_saved_date_when_there_is_one(self):
-        assert "Values as entered; last saved 2026-08-21." in self._report(
+        assert "Values as entered, not live market prices. Last saved 2026-08-21." in self._report(
             values_as_of="2026-08-21"
         )
 
-    def test_dropped_sub_minimum_moves_are_disclosed(self):
+    def test_dropped_sub_minimum_orders_are_disclosed(self):
         result = RebalanceResult(
             trades=[trade("Roth", FundType.US_STOCK, "VTI", "sell", "100.00")],
             warnings=[],
@@ -559,8 +651,23 @@ class TestRequiredWording:
         )
         # Wrapped prose, so match it with the line breaks collapsed.
         text = " ".join(self._report(result).split())
-        assert "2 moves smaller than $1.00 were left out as impractical" in text
-        assert "these orders do not reach the target exactly" in text
+        assert "Two orders smaller than $1.00 were left out as impractical" in text
+        # "the above orders", not "these orders": with a dropped order named in
+        # the same sentence, "these" points at either set.
+        assert "the above orders do not reach the target exactly" in text
+
+    def test_a_single_dropped_order_reads_as_a_sentence(self):
+        """"1 order ... was left out" opens on a numeral, which reads as a
+        fragment. Small counts are spelled out."""
+        result = RebalanceResult(
+            trades=[trade("Roth", FundType.US_STOCK, "VTI", "sell", "100.00")],
+            warnings=[],
+            taxable_bond_dollars=Decimal(0),
+            dropped_trades=1,
+        )
+        text = " ".join(self._report(result).split())
+        assert "One order smaller than $1.00 was left out as impractical" in text
+        assert "1 order" not in text
 
     def test_nothing_is_disclosed_when_nothing_was_dropped(self):
         result = RebalanceResult(
@@ -739,7 +846,7 @@ class TestTerminalWidth:
         monkeypatch.setenv("COLUMNS", "100")
         accounts = [
             Account(
-                account_type="Taxable Brokerage",
+                account_type="Brokerage",
                 name="Brokerage",
                 tax_treatment=TaxTreatment.TAXABLE,
                 holdings=[
@@ -758,3 +865,85 @@ class TestTerminalWidth:
         result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
         text = format_report(inputs(accounts, target), result)
         assert max(len(line) for line in text.split("\n")) <= table_width()
+
+
+class TestRelativeBandInTheReport:
+    """With two rules meeting at whichever is tighter, each class gets its
+    own band -- so the report writes them out instead of naming one number."""
+
+    def _accounts(self):
+        return [
+            Account(
+                account_type="Roth IRA",
+                name="My Roth",
+                tax_treatment=TaxTreatment.TAX_FREE,
+                holdings=[
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(5880)),
+                    Holding(fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(4000)),
+                    Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(120)),
+                ],
+            ),
+        ]
+
+    def _target(self):
+        return TargetAllocation(
+            us_stock_pct=Decimal("58.8"),
+            international_stock_pct=Decimal("36.2"),
+            bond_pct=Decimal(5),
+        )
+
+    def _report(self, relative_band_pct="25"):
+        result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
+        return format_report(
+            inputs(self._accounts(), self._target(), "5", relative_band_pct), result
+        )
+
+    def _band_section(self, text):
+        return text.split("Rebalancing band")[1].split("Your accounts")[0]
+
+    def test_states_both_rules_and_which_one_wins(self):
+        assert (
+            "Plus or minus 5.0 percentage points, or 25.0% of an asset class's own "
+            "target, whichever is tighter"
+        ) in " ".join(self._report().split())
+
+    def test_writes_out_each_class_s_own_band(self):
+        """A reader should not have to work out that a quarter of 5% is 1.2
+        points while a quarter of 58.8% is 14.7."""
+        section = self._band_section(self._report())
+        assert "U.S. stocks           53.8% to 63.8%" in section
+        assert "International stocks  31.2% to 41.2%" in section
+        assert "Bonds                  3.8% to  6.2%" in section
+
+    def test_the_ranges_are_omitted_when_only_the_absolute_rule_applies(self):
+        section = self._band_section(self._report(relative_band_pct=None))
+        assert "Plus or minus 5.0 percentage points." in " ".join(section.split())
+        assert "% to " not in section  # no per-class ranges: one number covers all three
+
+    def test_the_footnote_stops_naming_a_single_band(self):
+        """Bonds at 1.2% against a 3.8% floor are out; U.S. stock at 58.8% is
+        in. One number cannot describe both, so the footnote points at the
+        section that lists them."""
+        text = self._report()
+        assert "-3.8 *" in text
+        assert "* outside its rebalancing band" in text
+        assert "percentage points" not in text.split("Current vs. target")[1]
+
+    def test_the_no_trades_line_stops_naming_a_single_band(self):
+        on_target = [
+            Account(
+                account_type="Roth IRA",
+                name="My Roth",
+                tax_treatment=TaxTreatment.TAX_FREE,
+                holdings=[
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(5880)),
+                    Holding(fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(3620)),
+                    Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(500)),
+                ],
+            ),
+        ]
+        result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
+        text = format_report(inputs(on_target, self._target(), "5", "25"), result)
+        assert "Every asset class is within its rebalancing band -- no trades needed." in (
+            " ".join(text.split())
+        )
