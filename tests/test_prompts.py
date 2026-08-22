@@ -18,7 +18,7 @@ from three_fund_rebalance.prompts import (
     prompt_stock_bond_allocation,
     prompt_str,
     prompt_yes_no,
-    resolve_vt_weighting,
+    resolve_vt_allocation,
 )
 from three_fund_rebalance.vt_allocation import VTAllocationResult, VTFetchError
 
@@ -165,7 +165,7 @@ class TestResolveVtSplit:
             lambda: VTAllocationResult(us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"),
         )
         p = ScriptedPrompter(["y"])
-        result = resolve_vt_weighting(p)
+        result = resolve_vt_allocation(p)
         assert result.us_pct == Decimal("61.9")
         assert result.source == "vanguard_fact_sheet"
 
@@ -176,7 +176,7 @@ class TestResolveVtSplit:
             lambda: VTAllocationResult(us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"),
         )
         p = ScriptedPrompter(["n", "y"])  # reject live, accept cache
-        result = resolve_vt_weighting(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
+        result = resolve_vt_allocation(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
         assert result.us_pct == Decimal(60)
         assert result.source == "cache"
 
@@ -186,7 +186,7 @@ class TestResolveVtSplit:
 
         monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", raise_fetch_error)
         p = ScriptedPrompter(["y"])  # accept cache
-        result = resolve_vt_weighting(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
+        result = resolve_vt_allocation(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
         assert result.us_pct == Decimal(60)
         assert result.source == "cache"
 
@@ -196,7 +196,7 @@ class TestResolveVtSplit:
 
         monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", raise_fetch_error)
         p = ScriptedPrompter(["58"])
-        result = resolve_vt_weighting(p)
+        result = resolve_vt_allocation(p)
         assert result.us_pct == Decimal(58)
         assert result.source == "manual"
 
@@ -206,7 +206,7 @@ class TestResolveVtSplit:
 
         monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", fail_if_called)
         p = ScriptedPrompter(["y"])
-        result = resolve_vt_weighting(p, cached_us_pct=Decimal(60), cached_as_of="last quarter", offline=True)
+        result = resolve_vt_allocation(p, cached_us_pct=Decimal(60), cached_as_of="last quarter", offline=True)
         assert result.us_pct == Decimal(60)
 
 
@@ -230,7 +230,7 @@ class TestPromptAccounts:
         account = accounts[0]
         assert account.name == "My Roth"
         assert account.account_type == "Roth IRA"
-        assert account.tax_treatment == TaxTreatment.TAX_ADVANTAGED
+        assert account.tax_treatment == TaxTreatment.TAX_FREE
         assert account.total_value() == Decimal(10_000)
         assert account.get_holding(FundType.US_STOCK).name == "VTI"
 
@@ -263,7 +263,7 @@ class TestPromptAccounts:
         existing = Account(
             account_type="Roth IRA",
             name="My Roth",
-            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
             holdings=[
                 Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
             ],
@@ -284,7 +284,7 @@ class TestPromptAccounts:
         existing = Account(
             account_type="Roth IRA",
             name="My Roth",
-            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
             holdings=[],
         )
         responses = [
@@ -295,28 +295,43 @@ class TestPromptAccounts:
         accounts = prompt_accounts(p, [existing])
         assert accounts == []
 
-    def test_other_account_type_asks_tax_treatment_explicitly(self):
-        responses = [
+    def _other_account_responses(self, tax_treatment_choice: str) -> list[str]:
+        return [
             "y",  # Add an account?
             "11",  # "Other" is the last entry in ACCOUNT_TYPE_CHOICES
-            "y",  # is it tax-advantaged?
+            tax_treatment_choice,  # how is this account taxed?
             "MyOtherAccount",
             "1",  # holds individual funds
             "n", "n", "n",  # decline all three of them
             "50",  # nonzero cash
             "n",  # Add another account?
         ]
-        p = ScriptedPrompter(responses)
+
+    def test_other_account_type_asks_tax_treatment_explicitly(self):
+        p = ScriptedPrompter(self._other_account_responses("2"))
         accounts = prompt_accounts(p, [])
         assert accounts[0].account_type == "Other"
-        assert accounts[0].tax_treatment == TaxTreatment.TAX_ADVANTAGED
+        assert accounts[0].tax_treatment == TaxTreatment.TAX_DEFERRED
         assert accounts[0].available_cash() == Decimal(50)
+
+    def test_other_account_type_can_be_declared_tax_free(self):
+        """The two shelters are asked apart, not lumped into one yes/no --
+        which one an unrecognized account is decides whether bonds belong
+        there."""
+        p = ScriptedPrompter(self._other_account_responses("3"))
+        accounts = prompt_accounts(p, [])
+        assert accounts[0].tax_treatment == TaxTreatment.TAX_FREE
+
+    def test_other_account_type_can_be_declared_taxable(self):
+        p = ScriptedPrompter(self._other_account_responses("1"))
+        accounts = prompt_accounts(p, [])
+        assert accounts[0].tax_treatment == TaxTreatment.TAXABLE
 
     def test_updating_an_individual_fund_account_offers_only_the_missing_ones(self):
         existing = Account(
             account_type="Roth 401(k)",
             name="401k",
-            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
             holdings=[
                 Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
                 Holding(fund_type=FundType.CASH, name="", value=Decimal(100)),
@@ -346,7 +361,7 @@ class TestPromptAccounts:
         existing = Account(
             account_type="Roth IRA",
             name="Empty Roth",
-            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
             holdings=[Holding(fund_type=FundType.CASH, name="", value=Decimal(500))],
         )
         responses = [
@@ -367,7 +382,7 @@ class TestPromptAccounts:
         existing = Account(
             account_type="Roth 401(k)",
             name="401k",
-            tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
             holdings=[
                 Holding(
                     fund_type=FundType.TARGET_DATE,

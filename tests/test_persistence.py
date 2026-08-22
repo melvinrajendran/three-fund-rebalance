@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 
+from three_fund_rebalance.config import SCHEMA_VERSION
 from three_fund_rebalance.models import (
     Account,
     FundType,
@@ -14,6 +15,7 @@ from three_fund_rebalance.persistence import (
     PersistedConfig,
     PersistenceError,
     _upgrade_v1,
+    _upgrade_v2,
     config_from_dict,
     load_config,
     save_config,
@@ -27,7 +29,7 @@ def sample_config() -> PersistedConfig:
     target_date_account = Account(
         account_type="Roth 401(k)",
         name="Acme 401k",
-        tax_treatment=TaxTreatment.TAX_ADVANTAGED,
+        tax_treatment=TaxTreatment.TAX_DEFERRED,
         holdings=[
             Holding(fund_type=FundType.TARGET_DATE, name="Target 2050", value=Decimal(0), target_date_allocation=allocation),
             Holding(fund_type=FundType.CASH, name="", value=Decimal("125.50")),
@@ -87,7 +89,7 @@ class TestRoundTrip:
         text = path.read_text()
         assert text.endswith("\n")
         parsed = json.loads(text)
-        assert parsed["schema_version"] == 2
+        assert parsed["schema_version"] == SCHEMA_VERSION
         assert parsed["accounts"][0]["name"] == "Acme 401k"
 
 
@@ -150,6 +152,11 @@ MALFORMED = {
         ],
     },
     "percentage is not a string": {"schema_version": 2, "stock_pct": ["80"], "accounts": []},
+    "rebalance band is not a number": {
+        "schema_version": SCHEMA_VERSION,
+        "rebalance_band_pct": "not-a-number",
+        "accounts": [],
+    },
     "account name is null": {
         "schema_version": 2,
         "accounts": [
@@ -310,7 +317,7 @@ class TestSchemaV1Migration:
 
         config = load_config(path)
 
-        assert config.schema_version == 2
+        assert config.schema_version == SCHEMA_VERSION
         assert config.values_as_of == "2026-08-01"
         account, target_date_account = config.accounts
         assert account.total_value() == Decimal(9500)
@@ -322,14 +329,14 @@ class TestSchemaV1Migration:
         assert allocation.us_stock_pct == Decimal(60)
         assert allocation.international_stock_pct == Decimal(20)
 
-    def test_resaving_a_migrated_config_writes_v2(self, tmp_path):
+    def test_resaving_a_migrated_config_writes_the_current_version(self, tmp_path):
         path = tmp_path / "config.json"
         path.write_text(json.dumps(self._v1_payload()))
 
         save_config(path, load_config(path))
 
         written = json.loads(path.read_text())
-        assert written["schema_version"] == 2
+        assert written["schema_version"] == SCHEMA_VERSION
         assert "balances_as_of" not in written
         holdings = {h["fund_type"]: h for h in written["accounts"][0]["holdings"]}
         assert set(holdings) == {"us_stock", "international_stock", "us_bond", "cash"}
@@ -522,3 +529,108 @@ class TestSaveIsAtomic:
             save_config(path, sample_config())
         assert list(tmp_path.glob(".*.tmp")) == []
         assert not path.exists()
+
+
+class TestSchemaV2Migration:
+    """v2 had a single `tax_advantaged` treatment. v3 splits it, because
+    which shelter an account is decides whether bonds belong there. The
+    account's own `account_type` is what says which."""
+
+    def _v2_payload(self, account_type="Roth IRA") -> dict:
+        return {
+            "schema_version": 2,
+            "stock_pct": "80",
+            "bond_pct": "20",
+            "vt_us_pct": "62.0",
+            "vt_as_of": "2026-07-31",
+            "values_as_of": "2026-08-01",
+            "accounts": [
+                {
+                    "account_type": account_type,
+                    "name": "Shelter",
+                    "tax_treatment": "tax_advantaged",
+                    "holdings": [{"fund_type": "us_stock", "name": "VTI", "value": "6000"}],
+                },
+                {
+                    "account_type": "Taxable Brokerage",
+                    "name": "Brokerage",
+                    "tax_treatment": "taxable",
+                    "holdings": [{"fund_type": "us_stock", "name": "VTI", "value": "4000"}],
+                },
+            ],
+        }
+
+    def test_a_roth_becomes_tax_free(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v2_payload("Roth IRA")))
+        config = load_config(path)
+        assert config.schema_version == SCHEMA_VERSION
+        assert config.accounts[0].tax_treatment == TaxTreatment.TAX_FREE
+
+    def test_a_traditional_401k_becomes_tax_deferred(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v2_payload("Traditional 401(k)")))
+        assert load_config(path).accounts[0].tax_treatment == TaxTreatment.TAX_DEFERRED
+
+    def test_an_hsa_becomes_tax_free(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v2_payload("HSA")))
+        assert load_config(path).accounts[0].tax_treatment == TaxTreatment.TAX_FREE
+
+    def test_an_unrecognized_account_type_becomes_tax_deferred(self, tmp_path):
+        """An "Other" account's v2 answer was a yes/no that never recorded
+        which shelter it was. Tax-deferred is the conservative guess: bonds
+        fill it first, which is where they belong."""
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v2_payload("Other")))
+        assert load_config(path).accounts[0].tax_treatment == TaxTreatment.TAX_DEFERRED
+
+    def test_a_taxable_account_is_left_alone(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v2_payload()))
+        assert load_config(path).accounts[1].tax_treatment == TaxTreatment.TAXABLE
+
+    def test_a_v2_file_has_no_band_so_none_is_reported(self, tmp_path):
+        """Absent means "never chosen", so the prompt offers its own default
+        rather than a guess dressed up as the user's saved answer."""
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v2_payload()))
+        assert load_config(path).rebalance_band_pct is None
+
+    def test_upgrade_does_not_mutate_the_caller_s_payload(self):
+        payload = self._v2_payload()
+        _upgrade_v2(payload)
+        assert payload["accounts"][0]["tax_treatment"] == "tax_advantaged"
+        assert payload["schema_version"] == 2
+
+    def test_a_v1_file_walks_all_the_way_to_the_current_version(self, tmp_path):
+        """v1 carries v2's single treatment too, so the two upgrades chain."""
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "balances_as_of": "2026-08-01",
+            "accounts": [{
+                "account_type": "Roth IRA",
+                "name": "Roth",
+                "tax_treatment": "tax_advantaged",
+                "holdings": [{"fund_type": "domestic_equity", "name": "VTI", "balance": "6000"}],
+            }],
+        }))
+        config = load_config(path)
+        assert config.schema_version == SCHEMA_VERSION
+        assert config.accounts[0].tax_treatment == TaxTreatment.TAX_FREE
+        assert config.accounts[0].get_holding(FundType.US_STOCK).value == Decimal(6000)
+
+
+class TestRebalanceBandPersistence:
+    def test_band_survives_a_round_trip(self, tmp_path):
+        path = tmp_path / "config.json"
+        save_config(path, PersistedConfig(rebalance_band_pct=Decimal("5.0")))
+        assert load_config(path).rebalance_band_pct == Decimal("5.0")
+
+    def test_a_band_of_zero_round_trips_as_zero_not_as_absent(self, tmp_path):
+        """Zero is a real answer -- "rebalance me to the exact target" -- and
+        must not come back as "never chosen"."""
+        path = tmp_path / "config.json"
+        save_config(path, PersistedConfig(rebalance_band_pct=Decimal(0)))
+        assert load_config(path).rebalance_band_pct == Decimal(0)

@@ -1,4 +1,4 @@
-"""Fetches VT's (Vanguard Total World Stock ETF) US vs. ex-US stock weighting.
+"""Fetches VT's (Vanguard Total World Stock ETF) US vs. ex-US stock allocation.
 
 This is used to divide a user's stock target into U.S. and international
 stocks, on the theory that VT's market-cap weighting *is* how the world

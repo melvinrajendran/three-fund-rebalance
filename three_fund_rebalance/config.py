@@ -13,10 +13,12 @@ from three_fund_rebalance.models import TaxTreatment
 
 # 2 renamed the fund types and the per-holding fields to the same words the
 # CLI puts on screen (us_stock/international_stock/us_bond/target_date, and
-# `value` for a holding's dollar amount). Version 1 files are still read --
-# persistence._upgrade_v1 translates them on load -- and are rewritten as 2
-# the next time the user saves.
-SCHEMA_VERSION = 2
+# `value` for a holding's dollar amount). 3 split the single `tax_advantaged`
+# treatment into `tax_deferred` and `tax_free`, and added the rebalancing
+# band. Older files are still read -- persistence._upgrade_v1 and
+# _upgrade_v2 translate them on load -- and are rewritten at the current
+# version the next time the user saves.
+SCHEMA_VERSION = 3
 DEFAULT_CONFIG_PATH = Path.home() / ".three_fund_rebalance" / "config.json"
 
 # ---------------------------------------------------------------------------
@@ -26,12 +28,25 @@ DEFAULT_CONFIG_PATH = Path.home() / ".three_fund_rebalance" / "config.json"
 # Fidelity's fractional-share ("Stocks by the Slice") minimum is $1, and it
 # applies the same way in a Roth IRA as in a taxable brokerage account, so
 # the lesser of the two is $1. Trades smaller than this are not actionable
-# and are dropped from the recommendation rather than shown as noise.
+# and are dropped from the plan rather than shown as noise.
 # https://www.fidelity.com/trading/fractional-shares
 MIN_TRADE_DOLLARS = Decimal("1.00")
 
 # ---------------------------------------------------------------------------
-# VT (Vanguard Total World Stock ETF) US / ex-US weighting
+# Rebalancing band
+# ---------------------------------------------------------------------------
+
+# How far an asset class may drift from its target before it is worth
+# correcting, in percentage points of the whole portfolio. Trading to an
+# exact target means every drift, however small, generates trades -- and in a
+# taxable account those trades cost real money to save a rounding error. The
+# long-standing Bogleheads convention is a 5-percentage-point band, so that
+# is the suggested default; 0 restores exact-target behavior.
+# https://www.bogleheads.org/wiki/Rebalancing
+DEFAULT_REBALANCE_BAND_PCT = Decimal(5)
+
+# ---------------------------------------------------------------------------
+# VT (Vanguard Total World Stock ETF) US / ex-US allocation
 # ---------------------------------------------------------------------------
 
 # Primary source: the JSON endpoint backing the fund profile page's country
@@ -61,20 +76,31 @@ FALLBACK_VT_AS_OF = "2026-07-31"
 # Account types
 # ---------------------------------------------------------------------------
 
-# Known account types and whether they shelter growth from current taxation.
-# "Other" is intentionally absent -- prompts.py asks explicitly in that case.
+# Known account types and how each is taxed. The split between the two
+# shelters is what decides where bonds go: contributions deducted now and
+# taxed on withdrawal are TAX_DEFERRED, qualified withdrawals that are never
+# taxed are TAX_FREE. "Other" is intentionally absent -- prompts.py asks
+# explicitly in that case.
 ACCOUNT_TYPE_TAX_TREATMENT: dict[str, TaxTreatment] = {
-    "Roth IRA": TaxTreatment.TAX_ADVANTAGED,
-    "Traditional IRA": TaxTreatment.TAX_ADVANTAGED,
-    "Roth 401(k)": TaxTreatment.TAX_ADVANTAGED,
-    "Traditional 401(k)": TaxTreatment.TAX_ADVANTAGED,
-    "403(b)": TaxTreatment.TAX_ADVANTAGED,
-    "457(b)": TaxTreatment.TAX_ADVANTAGED,
-    "SEP IRA": TaxTreatment.TAX_ADVANTAGED,
-    "SIMPLE IRA": TaxTreatment.TAX_ADVANTAGED,
-    "HSA": TaxTreatment.TAX_ADVANTAGED,
+    "Roth IRA": TaxTreatment.TAX_FREE,
+    "Traditional IRA": TaxTreatment.TAX_DEFERRED,
+    "Roth 401(k)": TaxTreatment.TAX_FREE,
+    "Traditional 401(k)": TaxTreatment.TAX_DEFERRED,
+    "403(b)": TaxTreatment.TAX_DEFERRED,
+    "457(b)": TaxTreatment.TAX_DEFERRED,
+    "SEP IRA": TaxTreatment.TAX_DEFERRED,
+    "SIMPLE IRA": TaxTreatment.TAX_DEFERRED,
+    "HSA": TaxTreatment.TAX_FREE,
     "Taxable Brokerage": TaxTreatment.TAXABLE,
 }
+
+# Longest account nickname accepted. A nickname is a label the user makes up,
+# so unlike a fund's real name it can fairly be bounded -- and it is what
+# makes the account headings run past the page width. Generous enough for the
+# descriptive names brokerages themselves use ("Fidelity Individual Brokerage
+# Account" is 37). Only enforced at the prompt: a longer name in a config file
+# written by an older version still loads.
+MAX_ACCOUNT_NAME_LENGTH = 40
 
 OTHER_ACCOUNT_TYPE = "Other"
 

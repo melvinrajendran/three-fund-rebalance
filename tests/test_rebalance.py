@@ -2,6 +2,7 @@ from decimal import Decimal
 
 import pytest
 
+from three_fund_rebalance.allocation import target_dollar_amounts, target_dollar_bounds
 from three_fund_rebalance.models import (
     Account,
     FundType,
@@ -9,8 +10,14 @@ from three_fund_rebalance.models import (
     TargetAllocation,
     TargetDateAllocation,
     TaxTreatment,
+    to_cents,
 )
-from three_fund_rebalance.rebalance import RebalanceError, compute_trades
+from three_fund_rebalance.rebalance import (
+    _TARGET_FUND_TYPES,
+    RebalanceError,
+    _resolve_allocation,
+    compute_trades,
+)
 
 
 def holding(fund_type, name, value, allocation=None):
@@ -41,7 +48,7 @@ class TestBasicRebalance:
             account(
                 "Roth IRA",
                 "Roth",
-                TaxTreatment.TAX_ADVANTAGED,
+                TaxTreatment.TAX_DEFERRED,
                 [
                     holding(FundType.US_STOCK, "VTI", 600),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 200),
@@ -59,7 +66,7 @@ class TestBasicRebalance:
             account(
                 "Roth IRA",
                 "Roth",
-                TaxTreatment.TAX_ADVANTAGED,
+                TaxTreatment.TAX_DEFERRED,
                 [
                     holding(FundType.US_STOCK, "VTI", 1000),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
@@ -80,14 +87,14 @@ class TestBasicRebalance:
         assert result.warnings == []
 
     def test_zero_value_accounts_return_no_trades(self):
-        accounts = [account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [])]
+        accounts = [account("Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED, [])]
         result = compute_trades(accounts, target(60, 20, 20))
         assert result.trades == []
 
     def test_empty_account_alongside_a_populated_one_is_skipped_cleanly(self):
-        empty_account = account("Roth IRA", "EmptyRoth", TaxTreatment.TAX_ADVANTAGED, [])
+        empty_account = account("Roth IRA", "EmptyRoth", TaxTreatment.TAX_DEFERRED, [])
         populated_account = account(
-            "Traditional IRA", "TradIRA", TaxTreatment.TAX_ADVANTAGED,
+            "Traditional IRA", "TradIRA", TaxTreatment.TAX_DEFERRED,
             [
                 holding(FundType.US_STOCK, "VTI", 1000),
                 holding(FundType.US_BOND, "BND", 0),
@@ -111,11 +118,11 @@ class TestSolverFailure:
         monkeypatch.setattr(rebalance_module, "linprog", lambda **kwargs: FakeFailedResult())
         accounts = [
             account(
-                "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
+                "Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED,
                 [holding(FundType.US_STOCK, "VTI", 100)],
             )
         ]
-        with pytest.raises(RebalanceError, match="Could not find a feasible rebalance"):
+        with pytest.raises(RebalanceError, match="no arrangement of the funds you hold reaches your target"):
             compute_trades(accounts, target(100, 0, 0))
 
 
@@ -123,11 +130,11 @@ class TestValidation:
     def test_duplicate_account_names_rejected(self):
         accounts = [
             account(
-                "Roth IRA", "Same", TaxTreatment.TAX_ADVANTAGED,
+                "Roth IRA", "Same", TaxTreatment.TAX_DEFERRED,
                 [holding(FundType.US_STOCK, "VTI", 100)],
             ),
             account(
-                "Traditional IRA", "Same", TaxTreatment.TAX_ADVANTAGED,
+                "Traditional IRA", "Same", TaxTreatment.TAX_DEFERRED,
                 [holding(FundType.US_STOCK, "VTI", 100)],
             ),
         ]
@@ -165,7 +172,7 @@ class TestValidation:
         )
         accounts = [
             account(
-                "Roth 401(k)", "401k", TaxTreatment.TAX_ADVANTAGED,
+                "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
                 [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
             ),
             account(
@@ -183,11 +190,11 @@ class TestValidation:
 class TestBondsPreferTaxAdvantaged:
     def test_bonds_fill_tax_advantaged_before_taxable_when_room_exists(self):
         tax_adv_1 = account(
-            "Roth IRA", "Roth1", TaxTreatment.TAX_ADVANTAGED,
+            "Roth IRA", "Roth1", TaxTreatment.TAX_DEFERRED,
             [holding(FundType.US_STOCK, "VTI", 2000), holding(FundType.US_BOND, "BND", 0)],
         )
         tax_adv_2 = account(
-            "Traditional 401(k)", "401k", TaxTreatment.TAX_ADVANTAGED,
+            "Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
             [holding(FundType.US_STOCK, "VTI", 3000), holding(FundType.US_BOND, "BND", 0)],
         )
         taxable = account(
@@ -214,7 +221,7 @@ class TestBondsPreferTaxAdvantaged:
 
     def test_bonds_overflow_to_taxable_when_tax_advantaged_insufficient(self):
         small_roth = account(
-            "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
+            "Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED,
             [holding(FundType.US_STOCK, "VTI", 100), holding(FundType.US_BOND, "BND", 0)],
         )
         big_taxable = account(
@@ -262,7 +269,7 @@ class TestInternationalPlacement:
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                 holding(FundType.CASH, "", 10_000),
             ]),
-            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED, [
                 holding(FundType.US_STOCK, "VTI", 0),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                 holding(FundType.CASH, "", 10_000),
@@ -286,7 +293,7 @@ class TestInternationalPlacement:
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                 holding(FundType.CASH, "", 10_000),
             ]),
-            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED, [
                 holding(FundType.US_STOCK, "VTI", 0),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
             ]),
@@ -307,7 +314,7 @@ class TestInternationalPlacement:
                 holding(FundType.US_STOCK, "VTI", 10_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
             ]),
-            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED, [
                 holding(FundType.US_STOCK, "VTI", 10_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
             ]),
@@ -328,7 +335,7 @@ class TestInternationalPlacement:
                 holding(FundType.US_BOND, "BND", 0),
                 holding(FundType.CASH, "", 10_000),
             ]),
-            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED, [
                 holding(FundType.US_STOCK, "VTI", 0),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
                 holding(FundType.US_BOND, "BND", 0),
@@ -353,7 +360,7 @@ class TestInternationalPlacement:
                 holding(FundType.US_STOCK, "VTI", 10_000),
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
             ]),
-            account("Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED, [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED, [
                 holding(FundType.TARGET_DATE, "Target 2050", 10_000,
                         allocation=self.TARGET_DATE_ALLOCATION),
             ]),
@@ -369,7 +376,7 @@ class TestTargetDateFunds:
         )
         accounts = [
             account(
-                "Roth 401(k)", "401k", TaxTreatment.TAX_ADVANTAGED,
+                "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
                 [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
             )
         ]
@@ -385,7 +392,7 @@ class TestTargetDateFunds:
         )
         accounts = [
             account(
-                "Roth 401(k)", "401k", TaxTreatment.TAX_ADVANTAGED,
+                "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
                 [holding(FundType.TARGET_DATE, "TargetFund", 5000, allocation=target_date_alloc)],
             ),
             account(
@@ -421,7 +428,7 @@ class TestTargetDateFunds:
                 [holding(FundType.TARGET_DATE, "Target 2050", 5000, allocation=target_date_alloc)],
             ),
             account(
-                "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
+                "Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(FundType.US_STOCK, "VTI", 5000),
                     holding(FundType.US_BOND, "BND", 0),
@@ -497,7 +504,7 @@ class TestPerAccountConservation:
         # yields repeating-decimal dollar targets.
         accounts = [
             account(
-                "Roth IRA", "Fidelity Roth", TaxTreatment.TAX_ADVANTAGED,
+                "Roth IRA", "Fidelity Roth", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(FundType.US_STOCK, "VTI", 20_000),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
@@ -505,7 +512,7 @@ class TestPerAccountConservation:
                 ],
             ),
             account(
-                "Traditional 401(k)", "Acme 401k", TaxTreatment.TAX_ADVANTAGED,
+                "Traditional 401(k)", "Acme 401k", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(FundType.US_STOCK, "VTI", 40_000),
                     holding(FundType.US_BOND, "BND", 10_000),
@@ -538,7 +545,7 @@ class TestPerAccountConservation:
     def test_odd_cent_values_still_conserve(self):
         accounts = [
             account(
-                "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
+                "Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(FundType.US_STOCK, "VTI", Decimal("3333.33")),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", Decimal("3333.33")),
@@ -561,7 +568,7 @@ class TestPerAccountConservation:
         # the classic largest-remainder stress case.
         accounts = [
             account(
-                "Roth IRA", f"Acct{i}", TaxTreatment.TAX_ADVANTAGED,
+                "Roth IRA", f"Acct{i}", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(FundType.US_STOCK, "VTI", value),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
@@ -585,7 +592,7 @@ class TestMinimumTradeThreshold:
     def test_sub_dollar_drift_is_not_traded(self):
         accounts = [
             account(
-                "Roth IRA", "Roth", TaxTreatment.TAX_ADVANTAGED,
+                "Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(FundType.US_STOCK, "VTI", Decimal("600.50")),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", Decimal("399.50")),
@@ -594,3 +601,414 @@ class TestMinimumTradeThreshold:
         ]
         result = compute_trades(accounts, target(60, 40, 0))
         assert result.trades == []
+
+
+class TestShelterTypeBondLocation:
+    """Phase 4. Both shelters are exempt from tax today, so phase 1 is
+    indifferent between them; what separates them is that a Roth or HSA never
+    taxes the growth it shelters, which makes it the wrong place for the
+    lowest-returning asset class."""
+
+    def _roth_and_traditional(self):
+        return [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "VTI", 50_000),
+                holding(FundType.US_BOND, "BND", 0),
+            ]),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_STOCK, "VTI", 50_000),
+                holding(FundType.US_BOND, "BND", 0),
+            ]),
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 40_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 60_000),
+            ]),
+        ]
+
+    def test_bonds_fill_tax_deferred_space_before_tax_free_space(self):
+        """Both shelters are the same size and hold the same funds, so this is
+        a tie for every phase except this one -- and before phase 4 existed
+        the solver resolved it by putting the whole bond sleeve in the Roth."""
+        result = compute_trades(self._roth_and_traditional(), target(49.6, 30.4, 20))
+        trades = trades_by_key(result)
+        assert trades[("401k", "BND")] == ("buy", Decimal("40000.00"))
+        assert ("Roth", "BND") not in trades
+        assert ("Roth", "VTI") not in trades
+
+    def test_bonds_overflow_into_tax_free_space_once_tax_deferred_is_full(self):
+        """The preference is an ordering, not a prohibition: a bond target
+        larger than the tax-deferred account still gets held, and the excess
+        goes to the Roth rather than to taxable."""
+        accounts = [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "VTI", 50_000),
+                holding(FundType.US_BOND, "BND", 0),
+            ]),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_BOND, "BND", 20_000),
+            ]),
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 30_000),
+            ]),
+        ]
+        result = compute_trades(accounts, target(50, 0, 50))
+        assert result.taxable_bond_dollars == Decimal(0)
+        # $50,000 of bonds needed, only $20,000 of tax-deferred room.
+        assert trades_by_key(result)[("Roth", "BND")] == ("buy", Decimal("30000.00"))
+
+    def test_will_not_sell_in_taxable_to_move_bonds_between_shelters(self):
+        """Phase 4 sits below the taxable-trading objective, so relocating
+        bonds from a Roth to a 401(k) is worth doing only when it is free."""
+        accounts = [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_BOND, "BND", 20_000),
+            ]),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_STOCK, "VTI", 20_000),
+            ]),
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 60_000),
+            ]),
+        ]
+        # Every account holds one fund, so its value is pinned: the only way
+        # to empty the Roth of bonds would be to trade in taxable, and phase 2
+        # outranks phase 4.
+        result = compute_trades(accounts, target(80, 0, 20))
+        assert result.trades == []
+
+
+class TestWashSaleAvoidance:
+    """Phase 3 and its warning. Selling at a loss and repurchasing the same
+    security inside an IRA destroys the loss outright rather than deferring
+    it, so the solver avoids the arrangement where it can and says so where
+    it cannot."""
+
+    def test_warns_when_a_taxable_sale_and_a_sheltered_purchase_cannot_be_separated(self):
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 90_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_BOND, "BND", 40_000),
+                holding(FundType.US_STOCK, "VTI", 10_000),
+            ]),
+        ]
+        result = compute_trades(accounts, target(49.6, 30.4, 20))
+        trades = trades_by_key(result)
+        # The Roth holds only these two funds, so shedding bonds has nowhere
+        # to go but VTI -- the very fund taxable is selling.
+        assert trades[("Brokerage", "VTI")][0] == "sell"
+        assert trades[("Roth", "VTI")][0] == "buy"
+        warning = "\n".join(result.warnings)
+        assert "VTI" in warning
+        assert "wash sale" in warning
+        assert "$10,000.00" in warning
+
+    def test_no_warning_when_the_taxable_sale_is_of_a_different_fund(self):
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 60_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 40_000),
+            ]),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_STOCK, "FSKAX", 20_000),
+                holding(FundType.US_BOND, "BND", 30_000),
+            ]),
+        ]
+        result = compute_trades(accounts, target(49.6, 30.4, 20))
+        assert result.warnings == []
+
+    def test_selling_and_buying_the_same_fund_within_taxable_is_not_a_wash_warning(self):
+        """Two taxable accounts are not the sheltered leg the rule is about --
+        an ordinary wash sale between them at least preserves the basis."""
+        accounts = [
+            account("Taxable Brokerage", "One", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 50_000),
+            ]),
+            account("Taxable Brokerage", "Two", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 20_000),
+                holding(FundType.US_BOND, "BND", 30_000),
+            ]),
+        ]
+        result = compute_trades(accounts, target(70, 0, 30))
+        assert all("wash sale" not in w for w in result.warnings)
+
+    def test_fund_names_are_matched_ignoring_case_and_surrounding_space(self):
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, " vti ", 90_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_BOND, "BND", 40_000),
+                holding(FundType.US_STOCK, "VTI", 10_000),
+            ]),
+        ]
+        result = compute_trades(accounts, target(49.6, 30.4, 20))
+        assert any("wash sale" in w for w in result.warnings)
+
+    def test_an_empty_taxable_slot_does_not_suppress_a_sheltered_purchase(self):
+        """A taxable holding of zero cannot be sold, so it cannot pair into a
+        wash sale -- and must not stand in the way of the international fund
+        being moved out of tax-advantaged space, which is phase 5's job."""
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.CASH, "", 10_000),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
+            ]),
+        ]
+        trades = trades_by_key(compute_trades(accounts, target(50, 50, 0)))
+        assert trades[("Brokerage", "VXUS")][0] == "buy"
+        assert trades[("Roth", "VTI")][0] == "buy"
+
+
+class TestRebalancingBand:
+    """The three asset-class targets are ranges, not points."""
+
+    def _drifted(self):
+        # 51.67/31.67/16.67 against a 49.6/30.4/20 target: at most 3.3 points
+        # out, which a 5-point band tolerates and an exact target does not.
+        return [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 58_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 38_000),
+            ]),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_BOND, "BND", 20_000),
+                holding(FundType.US_STOCK, "VTI", 4_000),
+            ]),
+        ]
+
+    def test_drift_inside_the_band_is_left_alone(self):
+        result = compute_trades(self._drifted(), target(49.6, 30.4, 20), Decimal(5))
+        assert result.trades == []
+
+    def test_the_same_drift_is_traded_away_without_a_band(self):
+        """The band is what changes the answer here, not the portfolio."""
+        result = compute_trades(self._drifted(), target(49.6, 30.4, 20), Decimal(0))
+        assert trades_by_key(result)[("Brokerage", "VXUS")][0] == "sell"
+
+    def test_a_band_does_not_stop_cash_being_invested(self):
+        """An account's total is still an equality, so its cash is spent
+        whatever the band says -- new money is the cheapest way to rebalance
+        and the band must not suppress it."""
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 50_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 30_000),
+                holding(FundType.CASH, "", 10_000),
+            ]),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_BOND, "BND", 20_000),
+            ]),
+        ]
+        result = compute_trades(accounts, target(49.6, 30.4, 20), Decimal(5))
+        bought = sum(t.amount for t in result.trades if t.action == "buy")
+        sold = sum(t.amount for t in result.trades if t.action == "sell")
+        assert bought - sold == Decimal("10000.00")
+
+    def test_a_band_can_make_an_otherwise_unreachable_target_reachable(self):
+        """An account holding a single fund pins that fund's share of the
+        portfolio: $60,000 of a $100,000 portfolio is 60% U.S. stock and
+        cannot be less, so a 50% target is unreachable exactly -- but a
+        10-point band reaches it."""
+        accounts = [
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_STOCK, "VTI", 60_000),
+            ]),
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 20_000),
+                holding(FundType.US_BOND, "BND", 20_000),
+            ]),
+        ]
+        with pytest.raises(RebalanceError, match="cannot hold less"):
+            compute_trades(accounts, target(50, 25, 25), Decimal(0))
+        # No exception is the assertion: the band brings the floor into reach.
+        compute_trades(accounts, target(50, 25, 25), Decimal(10))
+
+    def test_the_band_edge_is_named_when_it_is_what_makes_a_target_unreachable(self):
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 100_000),
+            ]),
+        ]
+        with pytest.raises(RebalanceError, match="edge of your rebalancing band"):
+            compute_trades(accounts, target(50, 0, 50), Decimal(10))
+
+
+class TestCentResidualDistribution:
+    def test_a_split_that_does_not_divide_into_cents_still_conserves_the_account(self):
+        """Three near-equal targets against an odd total cannot all land on a
+        whole cent, so rounding each slot independently leaves the account a
+        cent off its own value. `_distribute_residual` places that cent where
+        rounding moved furthest the other way.
+
+        Worth keeping deliberately: the solver now lands on exact cents in
+        most scenarios, so nothing else in this file exercises the path.
+        """
+        accounts = [
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", "3333.33"),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", "3333.33"),
+                holding(FundType.US_BOND, "BND", "3333.35"),
+            ]),
+        ]
+        total_before = accounts[0].total_value()
+        result = compute_trades(accounts, target("33.4", "33.3", "33.3"))
+
+        bought = sum((t.amount for t in result.trades if t.action == "buy"), Decimal(0))
+        sold = sum((t.amount for t in result.trades if t.action == "sell"), Decimal(0))
+        assert bought == sold, "an account cannot spend more than it holds"
+        assert total_before == Decimal("10000.01")
+        for trade in result.trades:
+            assert trade.amount == trade.amount.quantize(Decimal("0.01"))
+
+
+class TestAllocationIsSettledBeforeLocation:
+    """The regression this class exists for: the location phases are stated
+    as "minimize this asset class in that kind of account", which only means
+    "relocate it" while the class total is fixed. When the band left those
+    totals as ranges, they could satisfy themselves by holding *less* of the
+    asset class instead of moving it -- selling international rather than
+    relocating it, and liquidating a bond fund to clear tax-free space in a
+    portfolio that was already underweight bonds."""
+
+    def _in_band_portfolio(self):
+        # Every class inside a 5-point band of a 58.8/36.2/5.0 target, with
+        # international parked in a Roth and a taxable account that has no
+        # room to take it -- so phase 5 has no legal way to relocate, and
+        # phase 4 has nowhere to move the Roth's bonds to.
+        target_date = TargetDateAllocation(
+            us_stock_pct=Decimal("64.1"),
+            international_stock_pct=Decimal("34.34"),
+            bond_pct=Decimal("1.56"),
+        )
+        return [
+            account("Traditional 401(k)", "Trad 401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.TARGET_DATE, "Target 2070", "45850.88", target_date),
+            ]),
+            account("Roth 401(k)", "Roth 401k", TaxTreatment.TAX_FREE, [
+                holding(FundType.TARGET_DATE, "Target 2070", "10966.76", target_date),
+            ]),
+            account("Roth IRA", "Roth IRA", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "FZROX", "22549.52"),
+                holding(FundType.INTERNATIONAL_STOCK, "FZILX", "15491.08"),
+                holding(FundType.US_BOND, "FXNAX", "400.67"),
+            ]),
+            account("Taxable Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", "6663.90"),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", "4895.78"),
+            ]),
+        ]
+
+    def test_an_in_band_portfolio_is_left_alone_when_no_free_relocation_exists(self):
+        accounts = self._in_band_portfolio()
+        result = compute_trades(accounts, target("58.805", "36.195", 5), Decimal(5))
+        assert result.trades == []
+
+    def test_the_same_portfolio_still_rebalances_to_target_without_a_band(self):
+        """The band is what changes the answer -- and when it does trade, it
+        trades toward the bond target, not away from it."""
+        accounts = self._in_band_portfolio()
+        trades = trades_by_key(compute_trades(accounts, target("58.805", "36.195", 5), Decimal(0)))
+        assert trades[("Roth IRA", "FXNAX")][0] == "buy"
+
+    def test_a_location_phase_never_sells_an_asset_class_down_into_the_band(self):
+        """Underweight bonds held in tax-free space: phase 4 would rather
+        they were in a 401(k), but the only 401(k) here is a target-date fund
+        that cannot be reached into. Preferring less bonds over relocated
+        bonds is the failure mode."""
+        accounts = self._in_band_portfolio()
+        result = compute_trades(accounts, target("58.805", "36.195", 5), Decimal(5))
+        sold = sum(
+            (t.amount for t in result.trades if t.action == "sell" and t.fund_name == "FXNAX"),
+            Decimal(0),
+        )
+        assert sold == Decimal(0)
+
+
+class TestResolveAllocation:
+    """The step that decides what each asset class should be worth, before
+    anything decides where to hold it."""
+
+    def _bounds(self, band):
+        target_allocation = target(50, 30, 20)
+        return target_dollar_amounts(target_allocation, Decimal(100_000)), target_dollar_bounds(
+            target_allocation, Decimal(100_000), Decimal(band)
+        )
+
+    def _unconstrained_reach(self):
+        return {fund_type: (0.0, 100_000.0) for fund_type in _TARGET_FUND_TYPES}
+
+    def test_an_allocation_inside_the_band_is_left_exactly_where_it_is(self):
+        targets, bounds = self._bounds(band=5)
+        current = {
+            "us_stock": Decimal(53_000),
+            "international_stock": Decimal(28_000),
+            "bond": Decimal(19_000),
+        }
+        resolved = _resolve_allocation(
+            current, targets, bounds, self._unconstrained_reach(), Decimal(100_000)
+        )
+        assert resolved == current
+
+    def test_an_allocation_outside_the_band_moves_only_as_far_as_the_edge(self):
+        """Not all the way back to target: the band edge is the point at
+        which there is no longer anything to correct. Only U.S. stock is
+        determined here -- once it stops at its ceiling the remaining
+        $45,000 can be split anywhere the two other bands allow, and every
+        such split is equally far from target."""
+        targets, bounds = self._bounds(band=5)
+        current = {
+            "us_stock": Decimal(65_000),
+            "international_stock": Decimal(25_000),
+            "bond": Decimal(10_000),
+        }
+        resolved = _resolve_allocation(
+            current, targets, bounds, self._unconstrained_reach(), Decimal(100_000)
+        )
+        # To the cent: the two objectives are carried forward with the
+        # solver's usual slack, which is deliberately finer than a cent but
+        # not exact. Everything downstream rounds to cents anyway.
+        assert to_cents(resolved["us_stock"]) == Decimal("55000.00")  # ceiling, not 50,000
+        for key, (low, high) in bounds.items():
+            assert low <= resolved[key] <= high
+
+    def test_cash_is_steered_at_whatever_is_furthest_below_target(self):
+        """Investing new money is the one way of rebalancing that costs
+        nothing, so it goes where it does the most good."""
+        targets, bounds = self._bounds(band=5)
+        # $90,000 invested plus $10,000 of cash; bonds are the laggard.
+        current = {
+            "us_stock": Decimal(50_000),
+            "international_stock": Decimal(30_000),
+            "bond": Decimal(10_000),
+        }
+        resolved = _resolve_allocation(
+            current, targets, bounds, self._unconstrained_reach(), Decimal(100_000)
+        )
+        assert sum(resolved.values()) == Decimal(100_000)
+        # The whole $10,000 goes to bonds -- which is enough to reach the
+        # bond target outright, so it stops there rather than at the band
+        # edge, and nothing else has to be sold to get there.
+        assert resolved["bond"] == Decimal(20_000)
+        assert resolved["us_stock"] == Decimal(50_000)
+        assert resolved["international_stock"] == Decimal(30_000)
+
+    def test_the_resolved_total_never_exceeds_what_the_accounts_can_hold(self):
+        targets, bounds = self._bounds(band=5)
+        current = {
+            "us_stock": Decimal(60_000),
+            "international_stock": Decimal(30_000),
+            "bond": Decimal(10_000),
+        }
+        reach = dict(self._unconstrained_reach())
+        reach[FundType.US_BOND] = (0.0, 12_000.0)  # nothing can hold more bonds than this
+        resolved = _resolve_allocation(current, targets, bounds, reach, Decimal(100_000))
+        assert resolved["bond"] <= Decimal(12_000)
