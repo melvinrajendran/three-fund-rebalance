@@ -107,7 +107,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
         try:
             config = load_config(args.config)
         except PersistenceError as exc:
-            prompter.say(
+            prompter.say_wrapped(
                 f"Warning: could not read your saved portfolio at {args.config} "
                 f"({exc}). Starting from scratch."
             )
@@ -156,7 +156,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
     try:
         result = compute_trades(accounts, target, band_pct)
     except RebalanceError as exc:
-        prompter.say(f"\nCould not compute a rebalance: {exc}")
+        prompter.say_wrapped(f"\nCould not compute a rebalance: {exc}")
         return 1
 
     inputs = RebalanceInputs(
