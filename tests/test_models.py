@@ -194,13 +194,13 @@ class TestAccount:
 
     def test_available_cash_defaults_to_zero(self):
         account = Account(
-            account_type="Taxable Brokerage", name="Brokerage", tax_treatment=TaxTreatment.TAXABLE
+            account_type="Brokerage", name="Brokerage", tax_treatment=TaxTreatment.TAXABLE
         )
         assert account.available_cash() == Decimal(0)
 
     def test_available_cash_reads_cash_holding(self):
         account = Account(
-            account_type="Taxable Brokerage",
+            account_type="Brokerage",
             name="Brokerage",
             tax_treatment=TaxTreatment.TAXABLE,
             holdings=[Holding(fund_type=FundType.CASH, name="", value=Decimal(250))],
@@ -209,7 +209,7 @@ class TestAccount:
 
     def test_is_tax_advantaged(self):
         taxable = Account(
-            account_type="Taxable Brokerage", name="B", tax_treatment=TaxTreatment.TAXABLE
+            account_type="Brokerage", name="B", tax_treatment=TaxTreatment.TAXABLE
         )
         sheltered = Account(
             account_type="Roth IRA", name="R", tax_treatment=TaxTreatment.TAX_DEFERRED

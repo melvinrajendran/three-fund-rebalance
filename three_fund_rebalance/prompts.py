@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation
 from three_fund_rebalance.config import (
     ACCOUNT_TYPE_CHOICES,
     DEFAULT_REBALANCE_BAND_PCT,
+    DEFAULT_REBALANCE_RELATIVE_BAND_PCT,
     FALLBACK_VT_US_PCT,
     MAX_ACCOUNT_NAME_LENGTH,
     VT_FACT_SHEET_URL,
@@ -58,10 +59,10 @@ _HOLDING_KIND_CHOICES = [_INDIVIDUAL_FUNDS_CHOICE, _TARGET_DATE_CHOICE]
 # "tax-free" is exactly the distinction someone picking "Other" may not have
 # the vocabulary for -- and it is the one that decides where bonds go.
 _TAX_TREATMENT_BY_CHOICE: dict[str, TaxTreatment] = {
-    "Taxable -- I pay tax on dividends and gains every year": TaxTreatment.TAXABLE,
-    "Tax-deferred -- contributions go in untaxed, withdrawals are taxed "
+    "Taxable -- dividends taxed each year, gains taxed when I sell": TaxTreatment.TAXABLE,
+    "Tax-deferred -- pre-tax now, taxed on withdrawal "
     "(traditional 401(k)/IRA)": TaxTreatment.TAX_DEFERRED,
-    "Tax-free -- contributions are taxed, qualified withdrawals are not "
+    "Tax-free -- after-tax now, qualified withdrawals untaxed "
     "(Roth, HSA)": TaxTreatment.TAX_FREE,
 }
 
@@ -171,13 +172,22 @@ def prompt_decimal(
         return value
 
 
-def prompt_percent(prompter: Prompter, text: str, *, default: Decimal | None = None) -> Decimal:
-    """Ask for a percentage. One place for the 0-100 bounds, for the "(%)"
-    the question carries, and for how a default is shown -- which is what
-    stops one prompt offering [80] while the next offers [62.0]."""
+def prompt_percent(
+    prompter: Prompter, text: str, *, default: Decimal | None = None, unit: str = "%"
+) -> Decimal:
+    """Ask for a percentage. One place for the 0-100 bounds, for the unit the
+    question carries, and for how a default is shown -- which is what stops
+    one prompt offering [80] while the next offers [62.0].
+
+    `unit` is "%" for a share of something and "pts" for a distance between
+    two percentages -- the same split the report keeps. The band's two halves
+    are the one pair of questions where both appear side by side, and asking
+    for "5 (%)" of drift next to "25 (%)" of a target is exactly how they get
+    read as the same kind of number.
+    """
     return prompt_decimal(
         prompter,
-        f"{text} (%)",
+        f"{text} ({unit})",
         default=default,
         default_text=None if default is None else format_percent(default),
         min_value=Decimal(0),
@@ -272,18 +282,62 @@ def prompt_stock_bond_allocation(
 # --------------------------------------------------------------------------
 
 
-def prompt_rebalance_band(prompter: Prompter, *, default: Decimal | None = None) -> Decimal:
-    """How far an asset class may drift before it's worth correcting.
+#: Said once, above both halves of the band. The flow otherwise asks bare
+#: questions and lets the report explain, but the relative half is the one
+#: question nobody can answer from its own label: "or by more than this share
+#: of its own target" reads as an alternative when it is in fact a second,
+#: tighter limit, and the reason it exists -- that five points of drift is the
+#: whole of a 5% bond sleeve -- is invisible from the prompt.
+#:
+#: Worded the way a rebalancing policy is written in an investment policy
+#: statement -- a class "deviates from its target" by more than "the lesser
+#: of" two bands -- so the sentence carries all the semantics and each
+#: question below is left to name only its own unit.
+#:
+#: The vocabulary is the one the Bogleheads wiki and Larry Swedroe use, since
+#: that is where a reader who wants to check the defaults will end up:
+#: "rebalancing band", "asset class", a portfolio that "deviates" from its
+#: target. See config.DEFAULT_REBALANCE_BAND_PCT for the wiki link and for
+#: the 5/25 rule the defaults come from.
+#:
+#: One sentence. Earlier drafts also named the rule, said what the relative
+#: band is for, and noted that zero turns the band off -- all true, and all
+#: cut back to the thing a reader needs in order to answer the two questions
+#: below it. The report's own "Rebalancing band" section is where the band's
+#: effect is visible, and it writes out the resulting ranges per class.
+BAND_EXPLANATION = (
+    "Rebalance an asset class when it deviates from its target by more than the lesser "
+    "of these two bands."
+)
 
-    Asked bare, like every other question in the flow: the band is explained
-    where its effect is visible, in the report's own "Rebalancing band"
-    section, rather than in a wall of preamble the user reads once and then
-    scrolls past on every subsequent run.
+
+def prompt_rebalance_band(prompter: Prompter, *, default: Decimal | None = None) -> Decimal:
+    """The absolute band: percentage points of the whole portfolio.
+
+    "Absolute band" and "relative band" are the industry's own names for the
+    two halves, and the same words `rebalance_band_pct` and
+    `rebalance_relative_band_pct` are named after. With BAND_EXPLANATION
+    above them they read as two settings of one policy; each question then
+    only has to say which unit it wants, which is the part that was actually
+    ambiguous.
     """
     return prompt_percent(
         prompter,
-        "Rebalance when an asset class is off target by more than",
+        "Absolute band, in percentage points of the portfolio",
         default=default if default is not None else DEFAULT_REBALANCE_BAND_PCT,
+        unit="pts",
+    )
+
+
+def prompt_relative_rebalance_band(
+    prompter: Prompter, *, default: Decimal | None = None
+) -> Decimal:
+    """The relative band: a share of the class's own target, so it scales
+    with the target where the absolute band does not."""
+    return prompt_percent(
+        prompter,
+        "Relative band, as a share of the asset class's target",
+        default=default if default is not None else DEFAULT_REBALANCE_RELATIVE_BAND_PCT,
     )
 
 
@@ -417,10 +471,10 @@ def _prompt_holdings(prompter: Prompter, tax_treatment: TaxTreatment) -> list[Ho
     has_bonds = any(h.fund_type in (FundType.US_BOND, FundType.TARGET_DATE) for h in holdings)
     if tax_treatment == TaxTreatment.TAXABLE and has_bonds:
         prompter.say_wrapped(
-            "Note: bonds in a taxable account (including inside a target-date fund) pay "
-            "interest taxed as income each year. Where there is room, the rebalance holds "
-            "bonds in your tax-advantaged accounts, preferring tax-deferred ones -- a "
-            "common asset-location convention, not a prediction."
+            "Note: bonds in a taxable account (target-date funds included) pay interest "
+            "taxed yearly as ordinary income, so where there is room this plan holds "
+            "bonds in tax-advantaged accounts, tax-deferred first -- a common convention, "
+            "not a prediction."
         )
 
     cash_holding = _prompt_cash(prompter)
@@ -520,6 +574,18 @@ def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Ac
     )
 
 
+def _and_list(items: list[str]) -> str:
+    """Join names as running prose rather than as a bare comma list, so the
+    line they sit in is a sentence: "A", "A and B", "A, B, and C".
+
+    Two items take no comma -- the serial comma separates three or more, and
+    "A, and B" reads as a stray one.
+    """
+    if len(items) <= 2:
+        return " and ".join(items)
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
 def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> list[Account]:
     accounts: list[Account] = []
     if existing_accounts:
@@ -527,7 +593,7 @@ def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> lis
         noun = "account" if len(existing_accounts) == 1 else "accounts"
         prompter.say_wrapped(
             f"You have {len(existing_accounts)} saved {noun}: "
-            f"{', '.join(a.name for a in existing_accounts)}"
+            f"{_and_list([a.name for a in existing_accounts])}."
         )
         for existing in existing_accounts:
             prompter.say("")

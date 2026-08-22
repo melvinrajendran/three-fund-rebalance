@@ -3,7 +3,7 @@
 This is the program's product, not another prompt, so it restates everything
 it was given -- the target allocation and where it came from, the rebalancing
 band, and the accounts and holdings it was computed against -- before showing
-the current-vs-target comparison, the trades, and where those trades land.
+the current-vs-target comparison, the orders to place, and where they land.
 Read on its own, with no scrollback, it should still say what was asked for,
 what to do, and what the result will be.
 
@@ -30,7 +30,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from decimal import Decimal
 
-from three_fund_rebalance.allocation import target_dollar_amounts
+from three_fund_rebalance.allocation import (
+    effective_band_points,
+    target_dollar_amounts,
+    target_percentages,
+)
 from three_fund_rebalance.config import MIN_TRADE_DOLLARS
 from three_fund_rebalance.formatting import (
     ASSET_CLASS_LABELS,
@@ -64,6 +68,23 @@ _COMPONENT_GETTERS = {
     "Bonds": Holding.bond_component,
 }
 
+#: Closes every report, because the report is the artifact that gets
+#: screenshotted and acted on days later -- a disclaimer that lives only in
+#: the README does not travel with it.
+#:
+#: Two clauses. "Not advice" is the substance; "not a recommendation" is the
+#: Reg BI / FINRA 2111 term of art, and disclaiming it is the other half of
+#: never using the word anywhere above. A longer draft also disclaimed the
+#: advisory relationship, order placement and trademark use -- all true, and
+#: all cut, because eight lines of legal prose at the foot of a page is
+#: something a reader learns to skip, which costs the disclosure the one
+#: thing it is there for. The README's Disclaimer section carries the full
+#: set; --version carries the non-affiliation half.
+DISCLAIMER = (
+    "Not investment, tax, or legal advice, and not a recommendation to buy or sell. "
+    "Consult a professional about your situation."
+)
+
 
 @dataclass(frozen=True)
 class RebalanceInputs:
@@ -77,6 +98,10 @@ class RebalanceInputs:
     target: TargetAllocation
     band_pct: Decimal
     accounts: list[Account]
+    # The other half of the band: a share of each class's own target. None
+    # when only the absolute half applies -- distinct from 0, which tolerates
+    # no drift at all.
+    relative_band_pct: Decimal | None = None
     # When the saved values were last written, if they came from a config
     # file. None when everything was typed this session.
     values_as_of: str | None = None
@@ -110,8 +135,23 @@ def _money(amount: Decimal) -> str:
     return f"${amount:,.2f}"
 
 
+#: Small counts are spelled out, because the only place one appears starts a
+#: sentence -- and "1 order smaller than $1.00 was left out" opens on a
+#: numeral, which reads as a fragment rather than a sentence. Nine is where
+#: the usual editorial rule stops; past it the figure is both correct and
+#: vanishingly unlikely, since it would take ten separate sub-dollar orders.
+_COUNT_WORDS = ("", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine")
+
+
+def _count(n: int) -> str:
+    return _COUNT_WORDS[n] if 1 <= n < len(_COUNT_WORDS) else str(n)
+
+
 def summarize_allocation(
-    accounts: list[Account], target: TargetAllocation, band_pct: Decimal = Decimal(0)
+    accounts: list[Account],
+    target: TargetAllocation,
+    band_pct: Decimal = Decimal(0),
+    relative_band_pct: Decimal | None = None,
 ) -> AllocationSummary:
     total = sum((a.total_value() for a in accounts), Decimal(0))
     available_cash = sum((a.available_cash() for a in accounts), Decimal(0))
@@ -132,6 +172,8 @@ def summarize_allocation(
         else {"us_stock": Decimal(0), "international_stock": Decimal(0), "bond": Decimal(0)}
     )
 
+    band_points = effective_band_points(target, band_pct, relative_band_pct)
+
     categories = []
     for label in _CATEGORY_LABELS:
         current_amount = current_by_label[label]
@@ -145,7 +187,7 @@ def summarize_allocation(
                 target_amount=to_cents(target_amounts[_CATEGORY_TARGET_KEYS[label]]),
                 target_pct=target_pct_by_label[label],
                 drift_pct=drift_pct,
-                within_band=abs(drift_pct) <= band_pct,
+                within_band=abs(drift_pct) <= band_points[_CATEGORY_TARGET_KEYS[label]],
             )
         )
     return AllocationSummary(
@@ -222,8 +264,11 @@ def _describe_target(inputs: RebalanceInputs) -> list[str]:
     lines.append("")
     lines.append(
         wrap(
-            f"From {inputs.stock_pct:.1f}% stocks / {inputs.bond_pct:.1f}% bonds, with the "
-            f"stock side split by VT's {inputs.vt.us_pct:.1f}% U.S. allocation "
+            # "where stocks are" is not padding: without a subject, "split on
+            # VT's 61.9% U.S. allocation" attaches to the whole 95/5 line
+            # above it, which says VT decides the bond share too.
+            f"From {inputs.stock_pct:.1f}% stocks / {inputs.bond_pct:.1f}% bonds, where "
+            f"stocks are split on VT's {inputs.vt.us_pct:.1f}% U.S. allocation "
             f"({inputs.vt.as_of}).",
             indent=INDENT_UNIT,
         )
@@ -231,36 +276,96 @@ def _describe_target(inputs: RebalanceInputs) -> list[str]:
     return lines
 
 
+#: How the band behaves once a class leaves it. Stated wherever the band is
+#: described, because it is the surprising half: the band decides *whether*
+#: to rebalance, not how far. "Traded", not "sold" -- a class outside its
+#: band can be under target as easily as over, and correcting it means
+#: buying.
+_BAND_RULE = (
+    "No trades while every asset class is inside its band; once one falls outside, all "
+    "three go back to target."
+)
+
+
+def _band_is_on(inputs: RebalanceInputs) -> bool:
+    """Zero on either half tolerates no drift at all, which is the same thing
+    as having no band."""
+    return inputs.band_pct > 0 and inputs.relative_band_pct != 0
+
+
+def _describe_band_extent(inputs: RebalanceInputs) -> str:
+    """Name the band in running prose. Only nameable as one number when the
+    absolute half is the whole of it; otherwise each class has its own, and
+    the "Rebalancing band" section is where they are written out."""
+    if inputs.relative_band_pct is None:
+        return f"your band of plus or minus {inputs.band_pct:.1f} percentage points"
+    return "its rebalancing band"
+
+
+def _band_ranges(inputs: RebalanceInputs) -> list[tuple[str, Decimal, Decimal]]:
+    """Each class's band as the share of the portfolio it may occupy. The
+    two halves of the band are combined per class, so this is the only place
+    the resulting numbers can be read off directly."""
+    points = effective_band_points(inputs.target, inputs.band_pct, inputs.relative_band_pct)
+    target_pcts = target_percentages(inputs.target)
+    return [
+        (
+            label,
+            max(Decimal(0), target_pcts[key] - points[key]),
+            min(Decimal(100), target_pcts[key] + points[key]),
+        )
+        for label, key in ((lbl, _CATEGORY_TARGET_KEYS[lbl]) for lbl in _CATEGORY_LABELS)
+    ]
+
+
 def _describe_band(inputs: RebalanceInputs) -> list[str]:
     lines = _subheading("Rebalancing band")
-    if inputs.band_pct == 0:
+    if inputs.band_pct == 0 or inputs.relative_band_pct == 0:
         lines.append("Off -- every asset class is traded back to its exact target.")
         return lines
+
+    if inputs.relative_band_pct is None:
+        lines.append(wrap(f"Plus or minus {inputs.band_pct:.1f} percentage points. {_BAND_RULE}"))
+        return lines
+
+    # Two rules meeting at whichever is tighter give each class a different
+    # band, so the classes are listed rather than described -- a reader
+    # should not have to work out that 25% of a 5% target is 1.2 points.
     lines.append(
         wrap(
-            # "traded", not "sold": a class inside its band can be under
-            # target as easily as over, and correcting it would mean buying.
-            # It also matches the band-off line directly above.
-            f"Plus or minus {inputs.band_pct:.1f} percentage points. An asset class inside "
-            "its band is left alone rather than traded back to the exact target."
+            f"Plus or minus {inputs.band_pct:.1f} percentage points, or "
+            f"{inputs.relative_band_pct:.1f}% of an asset class's own target, whichever is "
+            "tighter:"
         )
     )
+    lines.append("")
+    ranges = _band_ranges(inputs)
+    label_w = max(len(label) for label, _, _ in ranges)
+    cells = [(label, f"{low:.1f}%", f"{high:.1f}%") for label, low, high in ranges]
+    low_w = max(len(low) for _, low, _ in cells)
+    high_w = max(len(high) for _, _, high in cells)
+    for label, low, high in cells:
+        lines.append(f"{INDENT_UNIT}{label:<{label_w}}  {low:>{low_w}} to {high:>{high_w}}")
+    lines.append("")
+    lines.append(wrap(_BAND_RULE))
     return lines
 
 
 def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
     lines = _subheading("Your accounts")
     for account in inputs.accounts:
-        # The account type usually says how it is taxed already -- "Taxable
-        # Brokerage" is taxable -- so name the treatment only when it doesn't.
+        # Every account reads `nickname (type, treatment)`, with no exceptions
+        # -- one line shaped like the next is what lets the eye compare them
+        # down the page. There used to be a rule suppressing the treatment
+        # when the type already said it, for the sake of "Taxable Brokerage";
+        # since that type became plain "Brokerage" no type names its own
+        # treatment, and a branch that can never fire is worse than none.
+        #
         # Inside the parentheses rather than after a dash: it is shorter, and
         # a nickname at the cap plus the longest type and treatment still
-        # lands at 77 characters instead of wrapping with a stranded "--".
-        descriptor = account.account_type
+        # lands well inside the page instead of wrapping with a stranded "--".
         treatment = TAX_TREATMENT_LABELS[account.tax_treatment]
-        if treatment not in account.account_type.lower():
-            descriptor = f"{account.account_type}, {treatment}"
-        heading = format_account_heading(account.name, descriptor)
+        heading = format_account_heading(account.name, f"{account.account_type}, {treatment}")
 
         rows = []
         for holding in account.holdings:
@@ -288,7 +393,7 @@ def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
     if any(a.tax_treatment == TaxTreatment.TAX_FREE for a in inputs.accounts):
         lines.append("")
         lines.append(
-            wrap('"Tax-free" means qualified withdrawals; Roth and HSA rules apply.')
+            wrap('"Tax-free" means qualified withdrawals only; Roth and HSA rules apply.')
         )
     return lines
 
@@ -299,13 +404,13 @@ def _describe_comparison(inputs: RebalanceInputs, summary: AllocationSummary) ->
     if summary.available_cash > 0:
         total += f" (includes {_money(summary.available_cash)} of cash to invest)"
     lines.append(wrap(total))
-    provenance = "Values as entered"
+    provenance = "Values as entered, not live market prices."
     if inputs.values_as_of:
-        provenance += f"; last saved {inputs.values_as_of}"
-    lines.append(wrap(f"{provenance}.", indent=INDENT_UNIT))
+        provenance += f" Last saved {inputs.values_as_of}."
+    lines.append(wrap(provenance, indent=INDENT_UNIT))
     lines.append("")
 
-    banded = inputs.band_pct > 0
+    banded = _band_is_on(inputs)
     drift_header = "Drift (pts)"
     rows = [
         (
@@ -334,16 +439,20 @@ def _describe_comparison(inputs: RebalanceInputs, summary: AllocationSummary) ->
         )
     if any(row[4] for row in rows):
         lines.append("")
-        lines.append(
-            f"{INDENT_UNIT}* outside your band of plus or minus "
-            f"{inputs.band_pct:.1f} percentage points"
-        )
+        lines.append(f"{INDENT_UNIT}* outside {_describe_band_extent(inputs)}")
     return lines
 
 
 def _describe_outcome(inputs: RebalanceInputs, trades: list[Trade]) -> list[str]:
     """One line saying where the trades land -- the question the rest of the
-    report only answers by implication."""
+    report only answers by implication.
+
+    Stated conditionally, because it is arithmetic on the values the user
+    typed rather than an outcome anyone can promise: an order fills at the
+    market's price on the day, not at the figure entered here. "After these
+    trades: 50.0% bonds" reads as a guarantee of a number that will in fact
+    be slightly different.
+    """
     total = sum((a.total_value() for a in inputs.accounts), Decimal(0))
     if total <= 0:
         return []
@@ -353,11 +462,37 @@ def _describe_outcome(inputs: RebalanceInputs, trades: list[Trade]) -> list[str]
         f"{after['International stocks'] / total * 100:.1f}% international",
         f"{after['Bonds'] / total * 100:.1f}% bonds",
     ]
-    return ["", wrap("After these trades: " + " / ".join(parts))]
+    return ["", wrap("If filled at the values you entered: " + " / ".join(parts))]
+
+
+def _describe_taxable_sales(inputs: RebalanceInputs, trades: list[Trade]) -> list[str]:
+    """Disclose that a sale in a taxable account is a taxable event.
+
+    Only when the plan actually sells in one -- a taxable buy realizes
+    nothing, and a note that fires either way is one a reader learns to skip.
+    Phase 2 minimizes taxable *volume*, which is not the same as pricing the
+    sale, so this discloses the event without implying the solver costed it.
+    """
+    taxable = {a.name for a in inputs.accounts if a.tax_treatment == TaxTreatment.TAXABLE}
+    sold = sum(
+        (t.amount for t in trades if t.action == "sell" and t.account_name in taxable),
+        Decimal(0),
+    )
+    if sold <= 0:
+        return []
+    return [
+        "",
+        wrap(
+            f"Selling {_money(sold)} in your taxable accounts may realize capital gains "
+            "or losses; no cost basis is collected here, so that tax is not estimated."
+        ),
+    ]
 
 
 def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
-    summary = summarize_allocation(inputs.accounts, inputs.target, inputs.band_pct)
+    summary = summarize_allocation(
+        inputs.accounts, inputs.target, inputs.band_pct, inputs.relative_band_pct
+    )
 
     lines = _describe_target(inputs)
     lines.append("")
@@ -367,17 +502,17 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
     lines.append("")
     lines.extend(_describe_comparison(inputs, summary))
     lines.append("")
-    # Not "trades to reach your target": with a band the orders stop at the
-    # band edge, which the outcome line below then plainly contradicts.
+    # Not "trades to reach your target": a portfolio inside its band is left
+    # where it is, dropped sub-minimum moves stop short, and an account
+    # holding a single fund can pin a class out of reach. The outcome line
+    # below is what says where the orders actually land.
     lines.extend(_subheading("Orders to place"))
 
     if not result.trades:
-        if inputs.band_pct > 0:
+        if _band_is_on(inputs):
             lines.append(
-                wrap(
-                    "Every asset class is within your band of plus or minus "
-                    f"{inputs.band_pct:.1f} percentage points -- no trades needed."
-                )
+                wrap(f"Every asset class is within {_describe_band_extent(inputs)} -- no trades "
+                     "needed.")
             )
         else:
             lines.append(
@@ -412,14 +547,22 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
                     wrap(line, indent=body_indent, hanging_indent=body_indent + INDENT_UNIT)
                 )
         lines.extend(_describe_outcome(inputs, result.trades))
+        lines.extend(_describe_taxable_sales(inputs, result.trades))
         if result.dropped_trades:
-            noun = "move" if result.dropped_trades == 1 else "moves"
+            one = result.dropped_trades == 1
             lines.append("")
             lines.append(
                 wrap(
-                    f"{result.dropped_trades} {noun} smaller than "
-                    f"{_money(MIN_TRADE_DOLLARS)} were left out as impractical, so these "
-                    "orders do not reach the target exactly."
+                    # "Order", not "move": everything under this heading is an
+                    # order not yet placed, so a dropped one is simply an order
+                    # missing from the list. A third noun for the same thing is
+                    # a vocabulary the reader would have to learn. It forces
+                    # "the above orders" at the end, since "these orders" would
+                    # then point at either the listed ones or the dropped one.
+                    f"{_count(result.dropped_trades)} {'order' if one else 'orders'} "
+                    f"smaller than {_money(MIN_TRADE_DOLLARS)} {'was' if one else 'were'} "
+                    "left out as impractical, so the above orders do not reach the "
+                    "target exactly."
                 )
             )
 
@@ -430,11 +573,5 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
         lines.append(wrap(f"Warning: {warning}"))
 
     lines.append("")
-    lines.append(
-        wrap(
-            "Not investment or tax advice. This is a calculation from the accounts and "
-            "values you entered; consult a tax or investment professional about your "
-            "situation."
-        )
-    )
+    lines.append(wrap(DISCLAIMER))
     return "\n".join(lines)

@@ -393,6 +393,95 @@ def _current_asset_class_dollars(accounts: list[Account]) -> dict[str, Decimal]:
     }
 
 
+def _place_cash(
+    current: dict[str, Decimal],
+    dollar_targets: dict[str, Decimal],
+    dollar_bounds: dict[str, tuple[Decimal, Decimal]],
+    reach: dict[FundType, tuple[float, float]],
+    total_value: Decimal,
+) -> dict[str, Decimal] | None:
+    """Spend the uninvested cash and nothing else, or report that spending it
+    is not enough. Returns the resulting class totals when the cash alone
+    leaves every class inside its band, and `None` when it does not -- which
+    is the caller's signal to rebalance properly.
+
+    "Cash and nothing else" is the constraint `p >= current`: cash can only
+    add to a class total, and any decrease would be a sale. Two objectives,
+    lexicographic:
+
+      1. Minimize how far outside its band each class is left.
+      2. Among the ties, sit as close to target as possible.
+
+    (1) rather than (2) first because the band is what the answer turns on:
+    with two classes below target the cash could go to either and be equally
+    close to target overall, and only one of those choices might get the
+    laggard back inside its band. Asking for the band directly settles it,
+    and (2) then places whatever is left over.
+    """
+    keys = [_TARGET_KEYS[fund_type] for fund_type in _TARGET_FUND_TYPES]
+
+    # [ p_0..p_2 | v_0..v_2 | d_0..d_2 ]
+    #  class total  outside   distance
+    #               its band  from target
+    bounds = []
+    for fund_type in _TARGET_FUND_TYPES:
+        floor = float(current[_TARGET_KEYS[fund_type]])
+        ceiling = reach[fund_type][1]
+        bounds.append((min(floor, ceiling), ceiling))
+    bounds += [(0.0, None)] * 6
+
+    A_eq = [[1.0, 1.0, 1.0] + [0.0] * 6]
+    b_eq = [float(total_value)]
+
+    A_ub, b_ub = [], []
+    for index, key in enumerate(keys):
+        low, high = dollar_bounds[key]
+        # v_i >= low - p_i and v_i >= p_i - high. The two cannot both bind,
+        # so a single variable measures the violation in whichever direction
+        # it happens to fall.
+        below = [0.0] * 9
+        below[index], below[3 + index] = -1.0, -1.0
+        A_ub.append(below)
+        b_ub.append(-float(low))
+
+        above = [0.0] * 9
+        above[index], above[3 + index] = 1.0, -1.0
+        A_ub.append(above)
+        b_ub.append(float(high))
+
+        rising = [0.0] * 9
+        rising[index], rising[6 + index] = 1.0, -1.0
+        A_ub.append(rising)
+        b_ub.append(float(dollar_targets[key]))
+
+        falling = [0.0] * 9
+        falling[index], falling[6 + index] = -1.0, -1.0
+        A_ub.append(falling)
+        b_ub.append(-float(dollar_targets[key]))
+
+    inside_the_band = [0.0] * 3 + [1.0] * 3 + [0.0] * 3
+    toward_target = [0.0] * 6 + [1.0] * 3
+
+    solution = _solve(
+        inside_the_band, A_eq, b_eq, A_ub, b_ub, bounds, "putting your available cash to work"
+    )
+    if solution.fun > _OBJECTIVE_SLACK:
+        return None  # cash alone cannot settle this; the caller rebalances.
+
+    A_ub.append(inside_the_band)
+    b_ub.append(solution.fun + _OBJECTIVE_SLACK)
+    solution = _solve(
+        toward_target,
+        A_eq,
+        b_eq,
+        A_ub,
+        b_ub,
+        bounds,
+        "investing your available cash where it is furthest below target",
+    )
+    return {key: _to_decimal(solution.x[index]) for index, key in enumerate(keys)}
+
+
 def _resolve_allocation(
     current: dict[str, Decimal],
     dollar_targets: dict[str, Decimal],
@@ -401,30 +490,77 @@ def _resolve_allocation(
     total_value: Decimal,
 ) -> dict[str, Decimal]:
     """Decide what each asset class should be worth, before deciding where to
-    hold it. Two objectives, lexicographic:
+    hold it.
 
-      1. Move as little as possible from where the portfolio already sits.
-      2. Among the ties, sit as close to target as possible.
+    **The band is a trigger, not a destination.** Nothing moves while every
+    class sits inside its band and there is no cash waiting to be invested;
+    once anything trips that test, the whole portfolio goes back to target.
+    Stopping at the band edge instead -- which is what this did once -- leaves
+    the portfolio on the boundary, where the next small drift trips the band
+    again, and it is under-determined besides: a class one point out of band
+    can be brought back by selling either of the other two, at identical cost,
+    so which one got sold came down to whichever vertex HiGHS happened to
+    return.
 
-    (1) is what a rebalancing band *means*: inside it, stay put; outside it,
-    move to the nearest edge. (2) only has room to act when something has to
-    move anyway -- most importantly when there is cash to invest, which it
-    steers toward whichever class is furthest below target. Directing new
-    money at the underweight class is the one way of rebalancing that costs
-    nothing at all.
+    Cash is handled by the same rule and needs no special case. It is never a
+    decision variable -- each account's budget is an equality, so every dollar
+    of it is spent -- and the objective below steers it at whatever is
+    furthest below target. A portfolio whose cash alone brings every class
+    back inside its band therefore invests that cash and stops, because the
+    only sale that could follow would move it *away* from target.
 
-    Running this first is not an optimization, it is what keeps the band
-    honest. The location phases below are *stated* as "minimize this asset
-    class in that kind of account", which only means "relocate it" while the
-    class total is fixed. Left as a range, they can satisfy themselves by
-    holding less of the asset class outright -- so a portfolio that was
-    merely a little heavy in international would have it sold off rather than
-    moved, and a portfolio underweight bonds would have its bond fund
-    liquidated to clear tax-free space. Pinning the totals here restores the
-    equality those phases assume, and costs them nothing they should have:
-    moving a holding between accounts never changes an asset class total.
+    Two objectives, lexicographic, and the second one only ever runs when the
+    target is unreachable:
+
+      1. Sit as close to target as the accounts allow.
+      2. Among the ties, move as little as possible from where the portfolio
+         already sits.
+
+    (2) exists because an account holding a single fund pins that fund's share
+    of the portfolio, so the exact target can be out of reach -- and the
+    closest reachable points to it are then a whole face of the polytope, not
+    a vertex. With U.S. stock pinned at 60% against a 50/25/25 target, every
+    split of the remaining 40% between international and bonds is exactly as
+    far from target as every other. Staying near where the portfolio already
+    is settles that without trading for nothing.
+
+    Running this whole stage before the location phases is not an
+    optimization, it is what keeps the band honest. Those phases are *stated*
+    as "minimize this asset class in that kind of account", which only means
+    "relocate it" while the class total is fixed. Left as a range, they can
+    satisfy themselves by holding less of the asset class outright -- so a
+    portfolio that was merely a little heavy in international would have it
+    sold off rather than moved, and a portfolio underweight bonds would have
+    its bond fund liquidated to clear tax-free space. Pinning the totals here
+    restores the equality those phases assume, and costs them nothing they
+    should have: moving a holding between accounts never changes an asset
+    class total.
     """
     keys = [_TARGET_KEYS[fund_type] for fund_type in _TARGET_FUND_TYPES]
+
+    # The trigger, in Decimal and before any solve: every class inside its
+    # band, and nothing uninvested. Both halves matter -- cash is always put
+    # to work, so its presence alone is enough to reopen the question.
+    # `dollar_bounds` is the band already clamped to [0, total_value], so a
+    # band wide enough to cover everything answers "inside" for everything,
+    # which is what a band that wide means.
+    uninvested = total_value - sum(current.values(), Decimal(0))
+    if uninvested <= 0:
+        if all(dollar_bounds[key][0] <= current[key] <= dollar_bounds[key][1] for key in keys):
+            # Say it exactly, with the numbers the portfolio already holds,
+            # rather than handing an LP a solver's-worth of slack to spend
+            # drifting a fraction of a cent. The location phases still run:
+            # this fixes the totals, and rearranging *within* them is free.
+            return dict(current)
+    else:
+        # Cash first, then the trigger -- the band is asked about the
+        # portfolio the cash leaves behind, not the one holding it. Testing
+        # the cash itself instead would mean 24 cents swept up from a
+        # dividend rebalanced an entire portfolio that was comfortably
+        # inside its band, which is the opposite of what a band is for.
+        after_cash = _place_cash(current, dollar_targets, dollar_bounds, reach, total_value)
+        if after_cash is not None:
+            return after_cash
 
     # p_0..p_2 are the class totals; the rest track distance from current and
     # from target, by the same absolute-value linearization used elsewhere.
@@ -434,7 +570,7 @@ def _resolve_allocation(
         floor, ceiling = reach[fund_type]
         lower, upper = max(float(low), floor), min(float(high), ceiling)
         # _check_capacity_feasible has already rejected a genuine gap between
-        # the band and what the accounts can hold;;it tolerates a cent of
+        # the band and what the accounts can hold; it tolerates a cent of
         # float slop, so only that much can survive to invert these.
         bounds.append((min(lower, upper), upper))
     bounds += [(0.0, None)] * 6
@@ -458,20 +594,26 @@ def _resolve_allocation(
     stay_put = [0.0] * 3 + [1.0] * 3 + [0.0] * 3
     toward_target = [0.0] * 6 + [1.0] * 3
 
-    solution = _solve(stay_put, A_eq, b_eq, A_ub, b_ub, bounds, "leaving your allocation as near to where it is as your band allows")
-    if solution.fun <= _OBJECTIVE_SLACK:
-        # Nothing has to move: every class is already inside its band and
-        # there is no cash to place. Say so exactly, rather than handing the
-        # second objective a solver's-worth of slack to spend drifting a
-        # fraction of a cent toward target -- "leave it alone" is the answer,
-        # and it should come back as the number the portfolio already holds.
-        return dict(current)
-
-    A_ub.append(stay_put)
-    b_ub.append(solution.fun + _OBJECTIVE_SLACK)
     solution = _solve(
-        toward_target, A_eq, b_eq, A_ub, b_ub, bounds, "bringing your allocation toward target"
+        toward_target, A_eq, b_eq, A_ub, b_ub, bounds, "bringing your allocation back to target"
     )
+    if solution.fun > _OBJECTIVE_SLACK:
+        # The target itself is out of reach, so its closest reachable points
+        # are a face rather than a vertex. Pick the one nearest to where the
+        # portfolio already sits. (Skipped when the target *is* reachable:
+        # the first objective pins the answer outright, and a second solve
+        # could only spend its slack drifting off an exact figure.)
+        A_ub.append(toward_target)
+        b_ub.append(solution.fun + _OBJECTIVE_SLACK)
+        solution = _solve(
+            stay_put,
+            A_eq,
+            b_eq,
+            A_ub,
+            b_ub,
+            bounds,
+            "getting your allocation as close to target as the funds you hold allow",
+        )
     return {key: _to_decimal(solution.x[index]) for index, key in enumerate(keys)}
 
 
@@ -591,24 +733,28 @@ def _wash_sale_warnings(accounts: list[Account], trades: list[Trade]) -> list[st
         overlap = min(sold_in_taxable[key], bought_in_shelter[key])
         warnings.append(
             f"This plan sells {display[key]} in a taxable account and buys it in a "
-            f"tax-advantaged one, overlapping by ${overlap:,}. If any of the shares you "
-            "sell are at a loss, this may be a wash sale. The IRS has taken the position "
-            "(Rev. Rul. 2008-5) that where the replacement is bought inside an IRA, the "
-            "disallowed loss is not added back to basis the way it otherwise would be. No "
-            "cost-basis data is collected here, so confirm with a tax professional before "
-            "placing these orders; buying a different fund in the tax-advantaged account "
-            "avoids the question entirely. Funds are matched by name, so two share classes "
-            "of the same index (VTI and VTSAX, say) are not caught by this check."
+            f"tax-advantaged one, overlapping by ${overlap:,}. If any of those shares are "
+            "at a loss this may be a wash sale: section 1091 disallows the loss when "
+            "substantially identical shares are bought within 30 days either side of the "
+            "sale, in any account you control -- and the IRS has taken the position "
+            "(Rev. Rul. 2008-5) that a replacement bought inside an IRA forfeits the basis "
+            "adjustment that would otherwise offset it. Buying a different fund in the "
+            "tax-advantaged account avoids the question. This check matches funds by name, "
+            "so two share classes of one index (VTI and VTSAX) slip past it."
         )
     return warnings
 
 
 def compute_trades(
-    accounts: list[Account], target: TargetAllocation, band_pct: Decimal = Decimal(0)
+    accounts: list[Account],
+    target: TargetAllocation,
+    band_pct: Decimal = Decimal(0),
+    relative_band_pct: Decimal | None = None,
 ) -> RebalanceResult:
-    """Solve for the trades that bring `accounts` to `target`, allowing each
-    asset class to land anywhere within `band_pct` percentage points of it.
-    The default of zero is the exact target."""
+    """Solve for the trades that bring `accounts` to `target`, leaving any
+    asset class alone while it is inside the band `allocation`'s
+    `effective_band_points` allows it. The default of zero is the exact
+    target."""
     _check_names_unique(accounts)
 
     total_value = sum((a.total_value() for a in accounts), Decimal(0))
@@ -616,7 +762,7 @@ def compute_trades(
         return RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
 
     dollar_targets = target_dollar_amounts(target, total_value)
-    dollar_bounds = target_dollar_bounds(target, total_value, band_pct)
+    dollar_bounds = target_dollar_bounds(target, total_value, band_pct, relative_band_pct)
     slots = _build_slots(accounts)
     # n cannot be 0 here: total_value > 0 (checked above) means at least one
     # account has a positive value, and _build_slots already rejects any
@@ -807,10 +953,10 @@ def compute_trades(
     warnings = []
     if taxable_bond_dollars > 0:
         warnings.append(
-            f"${taxable_bond_dollars:,} in bonds will remain in taxable accounts. Either "
-            "your tax-advantaged accounts have no room left for the full bond target, or "
-            "those bonds sit inside a target-date fund that can only be held whole. This "
-            "is the smallest amount reachable given the accounts you entered."
+            f"${taxable_bond_dollars:,} in bonds will stay in taxable accounts -- either "
+            "your tax-advantaged accounts are full, or those bonds sit inside a "
+            "target-date fund that can only be held whole. It is the least your accounts "
+            "allow."
         )
     warnings.extend(_wash_sale_warnings(accounts, trades))
 

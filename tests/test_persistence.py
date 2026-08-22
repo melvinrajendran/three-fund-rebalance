@@ -36,7 +36,7 @@ def sample_config() -> PersistedConfig:
         ],
     )
     individual_fund_account = Account(
-        account_type="Taxable Brokerage",
+        account_type="Brokerage",
         name="Brokerage",
         tax_treatment=TaxTreatment.TAXABLE,
         holdings=[
@@ -155,6 +155,11 @@ MALFORMED = {
     "rebalance band is not a number": {
         "schema_version": SCHEMA_VERSION,
         "rebalance_band_pct": "not-a-number",
+        "accounts": [],
+    },
+    "relative rebalance band is not a number": {
+        "schema_version": SCHEMA_VERSION,
+        "rebalance_relative_band_pct": ["25"],
         "accounts": [],
     },
     "account name is null": {
@@ -560,6 +565,56 @@ class TestSchemaV2Migration:
             ],
         }
 
+    def test_a_v2_file_walks_every_hop_to_the_current_version(self, tmp_path):
+        """One hop at a time: v2 -> _upgrade_v2 -> v3 -> _upgrade_v3 -> v4.
+        The taxable account carries the v3 spelling of its type, so this
+        fails if the chain stops early."""
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v2_payload("Roth IRA")))
+        config = load_config(path)
+        assert config.schema_version == SCHEMA_VERSION == 4
+        assert config.accounts[1].account_type == "Brokerage"
+        assert config.accounts[1].tax_treatment == TaxTreatment.TAXABLE
+
+    def test_v4_renames_the_taxable_brokerage_account_type(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({
+            "schema_version": 3,
+            "accounts": [
+                {
+                    "account_type": "Taxable Brokerage",
+                    "name": "B",
+                    "tax_treatment": "taxable",
+                    "holdings": [{"fund_type": "us_stock", "name": "VTI", "value": "1000"}],
+                },
+                {
+                    "account_type": "Other",
+                    "name": "O",
+                    "tax_treatment": "tax_deferred",
+                    "holdings": [{"fund_type": "us_stock", "name": "VTI", "value": "1000"}],
+                },
+            ],
+        }))
+        config = load_config(path)
+        assert config.accounts[0].account_type == "Brokerage"
+        # An account type the rename does not know is left exactly as it is.
+        assert config.accounts[1].account_type == "Other"
+
+    def test_the_v3_hop_does_not_mutate_the_callers_payload(self, tmp_path):
+        """Every hop copies at each level, so a load that fails later never
+        leaves the caller's parsed JSON half-renamed."""
+        payload = {
+            "schema_version": 3,
+            "accounts": [{
+                "account_type": "Taxable Brokerage",
+                "name": "B",
+                "tax_treatment": "taxable",
+                "holdings": [{"fund_type": "us_stock", "name": "VTI", "value": "1000"}],
+            }],
+        }
+        config_from_dict(payload)
+        assert payload["accounts"][0]["account_type"] == "Taxable Brokerage"
+
     def test_a_roth_becomes_tax_free(self, tmp_path):
         path = tmp_path / "config.json"
         path.write_text(json.dumps(self._v2_payload("Roth IRA")))
@@ -627,6 +682,30 @@ class TestRebalanceBandPersistence:
         path = tmp_path / "config.json"
         save_config(path, PersistedConfig(rebalance_band_pct=Decimal("5.0")))
         assert load_config(path).rebalance_band_pct == Decimal("5.0")
+
+    def test_the_relative_half_survives_a_round_trip(self, tmp_path):
+        path = tmp_path / "config.json"
+        save_config(
+            path,
+            PersistedConfig(
+                rebalance_band_pct=Decimal("5.0"),
+                rebalance_relative_band_pct=Decimal("25.0"),
+            ),
+        )
+        assert load_config(path).rebalance_relative_band_pct == Decimal("25.0")
+
+    def test_a_file_saved_before_the_relative_half_existed_reports_none(self, tmp_path):
+        """It needs no schema hop -- an absent key means "never chosen"
+        exactly as an absent band does, and step 2 offers the default."""
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({
+            "schema_version": SCHEMA_VERSION,
+            "rebalance_band_pct": "5.0",
+            "accounts": [],
+        }))
+        config = load_config(path)
+        assert config.rebalance_band_pct == Decimal("5.0")
+        assert config.rebalance_relative_band_pct is None
 
     def test_a_band_of_zero_round_trips_as_zero_not_as_absent(self, tmp_path):
         """Zero is a real answer -- "rebalance me to the exact target" -- and

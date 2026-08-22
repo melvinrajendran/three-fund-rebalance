@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from three_fund_rebalance import prompts as prompts_module
+from three_fund_rebalance.formatting import prose_width, wrap
 from three_fund_rebalance.models import (
     Account,
     FundType,
@@ -11,10 +12,13 @@ from three_fund_rebalance.models import (
     TaxTreatment,
 )
 from three_fund_rebalance.prompts import (
+    BAND_EXPLANATION,
     Prompter,
     prompt_accounts,
     prompt_choice,
     prompt_decimal,
+    prompt_rebalance_band,
+    prompt_relative_rebalance_band,
     prompt_stock_bond_allocation,
     prompt_str,
     prompt_yes_no,
@@ -145,6 +149,92 @@ class TestPromptChoice:
         assert prompt_choice(p, "Pick:", ["A", "B", "C"], default="B") == "B"
 
 
+class TestAndList:
+    """The saved-accounts line is a sentence, so the names in it are joined as
+    prose rather than as a bare comma list."""
+
+    def test_one_name_stands_alone(self):
+        assert prompts_module._and_list(["A"]) == "A"
+
+    def test_two_names_take_no_comma(self):
+        """The serial comma separates three or more; "A, and B" reads as a
+        stray one."""
+        assert prompts_module._and_list(["A", "B"]) == "A and B"
+
+    def test_three_or_more_take_the_serial_comma(self):
+        assert prompts_module._and_list(["A", "B", "C"]) == "A, B, and C"
+        assert prompts_module._and_list(["A", "B", "C", "D"]) == "A, B, C, and D"
+
+
+class TestRebalanceBandPrompts:
+    """The relative half is the one question in the flow nobody can answer
+    from its own label, so this pair is the exception to asking bare."""
+
+    def _asked(self, func):
+        asked = []
+        p = Prompter(input_func=lambda text: asked.append(text) or "", print_func=lambda _: None)
+        func(p)
+        return asked[0]
+
+    def test_the_two_halves_carry_the_industry_names_for_them(self):
+        """The same words `rebalance_band_pct` and
+        `rebalance_relative_band_pct` are named after, so the question, the
+        saved key and the report all say one thing."""
+        assert self._asked(prompt_rebalance_band).startswith("Absolute band,")
+        assert self._asked(prompt_relative_rebalance_band).startswith("Relative band,")
+
+    def test_each_half_names_its_own_unit(self):
+        """Points of the whole portfolio against a share of one class's
+        target. Asking for "5 (%)" of drift next to "25 (%)" of a target is
+        how they get read as the same kind of number."""
+        assert "(pts)" in self._asked(prompt_rebalance_band)
+        assert "(%)" in self._asked(prompt_relative_rebalance_band)
+        assert "(%)" not in self._asked(prompt_rebalance_band)
+
+    def test_the_explanation_states_the_policy_the_way_one_is_written(self):
+        """An IPS says a class "deviates from its target" by more than "the
+        lesser of" two bands. Carrying the semantics here is what lets each
+        question below name only its own unit."""
+        assert "deviates from its target" in BAND_EXPLANATION
+        assert "the lesser of" in BAND_EXPLANATION
+
+    def test_the_explanation_is_one_sentence(self):
+        """It exists to make the two questions answerable, not to teach the
+        band -- the report's own section shows its effect."""
+        assert BAND_EXPLANATION.count(".") == 1
+        assert len(wrap(BAND_EXPLANATION).split("\n")) <= 2
+
+    def test_the_defaults_are_the_5_25_convention(self):
+        p = ScriptedPrompter(["", ""])
+        assert prompt_rebalance_band(p) == Decimal(5)
+        assert prompt_relative_rebalance_band(p) == Decimal(25)
+
+
+class TestTaxTreatmentChoices:
+    """Asked only for an account type we don't recognize, and worded by when
+    the tax is paid rather than by the category name -- "tax-deferred" versus
+    "tax-free" is exactly the distinction someone picking "Other" may not
+    have the vocabulary for, and it is the one that decides where bonds go."""
+
+    def test_each_choice_fits_the_page_width(self):
+        """prompt_choice prints its options unwrapped, so one that runs long
+        wraps at the terminal and strands its own tail in the next option's
+        column."""
+        for i, choice in enumerate(prompts_module._TAX_TREATMENT_BY_CHOICE, start=1):
+            assert len(f"  {i}. {choice}") <= prose_width(), choice
+
+    def test_each_choice_says_when_the_tax_is_paid(self):
+        by_treatment = {
+            treatment: choice
+            for choice, treatment in prompts_module._TAX_TREATMENT_BY_CHOICE.items()
+        }
+        # Gains in a taxable account are taxed on sale, not annually -- the
+        # earlier wording said "dividends and gains every year".
+        assert "gains taxed when I sell" in by_treatment[TaxTreatment.TAXABLE]
+        assert "taxed on withdrawal" in by_treatment[TaxTreatment.TAX_DEFERRED]
+        assert "qualified withdrawals untaxed" in by_treatment[TaxTreatment.TAX_FREE]
+
+
 class TestPromptStockBondTarget:
     def test_accepts_valid_allocation(self):
         p = ScriptedPrompter(["80", "20"])
@@ -208,6 +298,31 @@ class TestResolveVtSplit:
         p = ScriptedPrompter(["y"])
         result = resolve_vt_allocation(p, cached_us_pct=Decimal(60), cached_as_of="last quarter", offline=True)
         assert result.us_pct == Decimal(60)
+
+
+class TestSavedAccountsLine:
+    def _said(self, names):
+        said = []
+        p = Prompter(input_func=lambda _: "n", print_func=said.append)
+        prompt_accounts(p, [
+            Account(
+                account_type="Roth IRA",
+                name=name,
+                tax_treatment=TaxTreatment.TAX_FREE,
+                holdings=[Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1))],
+            )
+            for name in names
+        ])
+        return " ".join(" ".join(said).split())
+
+    def test_the_saved_accounts_line_is_a_sentence(self):
+        assert (
+            "You have 3 saved accounts: Alpha, Beta, and Gamma."
+            in self._said(["Alpha", "Beta", "Gamma"])
+        )
+
+    def test_a_single_saved_account_reads_in_the_singular(self):
+        assert "You have 1 saved account: Alpha." in self._said(["Alpha"])
 
 
 class TestPromptAccounts:
@@ -421,7 +536,7 @@ class TestPromptAccounts:
 
     def test_taxable_account_with_bonds_prints_a_note(self):
         responses = [
-            "y", "10",  # account type "Taxable Brokerage" is index 10 in ACCOUNT_TYPE_CHOICES
+            "y", "10",  # account type "Brokerage" is index 10 in ACCOUNT_TYPE_CHOICES
             "Brokerage",
             "1",  # holds individual funds
             "n", "n",  # no U.S./international stock funds
