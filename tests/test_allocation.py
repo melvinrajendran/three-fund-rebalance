@@ -4,6 +4,7 @@ import pytest
 
 from three_fund_rebalance.allocation import (
     compute_target_allocation,
+    effective_band_points,
     target_dollar_amounts,
     target_dollar_bounds,
 )
@@ -111,3 +112,68 @@ class TestTargetDollarBounds:
     def test_a_negative_band_is_rejected(self):
         with pytest.raises(ValueError, match="cannot be negative"):
             target_dollar_bounds(self._target(), Decimal(100_000), Decimal(-1))
+
+
+class TestEffectiveBandPoints:
+    """The two halves of the 5/25 rule, and how they meet."""
+
+    def _target(self, us, intl, bond):
+        return TargetAllocation(
+            us_stock_pct=Decimal(us),
+            international_stock_pct=Decimal(intl),
+            bond_pct=Decimal(bond),
+        )
+
+    def test_the_tighter_of_the_two_rules_binds(self):
+        """A class has to satisfy both, so whichever runs out first decides.
+        25% of a 58.8% target is 14.7 points, far looser than the absolute
+        5 -- while 25% of a 5% target is 1.25 points, far tighter."""
+        points = effective_band_points(
+            self._target("58.8", "36.2", 5), Decimal(5), Decimal(25)
+        )
+        assert points["us_stock"] == Decimal(5)
+        assert points["international_stock"] == Decimal(5)
+        assert points["bond"] == Decimal("1.25")
+
+    def test_the_two_rules_cross_at_a_twenty_percent_target(self):
+        """Which is why the convention is usually stated as "5 points at 20%
+        and above, 25% relative below" -- one rule, described twice."""
+        points = effective_band_points(self._target(50, 30, 20), Decimal(5), Decimal(25))
+        assert points["bond"] == Decimal(5)
+        assert effective_band_points(
+            self._target(50, 40, 10), Decimal(5), Decimal(25)
+        )["bond"] == Decimal("2.5")
+
+    def test_no_relative_rule_leaves_the_absolute_one_alone(self):
+        points = effective_band_points(self._target("58.8", "36.2", 5), Decimal(5), None)
+        assert set(points.values()) == {Decimal(5)}
+
+    def test_zero_on_either_half_tolerates_no_drift(self):
+        """Unlike None, which means the rule was never configured, zero is a
+        real answer and it is the tightest one there is."""
+        target = self._target(50, 30, 20)
+        assert set(effective_band_points(target, Decimal(5), Decimal(0)).values()) == {Decimal(0)}
+        assert set(effective_band_points(target, Decimal(0), Decimal(25)).values()) == {Decimal(0)}
+
+    def test_a_negative_relative_band_is_rejected(self):
+        with pytest.raises(ValueError, match="cannot be negative"):
+            effective_band_points(self._target(50, 30, 20), Decimal(5), Decimal(-1))
+
+
+class TestTargetDollarBoundsWithARelativeBand:
+    def test_a_small_target_gets_a_band_the_absolute_rule_would_never_give_it(self):
+        """5 points below a 5% target is zero bonds, which no band should
+        call acceptable. A quarter of the target is 1.25 points."""
+        target = TargetAllocation(
+            us_stock_pct=Decimal("58.8"),
+            international_stock_pct=Decimal("36.2"),
+            bond_pct=Decimal(5),
+        )
+        assert target_dollar_bounds(target, Decimal(100_000), Decimal(5))["bond"] == (
+            Decimal(0),
+            Decimal(10_000),
+        )
+        assert target_dollar_bounds(target, Decimal(100_000), Decimal(5), Decimal(25))["bond"] == (
+            Decimal(3_750),
+            Decimal(6_250),
+        )
