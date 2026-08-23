@@ -1,6 +1,6 @@
 # three-fund-rebalance
 
-An interactive CLI that works out the trades needed to rebalance a
+An interactive CLI that computes the trades needed to rebalance a
 [three-fund portfolio](https://www.bogleheads.org/wiki/Three-fund_portfolio)
 (U.S. stocks / international stocks / bonds) across any number of accounts --
 tax-deferred, tax-free and taxable alike -- putting each asset class where it
@@ -9,19 +9,14 @@ is taxed least.
 ## Disclaimer
 
 **Not investment, tax, or legal advice, and not a recommendation to buy or
-sell.** That is what the tool prints at the foot of every report, and it means
-what it says: this is a calculator that arithmetic-checks a portfolio against a
-target you choose. Using it creates no advisory or fiduciary relationship, and
-it places no orders -- it is not connected to your broker. Review each order
-before placing it, and consult a qualified professional if you want advice. See
-[Limitations](#limitations) for what it cannot see.
-
-Not affiliated with, endorsed by, or sponsored by Vanguard, Fidelity, or any
-broker or fund company. Fund and product names identify only what you hold.
+sell.** Consult a qualified professional for advice, and see
+[Limitations](#limitations) for what the CLI cannot see.
 
 ## Example
 
-Three accounts, an 80/20 stock and bond target, and a 5/25 rebalancing band:
+Three accounts, a target of 80% stocks / 20% bonds, and a rebalancing band of
+5 percentage points or 25% of an asset class's own target, whichever is
+tighter:
 
 ```
 Target asset allocation
@@ -97,12 +92,6 @@ Not investment, tax, or legal advice, and not a recommendation to buy or sell.
 Consult a professional about your situation.
 ```
 
-Note where the bonds went. The whole $30,000 sleeve lands in the 401(k)
-rather than the Roth, because a Roth never taxes what it shelters and is
-better spent on stocks -- and the Roth's own $20,000 of U.S. stock is left
-untouched, because moving it would buy nothing. The taxable account sells only
-what the target requires.
-
 ## Install
 
 Requires Python 3.10+. Install with [pipx](https://pipx.pypa.io/), which puts
@@ -112,8 +101,8 @@ the CLI on your PATH in its own isolated environment:
 pipx install git+https://github.com/melvinrajendran/three-fund-rebalance
 ```
 
-If you don't have pipx: `brew install pipx && pipx ensurepath` on macOS, or
-`python3 -m pip install --user pipx && python3 -m pipx ensurepath` elsewhere.
+No pipx? `brew install pipx && pipx ensurepath` on macOS, or `python3 -m pip
+install --user pipx && python3 -m pipx ensurepath` elsewhere.
 [uv](https://docs.astral.sh/uv/) does the same job and will fetch a suitable
 Python if your system one is too old:
 
@@ -121,9 +110,9 @@ Python if your system one is too old:
 uv tool install git+https://github.com/melvinrajendran/three-fund-rebalance
 ```
 
-To update, reinstall with `--force`. The version in `pyproject.toml` doesn't
-change on every commit, so plain `pipx upgrade` sees the installed copy as
-current and skips the refetch:
+To update, reinstall with `--force`. The version doesn't change on every
+commit, so plain `pipx upgrade` sees the installed copy as current and skips
+the refetch:
 
 ```bash
 pipx install --force git+https://github.com/melvinrajendran/three-fund-rebalance
@@ -156,67 +145,46 @@ or type a new one.
 
 ## How it works
 
-**Where each asset class goes.** Bonds fill tax-advantaged space first,
-tax-deferred before Roth. Rebalancing trades happen inside sheltered accounts,
-where they cost nothing. International prefers taxable, where the foreign tax
-withheld on it can be claimed as a credit that a sheltered account forfeits.
-Only the first two of those will ever open a taxable trade -- the rest decide
-which funds an account already being traded ends up holding.
+**Allocation before location.** The tool settles what each asset class should
+be worth, then decides which accounts hold it.
 
-**What to hold is decided before where to hold it.** The band settles what
-each asset class should be worth -- staying put when nothing has drifted far
-enough to matter, and directing available cash at whichever asset class is
-furthest below target. Only then does the solver work out which accounts hold
-it.
+**Rebalancing bands.** You set two -- the 5/25 rule -- and an asset class has
+to satisfy both, so the tighter binds: the *absolute band*, in percentage
+points of the portfolio, and the *relative band*, as a share of the asset
+class's own target. Zero on either tolerates no drift.
 
-**The rebalancing band** is how far an asset class may drift before it is
-worth correcting. Trading to an exact target means every drift generates
-trades, and in a taxable account those cost real money to fix a rounding
-error.
+**A band is a trigger, not a destination.** No trades while every asset class
+is inside its band; once one falls outside, all three go back to target. Cash
+is invested first, and the band is judged on what it leaves behind.
 
-You set it with two numbers and an asset class has to satisfy both, so the
-tighter one binds -- the 5/25 rule. The *absolute band* is in percentage
-points of the whole portfolio; the *relative band* is a share of the asset
-class's own target. Those are the names the prompts and the report use too.
-Neither alone works for all three: 5 points below a 5% bond target is *zero
-bonds*, while 25% of a 59% U.S. target is 14.7 points, far looser than
-anything you'd want on the class that dominates the portfolio. The two cross
-at a 20% target, where both come to 5 points. Zero on either means no band at
-all, and every drift is corrected.
+**Asset location.** Bonds fill tax-advantaged accounts first, tax-deferred
+before tax-free, since their interest is taxed yearly as ordinary income.
+International stocks prefer taxable, where the foreign tax withheld on them is
+claimable as a credit a tax-advantaged account forfeits.
 
-It is a trigger, not a destination. While every asset class sits inside its
-band your allocation is left alone -- though free trades inside shelters are
-still made. Once any asset class falls outside, all three go back to target
-rather than to the band edge, which would leave you on the boundary and one
-small drift from trading again.
+**Only bond placement opens a taxable trade.** Trades inside sheltered
+accounts cost nothing, so the remaining preferences just decide which funds an
+account already being traded ends up holding.
 
-Cash is spent before any of that is decided, and the band is then judged on
-what it leaves behind. So a dividend swept into your settlement fund gets
-invested at whichever asset class is furthest below target, and only
-rebalances the rest of the portfolio if it was going to need rebalancing
-anyway.
-
-**Accounts hold one kind of thing**: either a single target-date fund or some
-combination of a U.S. stock, international stock and U.S. bond fund. Cash sits
-alongside either. A target-date fund is entered as one position with its own
-internal mix, so its value is fixed -- the tool never sells one, it only
-invests that account's cash into it, and works the rest of the portfolio
-around its sleeves.
+**An account holds one target-date fund or individual funds, never both** -- a
+U.S. stock fund, an international stock fund and a bond fund, in any
+combination -- with cash alongside either. A target-date fund has a fixed
+internal mix, so the tool only invests that account's cash into it.
 
 **Money never moves between accounts.** Each account's total is fixed; a
-rebalance only reallocates within one, including investing its cash. Orders
-under $1 are left out as impractical.
+rebalance only reallocates within it, including investing its cash. Orders
+smaller than $1.00 are left out as impractical.
 
-**VT's U.S./international allocation** comes from Vanguard's monthly JSON
-endpoint, falling back to the quarterly fact sheet PDF, then your last cached
-value, then manual entry. It never guesses silently.
+**VT's U.S./international split** comes from Vanguard's monthly JSON endpoint,
+falling back to the quarterly fact sheet PDF, then your last cached value,
+then manual entry. It never guesses silently.
 
 ## Limitations
 
 - **No cost basis.** It cannot compute capital gains, and minimizes taxable
   trade *volume* as a proxy. Selling in a taxable account may realize capital
   gains or losses this tool never sees.
-- **No costs.** Amounts exclude commissions, fees, bid-ask spreads and any
+- **No costs.** Amounts exclude commissions, fees, bid-ask spreads and
   short-term redemption fees, and it does not know your broker's fund minimums
   or trading restrictions. Prices move between the values you type and the
   price an order fills at.
