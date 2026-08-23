@@ -93,35 +93,46 @@ It is excluded from the tradeable slots and from `_TARGET_FUND_TYPES`.
 positions. `_fund_type_coefficient` is what lets a single slot contribute
 fractionally to all three targets.
 
-**The three asset-class totals must sum to exactly the portfolio total, and every
-slot's three class coefficients to exactly 1.** The main LP states both families as
-equalities — each account spends exactly its own total, each class hits exactly the
-figure `_resolve_allocation` settled on — and since the coefficients sum to 1, adding
-the three class rows together reproduces the account rows. So the two are consistent
-only while those sums are exact, and a gap of *any* size is not imprecision: it is
-infeasibility, surfaced to the user as "no arrangement of the funds you hold reaches
-your target". Two things break it, and both shipped:
+**The LP must never over-determine the portfolio total.** Each account spends
+exactly its own total, and each asset class hits exactly the figure
+`_resolve_allocation` settled on. Every slot's three class coefficients sum to 1, so
+adding the three class rows together reproduces the account rows — the third class
+equality is *implied*, and stating it anyway is not free. An implied row is
+satisfiable only if the two sides agree to the last bit, which floating point will
+not do: coefficients summing to 1 + 1e-16 make a portfolio infeasible outright once
+it is large enough for that relative error to exceed HiGHS's absolute feasibility
+tolerance, somewhere below $8B. So `compute_trades` states `_TARGET_FUND_TYPES[:-1]`
+and lets the budgets imply bonds, where the same error misplaces a billionth of a
+cent instead. Do not "complete" that loop.
+
+Two things feed it, and both shipped as infeasible portfolios reported to the user as
+"no arrangement of the funds you hold reaches your target":
 
 - `_to_decimal` rounds each class to six decimal places independently, so two classes
   rounding down half a micro-dollar each leave the three a millionth of a dollar short
-  — a thousand times HiGHS's feasibility tolerance. `_reconcile_to_total` closes the
-  gap at every exit of `_resolve_allocation` (the `dict(current)` return, the
-  `_place_cash` return and the LP's own), putting the residue on the largest class,
-  where it sits far below the cent grid. About one realistic portfolio in seven tripped
-  this.
+  of the portfolio. `_reconcile_to_total` closes that at every exit of
+  `_resolve_allocation` (the `dict(current)` return, the `_place_cash` return and the
+  LP's own), putting the residue on the largest class. With the third row implicit
+  this no longer decides feasibility, only whether the implied class lands on its
+  resolved figure or a hair off — but three amounts that do not add up to the
+  portfolio are not "what each asset class should be worth", which is the function's
+  whole contract. About one realistic portfolio in seven tripped this.
 - `TargetDateAllocation` allows the three percentages to sum to 100 ±
   `PERCENT_SUM_TOLERANCE`, because a fact sheet rounds each sleeve to a tenth. Read as
-  literal percentages over 100, such a fund contradicts its own account budget by a
-  tenth of a percent of the account. `TargetDateAllocation.fraction_of` divides by the
-  actual sum instead, and is the **one** place the three sleeves are turned into
-  fractions — `Holding.us_stock_component()` and friends and
-  `rebalance._fund_type_coefficient` all go through it, which is also what keeps
-  `_current_asset_class_dollars` agreeing with what the solver sees. It normalizes the
-  derived view only; the entered percentages are stored and echoed back untouched.
+  literal percentages over 100, a fund printed 64.0 / 34.3 / 1.6 leaves a tenth of a
+  percent of its account belonging to no asset class — which the implied row would
+  silently dump into bonds. `TargetDateAllocation.fraction_of` divides by the actual
+  sum instead, and is the **one** place the three sleeves become fractions:
+  `Holding.us_stock_component()` and friends and `rebalance._fund_type_coefficient` all
+  go through it, which is also what keeps `_current_asset_class_dollars` agreeing with
+  what the solver sees. It normalizes the derived view only; the entered percentages
+  are stored and echoed back untouched.
 
-Normalizing leaves a Decimal-division artifact around 1e-28, which is why
+Nothing may assume the normalized fractions sum to exactly 1 — as Decimals they leave
+an artifact around 1e-28, as floats around 1e-16, and CPython 3.12's compensated
+`sum()` hides the latter where 3.10's plain addition does not. That is why
 `_resolve_allocation`'s uninvested-cash gate reads `to_cents(...)`: taken literally,
-that dust would count as cash and send a portfolio sitting on its target through
+Decimal dust would count as cash and send a portfolio sitting on its target through
 `_place_cash` for nothing. Cents are the grid money is entered and traded on, and
 sub-cent cash is under `MIN_TRADE_DOLLARS` regardless.
 

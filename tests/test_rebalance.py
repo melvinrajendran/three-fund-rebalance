@@ -1320,3 +1320,45 @@ class TestClassTotalsSumToThePortfolio:
             total_value,
         )
         assert sum(resolved.values(), Decimal(0)) == total_value
+
+    def test_a_multi_billion_dollar_portfolio_is_not_rejected_over_float_noise(self):
+        """The redundant third class equality is satisfiable only if the
+        coefficients sum to 1 to the last bit, which floating point does not
+        do. A relative error of 1e-16 is nothing until the portfolio is large
+        enough that it exceeds the solver's *absolute* feasibility tolerance
+        -- around $8B against HiGHS's 1e-7 -- at which point a perfectly
+        ordinary portfolio is rejected outright. This one failed before the
+        third equality was left implicit, target-date percentages summing to
+        exactly 100 included."""
+        accounts = [
+            account(
+                "Traditional 401(k)",
+                "401k",
+                TaxTreatment.TAX_DEFERRED,
+                [
+                    holding(
+                        FundType.TARGET_DATE,
+                        "TDF",
+                        "4598044000",
+                        self.TARGET_DATE_ALLOCATION,
+                    )
+                ],
+            ),
+            account(
+                "Roth IRA",
+                "Roth",
+                TaxTreatment.TAX_FREE,
+                [
+                    holding(FundType.US_STOCK, "FZROX", "2251598000"),
+                    holding(FundType.INTERNATIONAL_STOCK, "FZILX", "1574414000"),
+                    holding(FundType.US_BOND, "FXNAX", "500028000"),
+                ],
+            ),
+        ]
+        result = compute_trades(
+            accounts,
+            target("58.805", "36.195", 5),
+            band_pct=Decimal(5),
+            relative_band_pct=Decimal(25),
+        )
+        assert result.trades

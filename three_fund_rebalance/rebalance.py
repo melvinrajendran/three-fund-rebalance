@@ -396,21 +396,18 @@ def _reconcile_to_total(
 ) -> dict[str, Decimal]:
     """Force the three asset-class totals to sum to exactly `total_value`.
 
-    This is not cosmetic -- it is what keeps the main LP feasible at all.
-    That program states two families of equalities: each account spends
-    exactly its own total, and each asset class hits exactly the figure
-    settled here. Every slot's three class coefficients sum to 1, so adding
-    the three class rows together reproduces the account rows -- which means
-    the two are consistent only when the class totals sum to the portfolio
-    total, and *inconsistent* by any amount at all when they do not.
-
-    They do not, on their own. `_to_decimal` rounds each class to six decimal
+    They do not, on their own: `_to_decimal` rounds each class to six decimal
     places independently, so two classes rounding down half a micro-dollar
-    each leaves the three summing to a millionth of a dollar less than the
-    portfolio. That is far above HiGHS's feasibility tolerance, so it does
-    not perturb the answer -- it rejects the portfolio outright, reported to
-    the user as "no arrangement of the funds you hold reaches your target".
-    Roughly one realistic portfolio in seven trips it.
+    each leave the three summing to a millionth of a dollar less than the
+    portfolio.
+
+    `compute_trades` states only two of the three as equalities and lets the
+    account budgets imply the third, so a gap here no longer decides whether
+    the portfolio can be solved at all -- it decides whether the implied
+    class lands on the figure settled here or a hair off it. Close it anyway:
+    this function's whole contract is "what each asset class should be
+    worth", and three amounts that do not add up to the portfolio are not
+    that.
 
     The residue goes to the largest class, where it is orders of magnitude
     below the cent grid every displayed figure rounds to and so cannot
@@ -856,7 +853,21 @@ def compute_trades(
     # fraction of a cent inside a matched pair -- and with several phases of
     # carried-forward objective slack above them, that fraction survives to
     # the final rounding as an exact $40,000.00 turned into "$39,999.99".
-    for fund_type in _TARGET_FUND_TYPES:
+    #
+    # Only two of the three are stated. The third is implied -- every slot's
+    # three coefficients sum to 1, so adding the class rows together
+    # reproduces the account budget rows above -- and *stating* an implied
+    # row is not free: it is satisfiable only if the two sides agree to the
+    # last bit, which floating point will not do. Coefficients that sum to
+    # 1 + 1e-16 are enough to make a portfolio infeasible outright once the
+    # portfolio is large enough for that relative error to exceed the
+    # solver's absolute feasibility tolerance, which at HiGHS's 1e-7 is
+    # somewhere below $8B. Left implicit, the same error just puts a
+    # billionth of a cent of that portfolio in the wrong asset class.
+    #
+    # _resolve_allocation guarantees the three totals sum to the portfolio,
+    # so the implied class lands on its resolved figure, not merely near it.
+    for fund_type in _TARGET_FUND_TYPES[:-1]:
         aggregate = row()
         for i, slot in enumerate(slots):
             aggregate[i] = _fund_type_coefficient(slot, fund_type)

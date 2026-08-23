@@ -69,13 +69,16 @@ class TestTargetDateAllocation:
             allocation.fraction_of(FundType.INTERNATIONAL_STOCK),
             allocation.fraction_of(FundType.US_BOND),
         ]
-        # 1.0 exactly as floats, which is the form the solver reads them in
-        # and the form the equalities have to agree in. As Decimals they are
-        # 1 to within a division artifact some twenty orders of magnitude
-        # below a cent -- against the tenth of a percent of the whole account
-        # that dividing by 100 would have left unaccounted for.
-        assert sum(float(fraction) for fraction in fractions) == 1.0
+        # Not bit-exact, and nothing may rely on it being so -- three IEEE
+        # doubles need not sum to 1.0, and CPython 3.12's compensated sum()
+        # hides that where 3.10's plain addition does not. What matters is
+        # that the *systematic* gap is gone: dividing by 100 would have left
+        # a tenth of a percent of the whole account belonging to no asset
+        # class at all, where what is left here is a rounding artifact around
+        # 1e-16 -- and the solver is not handed the redundant equality that
+        # would turn even that into an infeasible portfolio.
         assert abs(sum(fractions) - Decimal(1)) < Decimal("1e-20")
+        assert abs(sum(float(fraction) for fraction in fractions) - 1.0) < 1e-12
         assert fractions[0] == Decimal("64.0") / Decimal("99.9")
 
     def test_fraction_of_leaves_the_entered_percentages_alone(self):
