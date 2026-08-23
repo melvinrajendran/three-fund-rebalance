@@ -1,4 +1,4 @@
-# three-fund-rebalance
+# Three-Fund Rebalance
 
 An interactive CLI that computes the trades needed to rebalance a
 [three-fund portfolio](https://www.bogleheads.org/wiki/Three-fund_portfolio)
