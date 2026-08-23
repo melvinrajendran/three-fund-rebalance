@@ -9,8 +9,8 @@ is taxed least.
 ## Disclaimer
 
 **Not investment, tax, or legal advice, and not a recommendation to buy or
-sell.** Consult a qualified professional for advice, and see
-[Limitations](#limitations) for what the CLI cannot see.
+sell.** Consult a professional about your situation, and see the CLI's
+[Limitations](#limitations).
 
 ## Example
 
