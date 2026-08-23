@@ -82,8 +82,8 @@ Review each order before placing it:
   Employer 401(k) (Traditional 401(k))
     Exchange $20,000.00 from VTI to BND
 
-If filled at the values you entered: 49.6% U.S. / 30.4% international / 20.0%
-bonds
+If these orders fill at the values you entered, your portfolio will hold 49.6%
+U.S. stocks, 30.4% international stocks, and 20.0% bonds.
 
 Selling $15,600.00 in your taxable accounts may realize capital gains or
 losses; no cost basis is collected here, so that tax is not estimated.

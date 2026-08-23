@@ -444,8 +444,8 @@ def _describe_comparison(inputs: RebalanceInputs, summary: AllocationSummary) ->
 
 
 def _describe_outcome(inputs: RebalanceInputs, trades: list[Trade]) -> list[str]:
-    """One line saying where the trades land -- the question the rest of the
-    report only answers by implication.
+    """A sentence saying where the trades land -- the question the rest of
+    the report only answers by implication.
 
     Stated conditionally, because it is arithmetic on the values the user
     typed rather than an outcome anyone can promise: an order fills at the
@@ -458,11 +458,18 @@ def _describe_outcome(inputs: RebalanceInputs, trades: list[Trade]) -> list[str]
         return []
     after = allocation_after_trades(inputs.accounts, trades)
     parts = [
-        f"{after['U.S. stocks'] / total * 100:.1f}% U.S.",
-        f"{after['International stocks'] / total * 100:.1f}% international",
-        f"{after['Bonds'] / total * 100:.1f}% bonds",
+        f"{after['U.S. stocks'] / total * 100:.1f}% U.S. stocks",
+        f"{after['International stocks'] / total * 100:.1f}% international stocks",
+        f"and {after['Bonds'] / total * 100:.1f}% bonds",
     ]
-    return ["", wrap("If filled at the values you entered: " + " / ".join(parts))]
+    return [
+        "",
+        wrap(
+            "If these orders fill at the values you entered, your portfolio will hold "
+            + ", ".join(parts)
+            + "."
+        ),
+    ]
 
 
 def _describe_taxable_sales(inputs: RebalanceInputs, trades: list[Trade]) -> list[str]:
