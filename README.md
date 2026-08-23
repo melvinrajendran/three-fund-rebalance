@@ -182,30 +182,37 @@ then manual entry. It never guesses silently.
 
 ## Limitations
 
-- **No cost basis.** It cannot compute capital gains, and minimizes taxable
-  trade *volume* as a proxy. Selling in a taxable account may realize capital
-  gains or losses this tool never sees.
-- **No costs.** Amounts exclude commissions, fees, bid-ask spreads and
-  short-term redemption fees, and it does not know your broker's fund minimums
-  or trading restrictions. Prices move between the values you type and the
-  price an order fills at.
-- **The wash-sale check is a warning, not a guarantee.** It matches funds by
-  the name you type, so two share classes of one index (VTI and VTSAX) are not
-  recognized as the same security even though the IRS may treat them as
-  substantially identical. Check your lots before placing the orders.
-- **Preferring international in taxable is a rule of thumb.** The credit is
-  worth a couple of basis points and is partly offset by those funds' higher,
-  less-qualified dividends; the tool weighs neither.
-- **It cannot tell a municipal bond fund from a taxable one.** Bonds are moved
-  into sheltered accounts on the assumption their interest is taxed as
-  ordinary income; a muni fund belongs in taxable, and this will move it out.
-- **All the cash you enter is invested.** There is no reserve: keep an
-  emergency fund or a spending reserve out of the amounts you enter.
-- **It knows nothing about** contribution or withdrawal limits, holding
-  periods, early-withdrawal penalties, or what a given account can actually
-  hold -- a 401(k)'s fixed fund menu, for instance.
-- **VT's allocation may be stale**, or the fetch may fail and fall back to a
-  cached or manually entered value.
+**No cost basis.** It cannot compute capital gains, and minimizes taxable
+trade *volume* as a proxy. Selling in a taxable account may realize capital
+gains or losses this tool never sees.
+
+**No costs.** Amounts exclude commissions, fees, bid-ask spreads and
+short-term redemption fees, and it does not know your broker's fund minimums
+or trading restrictions. Prices move between the values you type and the
+price an order fills at.
+
+**The wash-sale check is a warning, not a guarantee.** It matches funds by
+the name you type, so two share classes of one index (VTI and VTSAX) are not
+recognized as the same security even though the IRS may treat them as
+substantially identical. Check your lots before placing the orders.
+
+**Preferring international in taxable is a rule of thumb.** The credit is
+worth a couple of basis points and is partly offset by those funds' higher,
+less-qualified dividends; the tool weighs neither.
+
+**It cannot tell a municipal bond fund from a taxable one.** Bonds are moved
+into sheltered accounts on the assumption their interest is taxed as
+ordinary income; a muni fund belongs in taxable, and this will move it out.
+
+**All the cash you enter is invested.** There is no reserve: keep an
+emergency fund or a spending reserve out of the amounts you enter.
+
+**It knows nothing about** contribution or withdrawal limits, holding
+periods, early-withdrawal penalties, or what a given account can actually
+hold -- a 401(k)'s fixed fund menu, for instance.
+
+**VT's allocation may be stale**, or the fetch may fail and fall back to a
+cached or manually entered value.
 
 ## Development
 
