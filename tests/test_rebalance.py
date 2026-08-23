@@ -1169,3 +1169,154 @@ class TestResolveAllocation:
         reach[FundType.US_BOND] = (0.0, 12_000.0)  # nothing can hold more bonds than this
         resolved = _resolve_allocation(current, targets, bounds, reach, Decimal(100_000))
         assert resolved["bond"] <= Decimal(12_000)
+
+
+class TestClassTotalsSumToThePortfolio:
+    """The main LP states each account's budget and each asset class's total
+    as equalities, and every slot's three class coefficients sum to 1 -- so
+    adding the three class rows together reproduces the account rows. The two
+    families are consistent only while the class totals sum to exactly the
+    portfolio total, and a program that breaks that is not merely imprecise,
+    it is infeasible. These are the ways it got broken.
+    """
+
+    TARGET_DATE_ALLOCATION = TargetDateAllocation(
+        us_stock_pct=Decimal("64.1"),
+        international_stock_pct=Decimal("34.34"),
+        bond_pct=Decimal("1.56"),
+    )
+
+    def test_class_totals_that_do_not_round_to_the_portfolio_total_still_solve(self):
+        """Real portfolio, reported from use. At a 58.805/36.195/5 target on
+        $107,256.37 the U.S. and international totals each round down half a
+        micro-dollar at six decimal places, leaving the three summing to a
+        millionth of a dollar short of the portfolio -- far above the
+        solver's feasibility tolerance, so it rejected the whole thing."""
+        accounts = [
+            account(
+                "Traditional 401(k)",
+                "JPMC Traditional 401(k)",
+                TaxTreatment.TAX_DEFERRED,
+                [
+                    holding(
+                        FundType.TARGET_DATE,
+                        "Target Date 2070 Fund",
+                        "45980.44",
+                        self.TARGET_DATE_ALLOCATION,
+                    )
+                ],
+            ),
+            account(
+                "Roth 401(k)",
+                "JPMC Roth 401(k)",
+                TaxTreatment.TAX_FREE,
+                [
+                    holding(
+                        FundType.TARGET_DATE,
+                        "Target Date 2070 Fund",
+                        "10997.75",
+                        self.TARGET_DATE_ALLOCATION,
+                    )
+                ],
+            ),
+            account(
+                "Roth IRA",
+                "Fidelity Roth IRA",
+                TaxTreatment.TAX_FREE,
+                [
+                    holding(FundType.US_STOCK, "FZROX", "22515.98"),
+                    holding(FundType.INTERNATIONAL_STOCK, "FZILX", "15744.14"),
+                    holding(FundType.US_BOND, "FXNAX", "400.28"),
+                ],
+            ),
+            account(
+                "Brokerage",
+                "Fidelity Individual Brokerage Account",
+                TaxTreatment.TAXABLE,
+                [
+                    holding(FundType.US_STOCK, "VTI", "6649.83"),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", "4967.71"),
+                    holding(FundType.CASH, "Cash", "0.24"),
+                ],
+            ),
+        ]
+        result = compute_trades(
+            accounts,
+            target("58.805", "36.195", 5),
+            band_pct=Decimal(5),
+            relative_band_pct=Decimal(25),
+        )
+        # Bonds sit at 1.2% against a 5% target, so the band is tripped and
+        # the correction is real -- and it happens entirely inside the Roth
+        # IRA, the only account with room to move.
+        assert trades_by_key(result) == {
+            ("Fidelity Roth IRA", "FZILX"): ("sell", Decimal("1456.96")),
+            ("Fidelity Roth IRA", "FZROX"): ("sell", Decimal("2616.72")),
+            ("Fidelity Roth IRA", "FXNAX"): ("buy", Decimal("4073.68")),
+        }
+
+    @pytest.mark.parametrize(
+        "us_stock, international, bond",
+        [("64.0", "34.3", "1.6"), ("64.2", "34.4", "1.5")],  # sums to 99.9, then 100.1
+    )
+    def test_a_target_date_fund_that_does_not_sum_to_exactly_100_still_solves(
+        self, us_stock, international, bond
+    ):
+        """A fact sheet rounds each sleeve to a tenth, so the three need not
+        come to 100 -- TargetDateAllocation allows a tenth either way. Read
+        as literal percentages, such a fund's sleeves contradict its own
+        account budget by a tenth of a percent of the account, which is a
+        thousand times the slack the solver has."""
+        allocation = TargetDateAllocation(
+            us_stock_pct=Decimal(us_stock),
+            international_stock_pct=Decimal(international),
+            bond_pct=Decimal(bond),
+        )
+        accounts = [
+            account(
+                "Traditional 401(k)",
+                "401k",
+                TaxTreatment.TAX_DEFERRED,
+                [holding(FundType.TARGET_DATE, "TDF", "45980.44", allocation)],
+            ),
+            account(
+                "Roth IRA",
+                "Roth",
+                TaxTreatment.TAX_FREE,
+                [
+                    holding(FundType.US_STOCK, "FZROX", "22515.98"),
+                    holding(FundType.INTERNATIONAL_STOCK, "FZILX", "15744.14"),
+                    holding(FundType.US_BOND, "FXNAX", "5000.28"),
+                ],
+            ),
+        ]
+        result = compute_trades(
+            accounts,
+            target("58.805", "36.195", 5),
+            band_pct=Decimal(5),
+            relative_band_pct=Decimal(25),
+        )
+        assert result.trades  # the portfolio is out of band; what matters is that it solved
+
+    @pytest.mark.parametrize(
+        "current",
+        [
+            # In band and fully invested; cash enough to settle the band;
+            # cash that cannot; and a plain rebalance. One per exit path.
+            {"us_stock": "63072.11", "international_stock": "38821.44", "bond": "5362.82"},
+            {"us_stock": "63000.00", "international_stock": "38800.00", "bond": "5000.00"},
+            {"us_stock": "70000.00", "international_stock": "30000.00", "bond": "5000.00"},
+            {"us_stock": "80000.00", "international_stock": "22256.37", "bond": "5000.00"},
+        ],
+    )
+    def test_the_resolved_class_totals_sum_to_the_portfolio_total_exactly(self, current):
+        total_value = Decimal("107256.37")
+        target_allocation = target("58.805", "36.195", 5)
+        resolved = _resolve_allocation(
+            {key: Decimal(value) for key, value in current.items()},
+            target_dollar_amounts(target_allocation, total_value),
+            target_dollar_bounds(target_allocation, total_value, Decimal(5), Decimal(25)),
+            {fund_type: (0.0, float(total_value)) for fund_type in _TARGET_FUND_TYPES},
+            total_value,
+        )
+        assert sum(resolved.values(), Decimal(0)) == total_value

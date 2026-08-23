@@ -93,6 +93,38 @@ It is excluded from the tradeable slots and from `_TARGET_FUND_TYPES`.
 positions. `_fund_type_coefficient` is what lets a single slot contribute
 fractionally to all three targets.
 
+**The three asset-class totals must sum to exactly the portfolio total, and every
+slot's three class coefficients to exactly 1.** The main LP states both families as
+equalities — each account spends exactly its own total, each class hits exactly the
+figure `_resolve_allocation` settled on — and since the coefficients sum to 1, adding
+the three class rows together reproduces the account rows. So the two are consistent
+only while those sums are exact, and a gap of *any* size is not imprecision: it is
+infeasibility, surfaced to the user as "no arrangement of the funds you hold reaches
+your target". Two things break it, and both shipped:
+
+- `_to_decimal` rounds each class to six decimal places independently, so two classes
+  rounding down half a micro-dollar each leave the three a millionth of a dollar short
+  — a thousand times HiGHS's feasibility tolerance. `_reconcile_to_total` closes the
+  gap at every exit of `_resolve_allocation` (the `dict(current)` return, the
+  `_place_cash` return and the LP's own), putting the residue on the largest class,
+  where it sits far below the cent grid. About one realistic portfolio in seven tripped
+  this.
+- `TargetDateAllocation` allows the three percentages to sum to 100 ±
+  `PERCENT_SUM_TOLERANCE`, because a fact sheet rounds each sleeve to a tenth. Read as
+  literal percentages over 100, such a fund contradicts its own account budget by a
+  tenth of a percent of the account. `TargetDateAllocation.fraction_of` divides by the
+  actual sum instead, and is the **one** place the three sleeves are turned into
+  fractions — `Holding.us_stock_component()` and friends and
+  `rebalance._fund_type_coefficient` all go through it, which is also what keeps
+  `_current_asset_class_dollars` agreeing with what the solver sees. It normalizes the
+  derived view only; the entered percentages are stored and echoed back untouched.
+
+Normalizing leaves a Decimal-division artifact around 1e-28, which is why
+`_resolve_allocation`'s uninvested-cash gate reads `to_cents(...)`: taken literally,
+that dust would count as cash and send a portfolio sitting on its target through
+`_place_cash` for nothing. Cents are the grid money is entered and traded on, and
+sub-cent cash is under `MIN_TRADE_DOLLARS` regardless.
+
 **An account holds a target-date fund *or* individual funds, never both** (cash may
 sit alongside either). `Account.__post_init__` enforces it, `prompts` asks which kind
 up front instead of offering a fourth yes/no, and `INDIVIDUAL_FUND_TYPES` is the set
