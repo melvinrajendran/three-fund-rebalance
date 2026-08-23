@@ -162,14 +162,15 @@ before tax-free, since their interest is taxed yearly as ordinary income.
 International stocks prefer taxable, where the foreign tax withheld on them is
 claimable as a credit a tax-advantaged account forfeits.
 
-**Only bond placement opens a taxable trade.** Trades inside sheltered
-accounts cost nothing, so the remaining preferences just decide which funds an
-account already being traded ends up holding.
+**Two things open a taxable trade: reaching the allocation, and moving bonds
+out of taxable.** No capital-gains tax is realized inside a sheltered account,
+so every preference below those only decides which funds an account already
+being traded ends up holding.
 
 **An account holds one target-date fund or individual funds, never both** -- a
 U.S. stock fund, an international stock fund and a bond fund, in any
-combination -- with cash alongside either. A target-date fund has a fixed
-internal mix, so the tool only invests that account's cash into it.
+combination -- with cash alongside either. A target-date fund is then the
+account's only holding, pinned by its total: it can only invest its cash.
 
 **Money never moves between accounts.** Each account's total is fixed; a
 rebalance only reallocates within it, including investing its cash. Orders
@@ -195,6 +196,11 @@ then manual entry. It never guesses silently.
 - **Preferring international in taxable is a rule of thumb.** The credit is
   worth a couple of basis points and is partly offset by those funds' higher,
   less-qualified dividends; the tool weighs neither.
+- **It cannot tell a municipal bond fund from a taxable one.** Bonds are moved
+  into sheltered accounts on the assumption their interest is taxed as
+  ordinary income; a muni fund belongs in taxable, and this will move it out.
+- **All the cash you enter is invested.** There is no reserve: keep an
+  emergency fund or a spending reserve out of the amounts you enter.
 - **It knows nothing about** contribution or withdrawal limits, holding
   periods, early-withdrawal penalties, or what a given account can actually
   hold -- a 401(k)'s fixed fund menu, for instance.
