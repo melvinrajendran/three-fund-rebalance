@@ -53,6 +53,47 @@ class TestTargetDateAllocation:
                 bond_pct=Decimal(20),
             )
 
+    def test_fraction_of_normalizes_a_fact_sheet_that_does_not_sum_to_100(self):
+        """The three sleeves have to come to exactly 1, whatever the fact
+        sheet's own rounding did -- the solver reads them alongside the
+        account's budget as hard equalities, and any gap between the two
+        makes an ordinary portfolio infeasible rather than merely
+        imprecise."""
+        allocation = TargetDateAllocation(
+            us_stock_pct=Decimal("64.0"),
+            international_stock_pct=Decimal("34.3"),
+            bond_pct=Decimal("1.6"),  # sums to 99.9
+        )
+        fractions = [
+            allocation.fraction_of(FundType.US_STOCK),
+            allocation.fraction_of(FundType.INTERNATIONAL_STOCK),
+            allocation.fraction_of(FundType.US_BOND),
+        ]
+        # Not bit-exact, and nothing may rely on it being so -- three IEEE
+        # doubles need not sum to 1.0, and CPython 3.12's compensated sum()
+        # hides that where 3.10's plain addition does not. What matters is
+        # that the *systematic* gap is gone: dividing by 100 would have left
+        # a tenth of a percent of the whole account belonging to no asset
+        # class at all, where what is left here is a rounding artifact around
+        # 1e-16 -- and the solver is not handed the redundant equality that
+        # would turn even that into an infeasible portfolio.
+        assert abs(sum(fractions) - Decimal(1)) < Decimal("1e-20")
+        assert abs(sum(float(fraction) for fraction in fractions) - 1.0) < 1e-12
+        assert fractions[0] == Decimal("64.0") / Decimal("99.9")
+
+    def test_fraction_of_leaves_the_entered_percentages_alone(self):
+        """A derived view, not a rewrite: prompts and the report echo the
+        fund's own numbers back, so those have to survive as entered."""
+        allocation = TargetDateAllocation(
+            us_stock_pct=Decimal("64.0"),
+            international_stock_pct=Decimal("34.3"),
+            bond_pct=Decimal("1.6"),
+        )
+        assert allocation.us_stock_pct == Decimal("64.0")
+
+    def test_fraction_of_a_class_the_fund_does_not_break_out_is_zero(self):
+        assert make_target_date().fraction_of(FundType.CASH) == Decimal(0)
+
 
 class TestHolding:
     def test_target_date_fund_requires_allocation(self):
