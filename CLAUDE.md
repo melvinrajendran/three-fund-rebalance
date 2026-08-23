@@ -398,9 +398,11 @@ loses them is a regression:
   **It is two lines, and stays two lines.** A longer draft also disclaimed the advisory
   relationship, order placement and trademark use. All true, all cut: eight lines of
   legal prose at the foot of a page is something a reader learns to skip, which costs
-  the disclosure the one thing it is there for. The README's Disclaimer section carries
-  the full set, and `--version` carries non-affiliation. Adding a clause here means
-  finding one to cut. `TestRequiredWording` pins both the wording and the line count.
+  the disclosure the one thing it is there for. Those clauses are not restated elsewhere
+  either: the README's Disclaimer section was cut back to the same two clauses plus a
+  pointer to Limitations, and `--version` is now the only place carrying
+  non-affiliation. Adding a clause here means finding one to cut.
+  `TestRequiredWording` pins both the wording and the line count.
 - **Nothing is called a "recommendation" and no order is phrased as an instruction.**
   "Recommendation" is a term of art under Reg BI and FINRA Rule 2111. Hence "Orders to
   place" and "Review each order before placing it:" rather than "Recommended trades"
@@ -578,6 +580,60 @@ exactly as an absent `rebalance_band_pct` does. A hop is for a name or a meaning
 changed. Note that `_upgrade_v2` now writes the literal `3` rather than
 `SCHEMA_VERSION` — same trap as `_upgrade_v1`, harmless only until the next hop
 exists.
+
+## The README
+
+It answers "what will this print, and what will it not do" — for someone deciding
+whether to install it. Everything about *how* the code works lives in this file
+instead, and the two must not converge: a README that grows a solver-phase
+explanation is the failure mode to watch for.
+
+Sections, in order: the one-paragraph blurb, Disclaimer, Example, Install, Running,
+How it works, Limitations, Development, License.
+
+**The Example is real output, pasted verbatim.** It is the first thing a reader sees
+and the reason the README is structured around it, so it may never be hand-edited or
+hand-idealized — re-generate it and paste the result. Any change to `report.py` or
+`formatting.py` wording means re-generating it. To do that, drive `run()` with a
+scripted prompter as the tests do (never by piping stdin — see "Running the CLI
+without side effects"), under `COLUMNS=80`, which is what `tests/conftest.py` pins the
+suite to and therefore the width every wrapping assertion in the repo assumes. The
+scenario is 80/20, a 5/25 band, and three accounts: a Brokerage holding VTI and VXUS,
+a Roth IRA holding VTI plus a declared-but-empty BND, and a Traditional 401(k) holding
+VTI and BND.
+
+**One line of the Example cannot come from such a run.** Passing `--vt-us-pct` to skip
+the network stamps the provenance line "manually specified via --vt-us-pct"
+(`cli.py`), where the README shows the fetched form — `_format_as_of`'s
+`%B %-d, %Y`, e.g. "(June 30, 2026)". The README deliberately shows the fetch path,
+because that is what a reader running the CLI normally will see. Substitute that one
+line by hand and leave the other seventy-odd exactly as printed.
+
+**How it works is a list of bolded lead-ins, each followed by at most a short
+paragraph** — two to four lines. It is a summary, not a specification. An entry that
+needs more room is either two entries (the band's definition and the band's trigger
+semantics are split for exactly this reason) or a Limitations bullet. Growing one past
+a short paragraph is the thing that keeps happening; splitting it is the fix.
+
+**Limitations is where caveats go**, as bullets with bolded lead-ins, which is what
+lets How it works stay short. A newly discovered thing the tool cannot see is a bullet
+there, not a qualification bolted onto a paragraph above.
+
+**The Disclaimer section is `report.DISCLAIMER`'s two clauses plus a pointer to
+Limitations, and nothing else.** The clauses cut from the report — advisory
+relationship, order placement, trademark use — are not restated here either; see the
+disclaimer entry under "Wording the output has to keep" for why. Non-affiliation lives
+in `--version` alone.
+
+**Every name the README uses for a user-visible concept is the program's own name for
+it.** The two bands, the 5/25 rule, the order/trade split, and the ban on
+"recommendation" all apply here exactly as they do to printed output — the README is
+one of the places the band names have to agree, and a rename is a change to all of
+them at once.
+
+Mechanically: prose wraps at 78 columns, hard; `--` for a dash, never an em dash, so
+the source matches what the CLI prints; asterisk emphasis for the band names on first
+use. Only an unbreakable line inside a fence (a `pipx install` URL) may run past 78.
 
 ## Testing conventions
 
