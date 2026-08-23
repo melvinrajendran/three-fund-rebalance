@@ -216,12 +216,10 @@ def _fund_type_coefficient(slot: _Slot, target_type: FundType) -> float:
     if slot.fund_type == target_type:
         return 1.0
     if slot.fund_type == FundType.TARGET_DATE:
-        pct = {
-            FundType.US_STOCK: slot.holding.target_date_allocation.us_stock_pct,
-            FundType.INTERNATIONAL_STOCK: slot.holding.target_date_allocation.international_stock_pct,
-            FundType.US_BOND: slot.holding.target_date_allocation.bond_pct,
-        }[target_type]
-        return float(pct) / 100.0
+        # `fraction_of`, not the raw percentage over 100: the three have to
+        # sum to exactly 1, or this slot's asset-class rows and its account's
+        # budget row contradict each other. See TargetDateAllocation.
+        return float(slot.holding.target_date_allocation.fraction_of(target_type))
     return 0.0
 
 
@@ -393,6 +391,35 @@ def _current_asset_class_dollars(accounts: list[Account]) -> dict[str, Decimal]:
     }
 
 
+def _reconcile_to_total(
+    class_totals: dict[str, Decimal], total_value: Decimal
+) -> dict[str, Decimal]:
+    """Force the three asset-class totals to sum to exactly `total_value`.
+
+    They do not, on their own: `_to_decimal` rounds each class to six decimal
+    places independently, so two classes rounding down half a micro-dollar
+    each leave the three summing to a millionth of a dollar less than the
+    portfolio.
+
+    `compute_trades` states only two of the three as equalities and lets the
+    account budgets imply the third, so a gap here no longer decides whether
+    the portfolio can be solved at all -- it decides whether the implied
+    class lands on the figure settled here or a hair off it. Close it anyway:
+    this function's whole contract is "what each asset class should be
+    worth", and three amounts that do not add up to the portfolio are not
+    that.
+
+    The residue goes to the largest class, where it is orders of magnitude
+    below the cent grid every displayed figure rounds to and so cannot
+    surface as an artifact.
+    """
+    residue = total_value - sum(class_totals.values(), Decimal(0))
+    if not residue:
+        return class_totals
+    largest = max(class_totals, key=lambda key: class_totals[key])
+    return {**class_totals, largest: class_totals[largest] + residue}
+
+
 def _place_cash(
     current: dict[str, Decimal],
     dollar_targets: dict[str, Decimal],
@@ -544,14 +571,20 @@ def _resolve_allocation(
     # `dollar_bounds` is the band already clamped to [0, total_value], so a
     # band wide enough to cover everything answers "inside" for everything,
     # which is what a band that wide means.
-    uninvested = total_value - sum(current.values(), Decimal(0))
+    # To the cent, because that is the grid money is entered and traded on.
+    # A target-date fund's sleeves are normalized fractions rather than exact
+    # decimals, so the components can miss the account's total by a rounding
+    # artifact many orders of magnitude below a penny; read literally, that
+    # dust would count as cash and send a portfolio sitting on its target
+    # into _place_cash for no reason.
+    uninvested = to_cents(total_value - sum(current.values(), Decimal(0)))
     if uninvested <= 0:
         if all(dollar_bounds[key][0] <= current[key] <= dollar_bounds[key][1] for key in keys):
             # Say it exactly, with the numbers the portfolio already holds,
             # rather than handing an LP a solver's-worth of slack to spend
             # drifting a fraction of a cent. The location phases still run:
             # this fixes the totals, and rearranging *within* them is free.
-            return dict(current)
+            return _reconcile_to_total(dict(current), total_value)
     else:
         # Cash first, then the trigger -- the band is asked about the
         # portfolio the cash leaves behind, not the one holding it. Testing
@@ -560,7 +593,7 @@ def _resolve_allocation(
         # inside its band, which is the opposite of what a band is for.
         after_cash = _place_cash(current, dollar_targets, dollar_bounds, reach, total_value)
         if after_cash is not None:
-            return after_cash
+            return _reconcile_to_total(after_cash, total_value)
 
     # p_0..p_2 are the class totals; the rest track distance from current and
     # from target, by the same absolute-value linearization used elsewhere.
@@ -614,7 +647,9 @@ def _resolve_allocation(
             bounds,
             "getting your allocation as close to target as the funds you hold allow",
         )
-    return {key: _to_decimal(solution.x[index]) for index, key in enumerate(keys)}
+    return _reconcile_to_total(
+        {key: _to_decimal(solution.x[index]) for index, key in enumerate(keys)}, total_value
+    )
 
 
 def _distribute_residual(
@@ -818,7 +853,21 @@ def compute_trades(
     # fraction of a cent inside a matched pair -- and with several phases of
     # carried-forward objective slack above them, that fraction survives to
     # the final rounding as an exact $40,000.00 turned into "$39,999.99".
-    for fund_type in _TARGET_FUND_TYPES:
+    #
+    # Only two of the three are stated. The third is implied -- every slot's
+    # three coefficients sum to 1, so adding the class rows together
+    # reproduces the account budget rows above -- and *stating* an implied
+    # row is not free: it is satisfiable only if the two sides agree to the
+    # last bit, which floating point will not do. Coefficients that sum to
+    # 1 + 1e-16 are enough to make a portfolio infeasible outright once the
+    # portfolio is large enough for that relative error to exceed the
+    # solver's absolute feasibility tolerance, which at HiGHS's 1e-7 is
+    # somewhere below $8B. Left implicit, the same error just puts a
+    # billionth of a cent of that portfolio in the wrong asset class.
+    #
+    # _resolve_allocation guarantees the three totals sum to the portfolio,
+    # so the implied class lands on its resolved figure, not merely near it.
+    for fund_type in _TARGET_FUND_TYPES[:-1]:
         aggregate = row()
         for i, slot in enumerate(slots):
             aggregate[i] = _fund_type_coefficient(slot, fund_type)

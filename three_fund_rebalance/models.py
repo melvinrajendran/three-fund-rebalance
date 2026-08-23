@@ -101,6 +101,38 @@ class TargetDateAllocation:
                 f"international_stock={self.international_stock_pct}, bond={self.bond_pct})"
             )
 
+    def fraction_of(self, fund_type: FundType) -> Decimal:
+        """This fund's share of one asset class, as a fraction of the whole
+        position -- normalized so the three shares sum to exactly 1.
+
+        Deliberately not `pct / 100`. The percentages come off a fact sheet
+        and are only required to sum to 100 within PERCENT_SUM_TOLERANCE, so
+        a fund printed as 64.0 / 34.3 / 1.6 sums to 99.9. Dividing by 100
+        would leave a tenth of a percent of the position belonging to no
+        asset class at all, which contradicts the plainer fact that the
+        account holds this fund and nothing else. The solver states both as
+        hard equalities -- each account spends exactly its own total, each
+        asset class hits exactly its resolved figure -- so the contradiction
+        does not degrade an answer, it makes an ordinary portfolio
+        infeasible. Dividing by the actual sum spreads the fact sheet's
+        rounding across the three sleeves in proportion, which is the only
+        reading that keeps the two statements consistent.
+
+        The percentages themselves are stored exactly as entered; this is a
+        derived view, so prompts and the report still echo the fund's own
+        numbers back.
+        """
+        pct = {
+            FundType.US_STOCK: self.us_stock_pct,
+            FundType.INTERNATIONAL_STOCK: self.international_stock_pct,
+            FundType.US_BOND: self.bond_pct,
+        }.get(fund_type)
+        if pct is None:
+            return Decimal(0)
+        # __post_init__ has already pinned the sum near 100, so this is never
+        # a division by zero.
+        return pct / (self.us_stock_pct + self.international_stock_pct + self.bond_pct)
+
 
 @dataclass(frozen=True)
 class Holding:
@@ -130,7 +162,7 @@ class Holding:
         if self.fund_type == FundType.US_STOCK:
             return self.value
         if self.fund_type == FundType.TARGET_DATE:
-            return self.value * self.target_date_allocation.us_stock_pct / Decimal(100)
+            return self.value * self.target_date_allocation.fraction_of(FundType.US_STOCK)
         return Decimal(0)
 
     def international_stock_component(self) -> Decimal:
@@ -138,7 +170,7 @@ class Holding:
         if self.fund_type == FundType.INTERNATIONAL_STOCK:
             return self.value
         if self.fund_type == FundType.TARGET_DATE:
-            return self.value * self.target_date_allocation.international_stock_pct / Decimal(100)
+            return self.value * self.target_date_allocation.fraction_of(FundType.INTERNATIONAL_STOCK)
         return Decimal(0)
 
     def bond_component(self) -> Decimal:
@@ -146,7 +178,7 @@ class Holding:
         if self.fund_type == FundType.US_BOND:
             return self.value
         if self.fund_type == FundType.TARGET_DATE:
-            return self.value * self.target_date_allocation.bond_pct / Decimal(100)
+            return self.value * self.target_date_allocation.fraction_of(FundType.US_BOND)
         return Decimal(0)
 
 
