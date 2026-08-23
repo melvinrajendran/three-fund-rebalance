@@ -487,10 +487,12 @@ loses them is a regression:
   Phase 2 minimizes taxable *volume*, which is not the same as pricing the sale, so the
   wording must neither skip the disclosure nor imply the solver costed it. Only the
   sale leg triggers it; a taxable buy realizes nothing.
-- **The landing allocation is conditional on the orders filling.** "If filled at the
-  values you entered", not "After these trades": an order fills at the market's price
-  on the day, not at the figure typed into the prompts, so the number is arithmetic
-  rather than a promise.
+- **The landing allocation is conditional on the orders filling.** "If these orders
+  fill at the values you entered, your portfolio will hold ...", not "After these
+  trades": an order fills at the market's price on the day, not at the figure typed
+  into the prompts, so the number is arithmetic rather than a promise. It is a full
+  sentence, naming each class in the words the rest of the report uses ("U.S. stocks",
+  "international stocks", "bonds") rather than a slash-separated fragment.
 - **"Tax-free" is qualified once**, under "Your accounts", because Roth and HSA
   withdrawals are tax-free only when qualified. One line: naming the age,
   holding-period and medical-expense conditions is the reader's plan documents' job,

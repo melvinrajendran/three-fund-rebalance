@@ -438,8 +438,9 @@ class TestOutcomeLine:
         )
         text = format_report(inputs([account], target), result)
         assert (
-            "If filled at the values you entered: "
-            "50.0% U.S. / 0.0% international / 50.0% bonds" in " ".join(text.split())
+            "If these orders fill at the values you entered, your portfolio will hold "
+            "50.0% U.S. stocks, 0.0% international stocks, and 50.0% bonds."
+            in " ".join(text.split())
         )
 
     def test_a_target_date_sleeve_moves_by_its_own_fractions(self):
@@ -546,7 +547,7 @@ class TestRequiredWording:
             taxable_bond_dollars=Decimal(0),
         )
         text = " ".join(self._report(result).split())
-        assert "If filled at the values you entered:" in text
+        assert "If these orders fill at the values you entered," in text
         assert "After these trades:" not in text
 
     def _taxable_report(self, trades):
