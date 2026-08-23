@@ -89,6 +89,16 @@ letting the band reach those phases turned out to be a real bug.
 **`FundType.CASH` has an implicit target of zero** — cash is always fully invested.
 It is excluded from the tradeable slots and from `_TARGET_FUND_TYPES`.
 
+**Cash is therefore not an asset class for drift purposes either.** It sits in the
+portfolio total the three classes are measured *against* — so a dividend swept into
+an account dilutes all three at once — but `_current_asset_class_dollars` never
+counts it as one of them, and it has no band. What it does is trip
+`_resolve_allocation`'s gate, which sends it through `_place_cash`; the band is then
+asked about the portfolio the cash leaves behind. The user is asked for "Cash
+available to invest", and every dollar of it is spent, so a reserve the user does
+not intend to invest must simply not be entered — a README limitation, not
+something the solver can see.
+
 **A target-date fund is one position holding a fixed internal ratio,** not three
 positions. `_fund_type_coefficient` is what lets a single slot contribute
 fractionally to all three targets.
@@ -660,6 +670,15 @@ needs more room is either two entries (the band's definition and the band's trig
 semantics are split for exactly this reason) or a Limitations bullet. Growing one past
 a short paragraph is the thing that keeps happening; splitting it is the fix.
 
+**But compressing one until it says something false is the worse failure**, and it has
+happened. An entry read "Only bond placement opens a taxable trade. Trades inside
+sheltered accounts cost nothing" — two false claims in one lead-in. Reaching the
+resolved allocation opens taxable trades too (those are hard equalities; phase 1 is
+merely the highest *preference* that can open one), and a sheltered trade realizes no
+capital gain but still pays spreads and fees, which Limitations already discloses. A
+lead-in that ranks or excludes something has to survive being read against the phase
+list; when it cannot be made both short and true, it is a Limitations bullet.
+
 **Limitations is where caveats go**, as bullets with bolded lead-ins, which is what
 lets How it works stay short. A newly discovered thing the tool cannot see is a bullet
 there, not a qualification bolted onto a paragraph above.
@@ -678,7 +697,9 @@ them at once.
 
 Mechanically: prose wraps at 78 columns, hard; `--` for a dash, never an em dash, so
 the source matches what the CLI prints; asterisk emphasis for the band names on first
-use. Only an unbreakable line inside a fence (a `pipx install` URL) may run past 78.
+use. Only an unbreakable line may run past 78: one inside a fence (a `pipx install`
+URL), or a row of the options table under Running, which cannot be wrapped without
+breaking the table.
 
 ## Testing conventions
 
