@@ -29,11 +29,11 @@ DEFAULT_CONFIG_PATH = Path.home() / ".three_fund_rebalance" / "config.json"
 # Trading
 # ---------------------------------------------------------------------------
 
-# Fidelity's fractional-share ("Stocks by the Slice") minimum is $1, and it
+# Vanguard's fractional-share minimum for a Vanguard ETF is $1, and it
 # applies the same way in a Roth IRA as in a taxable brokerage account, so
 # the lesser of the two is $1. Trades smaller than this are not actionable
 # and are dropped from the plan rather than shown as noise.
-# https://www.fidelity.com/trading/fractional-shares
+# https://investor.vanguard.com/investment-products/etfs/etf-fees
 MIN_TRADE_DOLLARS = Decimal("1.00")
 
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ ACCOUNT_TYPE_TAX_TREATMENT: dict[str, TaxTreatment] = {
 # Longest account nickname accepted. A nickname is a label the user makes up,
 # so unlike a fund's real name it can fairly be bounded -- and it is what
 # makes the account headings run past the page width. Generous enough for the
-# descriptive names brokerages themselves use ("Fidelity Individual Brokerage
+# descriptive names brokerages themselves use ("Vanguard Individual Brokerage
 # Account" is 37). Only enforced at the prompt: a longer name in a config file
 # written by an older version still loads.
 MAX_ACCOUNT_NAME_LENGTH = 40

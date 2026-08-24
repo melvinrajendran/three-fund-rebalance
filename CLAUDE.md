@@ -524,7 +524,7 @@ those are labels the user invents, unlike a fund's real name, and they were what
 pushed the headings off the page.
 
 An account heading is always `nickname (type, treatment)` —
-`Fidelity Roth IRA (Roth IRA, tax-free)`, `Fidelity Brokerage (Brokerage, taxable)` —
+`Vanguard Roth IRA (Roth IRA, tax-free)`, `Vanguard Brokerage (Brokerage, taxable)` —
 with the treatment *inside* the parentheses. Inside rather than after a dash because it
 is shorter and safe at the nickname cap: the longest possible heading lands well inside
 the page rather than wrapping and stranding a `--` at the end of a line. Uniform

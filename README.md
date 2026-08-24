@@ -43,13 +43,13 @@ all three go back to target.
 Your accounts
 -------------
 
-  Fidelity Brokerage (Brokerage, taxable)
+  Vanguard Brokerage (Brokerage, taxable)
     VTI (U.S. stock fund)            $60,000.00
     VXUS (international stock fund)  $30,000.00
     BND (bond fund)                          --
     Total                            $90,000.00
 
-  Fidelity Roth IRA (Roth IRA, tax-free)
+  Vanguard Roth IRA (Roth IRA, tax-free)
     VTI (U.S. stock fund)            $20,000.00
     VXUS (international stock fund)          --
     BND (bond fund)                          --
@@ -79,7 +79,7 @@ Orders to place
 ---------------
 Review each order before placing it:
 
-  Fidelity Roth IRA (Roth IRA)
+  Vanguard Roth IRA (Roth IRA)
     Exchange $5,600.00 from VTI to VXUS
 
   Employer 401(k) (Traditional 401(k))

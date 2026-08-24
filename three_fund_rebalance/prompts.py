@@ -597,7 +597,7 @@ def _prompt_new_account(
     while True:
         name = prompt_str(
             prompter,
-            "Account nickname (must be unique, e.g. 'Fidelity Roth IRA')",
+            "Account nickname (must be unique, e.g. 'Vanguard Roth IRA')",
             max_length=MAX_ACCOUNT_NAME_LENGTH,
         )
         if name in existing_names:
