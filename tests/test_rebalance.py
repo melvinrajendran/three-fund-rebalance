@@ -27,7 +27,9 @@ def holding(fund_type, name, value, allocation=None):
 
 
 def account(account_type, name, tax_treatment, holdings):
-    return Account(account_type=account_type, name=name, tax_treatment=tax_treatment, holdings=holdings)
+    return Account(
+        account_type=account_type, name=name, tax_treatment=tax_treatment, holdings=holdings
+    )
 
 
 def target(us_stock, international, bond):
@@ -122,7 +124,9 @@ class TestSolverFailure:
                 [holding(FundType.US_STOCK, "VTI", 100)],
             )
         ]
-        with pytest.raises(RebalanceError, match="no arrangement of the funds you hold reaches your target"):
+        with pytest.raises(
+            RebalanceError, match="no arrangement of the funds you hold reaches your target"
+        ):
             compute_trades(accounts, target(100, 0, 0))
 
 
@@ -173,7 +177,11 @@ class TestValidation:
         accounts = [
             account(
                 "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
-                [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
+                [
+                    holding(
+                        FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc
+                    )
+                ],
             ),
             account(
                 "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
@@ -236,7 +244,9 @@ class TestBondsPreferTaxAdvantaged:
         assert len(result.warnings) == 1
         assert "3,900.00" in result.warnings[0] or "3900" in result.warnings[0]
 
-        roth_bond = next(t for t in result.trades if t.account_name == "Roth" and t.fund_name == "BND")
+        roth_bond = next(
+            t for t in result.trades if t.account_name == "Roth" and t.fund_name == "BND"
+        )
         assert roth_bond.action == "buy"
         assert roth_bond.amount == Decimal("100.00")
 
@@ -377,7 +387,11 @@ class TestTargetDateFunds:
         accounts = [
             account(
                 "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
-                [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
+                [
+                    holding(
+                        FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc
+                    )
+                ],
             )
         ]
         result = compute_trades(accounts, target(60, 20, 20))
@@ -448,7 +462,11 @@ class TestTargetDateFunds:
         accounts = [
             account(
                 "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
-                [holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc)],
+                [
+                    holding(
+                        FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc
+                    )
+                ],
             )
         ]
         result = compute_trades(accounts, target(60, 20, 20))
@@ -778,6 +796,32 @@ class TestWashSaleAvoidance:
         assert trades[("Roth", "VTI")][0] == "buy"
 
 
+class TestDeclaredCapacity:
+    """A slot exists because the account *can* hold that asset class, not
+    because it currently does. This is what the prompts collect now: an
+    account holding individual funds declares all three, whatever it holds."""
+
+    def _roth(self, holdings):
+        return [account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, holdings)]
+
+    def test_a_fund_declared_with_no_position_is_bought_into(self):
+        accounts = self._roth([
+            holding(FundType.US_STOCK, "VTI", 10_000),
+            holding(FundType.US_BOND, "BND", 0),
+        ])
+        trades = trades_by_key(compute_trades(accounts, target(80, 0, 20)))
+        assert trades[("Roth", "VTI")] == ("sell", Decimal("2000.00"))
+        assert trades[("Roth", "BND")] == ("buy", Decimal("2000.00"))
+
+    def test_without_that_slot_the_same_target_is_out_of_reach(self):
+        """The pair that earns its keep: drop the empty declaration and the
+        portfolio cannot be solved at all. Answering "no" to a fund not yet
+        bought used to do exactly this."""
+        accounts = self._roth([holding(FundType.US_STOCK, "VTI", 10_000)])
+        with pytest.raises(RebalanceError, match="bond"):
+            compute_trades(accounts, target(80, 0, 20))
+
+
 class TestRebalancingBand:
     """The band decides *whether* to rebalance. Once it says yes, the target
     is a point like any other."""
@@ -861,7 +905,9 @@ class TestRebalancingBand:
             ]),
         ]
         result = compute_trades(accounts, target(50, 30, 20), Decimal(5))
-        assert not [t for t in result.trades if t.account_name == "Brokerage" and t.action == "sell"]
+        assert not [
+            t for t in result.trades if t.account_name == "Brokerage" and t.action == "sell"
+        ]
         # The $100 reaches bonds, the class furthest below target, by way of
         # a free swap in the 401(k) -- the taxable account has no bond fund.
         assert trades_by_key(result) == {

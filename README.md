@@ -46,17 +46,20 @@ Your accounts
   Fidelity Brokerage (Brokerage, taxable)
     VTI (U.S. stock fund)            $60,000.00
     VXUS (international stock fund)  $30,000.00
+    BND (bond fund)                          --
     Total                            $90,000.00
 
   Fidelity Roth IRA (Roth IRA, tax-free)
-    VTI (U.S. stock fund)  $20,000.00
-    BND (bond fund)                --
-    Total                  $20,000.00
+    VTI (U.S. stock fund)            $20,000.00
+    VXUS (international stock fund)          --
+    BND (bond fund)                          --
+    Total                            $20,000.00
 
   Employer 401(k) (Traditional 401(k), tax-deferred)
-    VTI (U.S. stock fund)  $30,000.00
-    BND (bond fund)        $10,000.00
-    Total                  $40,000.00
+    VTI (U.S. stock fund)            $30,000.00
+    VXUS (international stock fund)          --
+    BND (bond fund)                  $10,000.00
+    Total                            $40,000.00
 
 "Tax-free" means qualified withdrawals only; Roth and HSA rules apply.
 
@@ -76,17 +79,16 @@ Orders to place
 ---------------
 Review each order before placing it:
 
-  Fidelity Brokerage (Brokerage)
-    Exchange $15,600.00 from VTI to VXUS
+  Fidelity Roth IRA (Roth IRA)
+    Exchange $5,600.00 from VTI to VXUS
 
   Employer 401(k) (Traditional 401(k))
-    Exchange $20,000.00 from VTI to BND
+    Sell $30,000.00 of VTI
+    Buy $10,000.00 of VXUS
+    Buy $20,000.00 of BND
 
 If these orders fill at the values you entered, your portfolio will hold 49.6%
 U.S. stocks, 30.4% international stocks, and 20.0% bonds.
-
-Selling $15,600.00 in your taxable accounts may realize capital gains or
-losses; no cost basis is collected here, so that tax is not estimated.
 
 Not investment, tax, or legal advice, and not a recommendation to buy or sell.
 Consult a professional about your situation.
@@ -148,10 +150,11 @@ or type a new one.
 **Allocation before location.** The tool settles what each asset class should
 be worth, then decides which accounts hold it.
 
-**Rebalancing bands.** You set two -- the 5/25 rule -- and an asset class has
-to satisfy both, so the tighter binds: the *absolute band*, in percentage
-points of the portfolio, and the *relative band*, as a share of the asset
-class's own target. Zero on either tolerates no drift.
+**Rebalancing bands.** You set two -- and an asset class has to satisfy both,
+so the tighter binds: the *absolute band*, in percentage points of the
+portfolio, and the *relative band*, as a share of the asset class's own
+target. Zero on either tolerates no drift. Both are asked outright with no
+suggested answer; 5 and 25 -- the 5/25 rule -- is the usual convention.
 
 **A band is a trigger, not a destination.** No trades while every asset class
 is inside its band; once one falls outside, all three go back to target. Cash
@@ -167,10 +170,15 @@ out of taxable.** No capital-gains tax is realized inside a sheltered account,
 so every preference below those only decides which funds an account already
 being traded ends up holding.
 
-**An account holds one target-date fund or individual funds, never both** -- a
-U.S. stock fund, an international stock fund and a bond fund, in any
-combination -- with cash alongside either. A target-date fund is then the
-account's only holding, pinned by its total: it can only invest its cash.
+**An account holds one target-date fund or all three individual funds, never
+both** -- a U.S. stock fund, an international stock fund and a bond fund --
+with cash alongside either. A target-date fund is then the account's only
+holding, pinned by its total: it can only invest its cash.
+
+**Name a fund you don't own yet.** All three individual funds are asked for
+whether or not you hold any today, and one entered at $0 is capacity: the plan
+can buy into it. That is often what lets a portfolio reach its bond target
+without selling anything in a taxable account.
 
 **Money never moves between accounts.** Each account's total is fixed; a
 rebalance only reallocates within it, including investing its cash. Orders
@@ -178,13 +186,18 @@ smaller than $1.00 are left out as impractical.
 
 **VT's U.S./international split** comes from Vanguard's monthly JSON endpoint,
 falling back to the quarterly fact sheet PDF, then your last cached value,
-then manual entry. It never guesses silently.
+then manual entry -- which points you at VT's fund page to read the number
+off yourself. It never guesses silently.
 
 ## Limitations
 
 **No cost basis.** It cannot compute capital gains, and minimizes taxable
 trade *volume* as a proxy. Selling in a taxable account may realize capital
 gains or losses this tool never sees.
+
+**Every account holding individual funds is assumed able to buy all three.**
+A plan with a restricted fund lineup -- a 401(k) with no international option,
+say -- may be given an order it cannot fill.
 
 **No costs.** Amounts exclude commissions, fees, bid-ask spreads and
 short-term redemption fees, and it does not know your broker's fund minimums

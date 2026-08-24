@@ -80,7 +80,9 @@ def _target_date_allocation_from_dict(data: dict) -> TargetDateAllocation:
 def _holding_to_dict(holding: Holding) -> dict:
     data = {"fund_type": holding.fund_type.value, "name": holding.name, "value": str(holding.value)}
     if holding.target_date_allocation is not None:
-        data["target_date_allocation"] = _target_date_allocation_to_dict(holding.target_date_allocation)
+        data["target_date_allocation"] = _target_date_allocation_to_dict(
+            holding.target_date_allocation
+        )
     return data
 
 
@@ -96,7 +98,9 @@ def _holding_from_dict(data: dict) -> Holding:
             fund_type=fund_type,
             name=data.get("name", ""),
             value=value,
-            target_date_allocation=_target_date_allocation_from_dict(allocation_data) if allocation_data else None,
+            target_date_allocation=(
+                _target_date_allocation_from_dict(allocation_data) if allocation_data else None
+            ),
         )
     except (AttributeError, TypeError, ValueError) as exc:
         raise PersistenceError(f"Invalid holding in config: {data!r}: {exc}") from exc

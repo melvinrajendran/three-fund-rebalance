@@ -123,27 +123,38 @@ class TestExtractFromDiversification:
             _extract_us_pct_from_diversification({"sector": {}})
 
     def test_missing_united_states_entry_raises(self):
-        payload = {"country": {"currentAsOfDate": "", "item": [{"name": "Japan", "currYrPct": "5.8"}]}}
+        payload = {
+            "country": {"currentAsOfDate": "", "item": [{"name": "Japan", "currYrPct": "5.8"}]}
+        }
         with pytest.raises(VTFetchError, match="no 'United States' entry"):
             _extract_us_pct_from_diversification(payload)
 
     def test_null_current_percentage_raises(self):
         payload = {
-            "country": {"currentAsOfDate": "", "item": [{"name": "United States", "currYrPct": None}]}
+            "country": {
+                "currentAsOfDate": "",
+                "item": [{"name": "United States", "currYrPct": None}],
+            }
         }
         with pytest.raises(VTFetchError, match=r"no current-period U\.S\. percentage"):
             _extract_us_pct_from_diversification(payload)
 
     def test_unparseable_percentage_raises(self):
         payload = {
-            "country": {"currentAsOfDate": "", "item": [{"name": "United States", "currYrPct": "abc"}]}
+            "country": {
+                "currentAsOfDate": "",
+                "item": [{"name": "United States", "currYrPct": "abc"}],
+            }
         }
         with pytest.raises(VTFetchError, match="Could not parse"):
             _extract_us_pct_from_diversification(payload)
 
     def test_out_of_range_percentage_raises(self):
         payload = {
-            "country": {"currentAsOfDate": "", "item": [{"name": "United States", "currYrPct": "150"}]}
+            "country": {
+                "currentAsOfDate": "",
+                "item": [{"name": "United States", "currYrPct": "150"}],
+            }
         }
         with pytest.raises(VTFetchError, match="out of range"):
             _extract_us_pct_from_diversification(payload)

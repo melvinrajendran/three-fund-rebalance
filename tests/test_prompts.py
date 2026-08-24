@@ -13,6 +13,7 @@ from three_fund_rebalance.models import (
 )
 from three_fund_rebalance.prompts import (
     BAND_EXPLANATION,
+    FUND_EXPLANATION,
     Prompter,
     prompt_accounts,
     prompt_choice,
@@ -113,7 +114,8 @@ class TestPromptDecimal:
 
     def test_enforces_min_and_max(self):
         p = ScriptedPrompter(["-5", "200", "50"])
-        assert prompt_decimal(p, "Amount", min_value=Decimal(0), max_value=Decimal(100)) == Decimal(50)
+        amount = prompt_decimal(p, "Amount", min_value=Decimal(0), max_value=Decimal(100))
+        assert amount == Decimal(50)
 
     def test_uses_default_on_empty(self):
         p = ScriptedPrompter([""])
@@ -121,7 +123,9 @@ class TestPromptDecimal:
 
 
 class TestPromptYesNo:
-    @pytest.mark.parametrize("raw,expected", [("y", True), ("yes", True), ("n", False), ("no", False)])
+    @pytest.mark.parametrize(
+        "raw,expected", [("y", True), ("yes", True), ("n", False), ("no", False)]
+    )
     def test_parses_variants(self, raw, expected):
         p = ScriptedPrompter([raw])
         assert prompt_yes_no(p, "Sure?") == expected
@@ -172,7 +176,7 @@ class TestRebalanceBandPrompts:
 
     def _asked(self, func):
         asked = []
-        p = Prompter(input_func=lambda text: asked.append(text) or "", print_func=lambda _: None)
+        p = Prompter(input_func=lambda text: asked.append(text) or "5", print_func=lambda _: None)
         func(p)
         return asked[0]
 
@@ -204,10 +208,27 @@ class TestRebalanceBandPrompts:
         assert BAND_EXPLANATION.count(".") == 1
         assert len(wrap(BAND_EXPLANATION).split("\n")) <= 2
 
-    def test_the_defaults_are_the_5_25_convention(self):
-        p = ScriptedPrompter(["", ""])
+    def test_neither_half_offers_a_suggested_answer(self):
+        """The band decides whether the program does anything at all, and 5/25
+        is a convention rather than a recommendation this program is in a
+        position to make. Offering it meant a first run could be walked past
+        with two keystrokes, and a number the user never chose then reads back
+        in the report as their own policy."""
+        assert "[" not in self._asked(prompt_rebalance_band)
+        assert "[" not in self._asked(prompt_relative_rebalance_band)
+
+    def test_pressing_enter_re_asks_rather_than_choosing_for_you(self):
+        p = ScriptedPrompter(["", "5"])
         assert prompt_rebalance_band(p) == Decimal(5)
-        assert prompt_relative_rebalance_band(p) == Decimal(25)
+        assert "Please enter a number." in p.said
+
+    def test_a_saved_answer_is_still_offered_as_an_editable_default(self):
+        """Nothing about requiring an answer changes the persistence contract:
+        a returning user presses Enter to keep what they chose last time."""
+        p = ScriptedPrompter([""])
+        assert prompt_rebalance_band(p, default=Decimal(3)) == Decimal(3)
+        p = ScriptedPrompter([""])
+        assert prompt_relative_rebalance_band(p, default=Decimal(20)) == Decimal(20)
 
 
 class TestTaxTreatmentChoices:
@@ -236,13 +257,29 @@ class TestTaxTreatmentChoices:
 
 
 class TestPromptStockBondTarget:
-    def test_accepts_valid_allocation(self):
-        p = ScriptedPrompter(["80", "20"])
+    def test_only_the_stock_share_is_asked_for(self):
+        """Two percentages summing to 100 carry one degree of freedom, so the
+        bond share is stated back rather than asked for."""
+        p = ScriptedPrompter(["80", "y"])
         stock, bond = prompt_stock_bond_allocation(p)
         assert (stock, bond) == (Decimal(80), Decimal(20))
+        assert p.all_consumed()
 
-    def test_retries_when_not_summing_to_100(self):
-        p = ScriptedPrompter(["80", "30", "70", "30"])
+    def test_the_derived_bond_share_is_confirmed_in_words(self):
+        asked = []
+        answers = iter(["80", "y"])
+        p = Prompter(
+            input_func=lambda text: asked.append(text) or next(answers),
+            print_func=lambda _: None,
+        )
+        prompt_stock_bond_allocation(p)
+        assert any("That leaves 20% bonds. Correct?" in text for text in asked)
+
+    def test_declining_the_derived_share_restarts_from_the_stock_question(self):
+        """The number the user wants to change is the one they typed -- the
+        derived half is not theirs to edit -- so a denial goes back to the
+        top rather than asking for bonds directly."""
+        p = ScriptedPrompter(["80", "n", "70", "y"])
         stock, bond = prompt_stock_bond_allocation(p)
         assert (stock, bond) == (Decimal(70), Decimal(30))
 
@@ -252,7 +289,9 @@ class TestResolveVtSplit:
         monkeypatch.setattr(
             prompts_module,
             "fetch_vt_us_pct",
-            lambda: VTAllocationResult(us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"),
+            lambda: VTAllocationResult(
+                us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"
+            ),
         )
         p = ScriptedPrompter(["y"])
         result = resolve_vt_allocation(p)
@@ -263,7 +302,9 @@ class TestResolveVtSplit:
         monkeypatch.setattr(
             prompts_module,
             "fetch_vt_us_pct",
-            lambda: VTAllocationResult(us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"),
+            lambda: VTAllocationResult(
+                us_pct=Decimal("61.9"), as_of="June 30, 2026", source="vanguard_fact_sheet"
+            ),
         )
         p = ScriptedPrompter(["n", "y"])  # reject live, accept cache
         result = resolve_vt_allocation(p, cached_us_pct=Decimal(60), cached_as_of="last quarter")
@@ -296,7 +337,9 @@ class TestResolveVtSplit:
 
         monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", fail_if_called)
         p = ScriptedPrompter(["y"])
-        result = resolve_vt_allocation(p, cached_us_pct=Decimal(60), cached_as_of="last quarter", offline=True)
+        result = resolve_vt_allocation(
+            p, cached_us_pct=Decimal(60), cached_as_of="last quarter", offline=True
+        )
         assert result.us_pct == Decimal(60)
 
 
@@ -331,10 +374,10 @@ class TestPromptAccounts:
             "y",  # Add an account?
             "1",  # account type -> Roth IRA
             "My Roth",  # nickname
-            "1",  # holds individual funds
-            "y", "VTI", "6000",  # U.S. stock fund
-            "y", "VXUS", "2000",  # international stock fund
-            "y", "BND", "2000",  # bond
+            "1",  # three individual funds
+            "VTI", "6000",  # U.S. stock fund
+            "VXUS", "2000",  # international stock fund
+            "BND", "2000",  # bond fund
             "0",  # cash
             "n",  # Add another account?
         ]
@@ -351,28 +394,33 @@ class TestPromptAccounts:
 
     def test_duplicate_nickname_is_rejected_and_retried(self):
         responses = [
-            "y", "1", "First", "1", "n", "n", "n", "0",
-            "y", "1", "First", "SecondUnique", "1", "n", "n", "n", "0",
+            "y", "1", "First", "1", "VTI", "0", "VXUS", "0", "BND", "0", "0",
+            "y", "1", "First", "SecondUnique",
+            "1", "VTI", "0", "VXUS", "0", "BND", "0", "0",
             "n",
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [])
         assert [a.name for a in accounts] == ["First", "SecondUnique"]
 
-    def test_target_date_allocation_must_sum_to_100_with_retry(self):
+    def test_target_date_sleeves_over_100_are_rejected_and_retried(self):
+        """Only two sleeves are asked for -- the third is what they leave --
+        so the one way to be wrong is for the two to exceed 100 outright."""
         responses = [
             "y", "1", "401k",
             "2",  # holds a single target-date fund
             "Target 2050", "10000",
-            "50", "30", "10",  # invalid sum (90)
-            "60", "20", "20",  # valid
+            "50", "60",  # 110 between them, leaving less than no bonds
+            "60", "20", "y",  # valid, and the derived 20% bonds confirmed
             "0",  # cash
             "n",
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [])
-        target_date_holding = accounts[0].get_holding(FundType.TARGET_DATE)
-        assert target_date_holding.target_date_allocation.us_stock_pct == Decimal(60)
+        assert p.all_consumed()
+        allocation = accounts[0].get_holding(FundType.TARGET_DATE).target_date_allocation
+        assert allocation.us_stock_pct == Decimal(60)
+        assert allocation.bond_pct == Decimal(20)
 
     def test_keep_existing_account_and_update_value_via_default(self):
         existing = Account(
@@ -385,15 +433,47 @@ class TestPromptAccounts:
         )
         responses = [
             "y",  # Keep account 'My Roth'?
-            "",  # value default (keep 6000)
-            "n", "n",  # decline adding international/bond
+            "",  # U.S. stock fund name -> keep VTI
+            "",  # ...and its value -> keep 6000
+            "VXUS", "0",  # a config saved before all three were asked for
+            "BND", "0",
             "",  # cash default (0)
             "n",  # Add another account?
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [existing])
+        assert p.all_consumed()
         assert len(accounts) == 1
         assert accounts[0].get_holding(FundType.US_STOCK).value == Decimal(6000)
+
+    def test_a_saved_ticker_is_offered_as_an_editable_default(self):
+        """A fund's name was fixed once saved. With a slot standing open for
+        a fund not yet bought, the name is the part most likely to change --
+        a plan swaps its bond fund -- so it is re-asked with the old one
+        pre-filled. That is also why no slot ever needs deleting."""
+        existing = Account(
+            account_type="Traditional 401(k)",
+            name="401k",
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
+            holdings=[
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
+                Holding(fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(0)),
+                Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(0)),
+            ],
+        )
+        responses = [
+            "y",  # Keep account '401k'?
+            "", "",  # U.S. stock fund unchanged
+            "", "",  # international unchanged
+            "VBTLX", "",  # the plan's bond fund changed; the value did not
+            "",  # cash
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [existing])
+        assert p.all_consumed()
+        assert accounts[0].get_holding(FundType.US_BOND).name == "VBTLX"
+        assert accounts[0].get_holding(FundType.US_BOND).value == Decimal(0)
 
     def test_removing_existing_account(self):
         existing = Account(
@@ -416,8 +496,8 @@ class TestPromptAccounts:
             "11",  # "Other" is the last entry in ACCOUNT_TYPE_CHOICES
             tax_treatment_choice,  # how is this account taxed?
             "MyOtherAccount",
-            "1",  # holds individual funds
-            "n", "n", "n",  # decline all three of them
+            "1",  # three individual funds
+            "VTI", "0", "VXUS", "0", "BND", "0",  # declared, none held yet
             "50",  # nonzero cash
             "n",  # Add another account?
         ]
@@ -442,7 +522,7 @@ class TestPromptAccounts:
         accounts = prompt_accounts(p, [])
         assert accounts[0].tax_treatment == TaxTreatment.TAXABLE
 
-    def test_updating_an_individual_fund_account_offers_only_the_missing_ones(self):
+    def test_updating_an_individual_fund_account_asks_for_all_three_slots(self):
         existing = Account(
             account_type="Roth 401(k)",
             name="401k",
@@ -454,9 +534,9 @@ class TestPromptAccounts:
         )
         responses = [
             "y",  # Keep account '401k'?
-            "",  # VTI value -> keep default 6000
-            "y", "VXUS", "500",  # add international stock fund (not previously declared)
-            "n",  # decline adding a U.S. bond fund
+            "", "",  # U.S. stock fund -> keep VTI at 6000
+            "VXUS", "500",  # international, never declared before
+            "BND", "0",  # ...and a bond slot standing open
             "200",  # cash -> update to 200
             "n",  # Add another account?
         ]
@@ -465,6 +545,7 @@ class TestPromptAccounts:
         assert p.all_consumed()
         updated = accounts[0]
         assert updated.get_holding(FundType.INTERNATIONAL_STOCK).value == Decimal(500)
+        assert updated.get_holding(FundType.US_BOND).value == Decimal(0)
         assert updated.available_cash() == Decimal(200)
         # A target-date fund was never offered -- this account holds individual
         # funds, so adding one would make it a mix.
@@ -483,7 +564,7 @@ class TestPromptAccounts:
             "y",  # Keep account 'Empty Roth'?
             "2",  # it now holds a single target-date fund
             "Target 2050", "500",
-            "60", "20", "20",
+            "60", "20", "y",
             "0",  # cash -> all invested
             "n",  # Add another account?
         ]
@@ -514,9 +595,10 @@ class TestPromptAccounts:
         )
         responses = [
             "y",  # Keep account '401k'?
-            "",  # target-date fund value -> keep default 3000
+            "",  # target-date fund name -> keep 'Target 2050'
+            "",  # ...and its value -> keep default 3000
             "y",  # update the fund's underlying allocation?
-            "70", "15", "15",  # new underlying allocation
+            "70", "15", "y",  # new underlying allocation; 15% bonds derived
             "200",  # cash -> update to 200
             "n",  # Add another account?
         ]
@@ -524,7 +606,8 @@ class TestPromptAccounts:
         accounts = prompt_accounts(p, [existing])
         assert p.all_consumed()
         updated = accounts[0]
-        assert updated.get_holding(FundType.TARGET_DATE).target_date_allocation.us_stock_pct == Decimal(70)
+        allocation = updated.get_holding(FundType.TARGET_DATE).target_date_allocation
+        assert allocation.us_stock_pct == Decimal(70)
         assert updated.available_cash() == Decimal(200)
         assert [h.fund_type for h in updated.holdings] == [FundType.TARGET_DATE, FundType.CASH]
         # The mix being replaced is shown, so the answer isn't from memory. It
@@ -534,16 +617,47 @@ class TestPromptAccounts:
             for line in p.said
         )
 
-    def test_taxable_account_with_bonds_prints_a_note(self):
+    def test_a_fund_with_no_position_is_still_declared(self):
+        """The point of asking for all three: a fund the user owns none of
+        becomes a slot the solver can buy into. Answering "no" to a fund not
+        yet bought used to remove the only place an asset class could go."""
         responses = [
             "y", "10",  # account type "Brokerage" is index 10 in ACCOUNT_TYPE_CHOICES
             "Brokerage",
-            "1",  # holds individual funds
-            "n", "n",  # no U.S./international stock funds
-            "y", "BND", "1000",  # bond fund
+            "1",  # three individual funds
+            "VTI", "60000",
+            "VXUS", "30000",
+            "BND", "",  # named, nothing held yet
             "0",  # cash
             "n",
         ]
         p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [])
+        assert p.all_consumed()
+        bond_slot = accounts[0].get_holding(FundType.US_BOND)
+        assert bond_slot.name == "BND"
+        assert bond_slot.value == Decimal(0)
+
+    def test_the_fund_questions_are_introduced_once(self):
+        """Nothing in "Bond fund:" says a fund you own none of belongs in the
+        answer, so the one sentence above the three says it."""
+        responses = [
+            "y", "1", "My Roth", "1",
+            "VTI", "1", "VXUS", "0", "BND", "0", "0",
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
         prompt_accounts(p, [])
-        assert any("bonds" in line.lower() and "taxed" in line.lower() for line in p.said)
+        assert sum(FUND_EXPLANATION in text for text in p.said) == 1
+
+    def test_the_asset_location_note_is_not_said_during_onboarding(self):
+        """It explained a trade the user had not seen yet. The README's
+        "Asset location" entry is where it lives now."""
+        responses = [
+            "y", "10", "Brokerage", "1",
+            "VTI", "0", "VXUS", "0", "BND", "1000", "0",
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
+        prompt_accounts(p, [])
+        assert not any("taxed yearly as ordinary income" in text for text in p.said)

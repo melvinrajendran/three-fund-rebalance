@@ -60,7 +60,10 @@ def _decimal_arg(raw: str) -> Decimal:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="three-fund-rebalance",
-        description="Calculate the trades needed to rebalance a three-fund portfolio across your accounts.",
+        description=(
+            "Calculate the trades needed to rebalance a three-fund portfolio "
+            "across your accounts."
+        ),
         # Someone who runs --help and stops there never sees a report, so the
         # report's own disclaimer goes here -- the same string, not a second
         # wording of it, so the two cannot drift apart. argparse reflows it,
@@ -70,13 +73,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--version",
         action="version",
-        version=(
-            # argparse reflows this, so it has to read as prose rather than
-            # relying on a line break to separate the two sentences.
-            f"%(prog)s {__version__}. "
-            "Not affiliated with, endorsed by, or sponsored by Vanguard, Fidelity, "
-            "or any broker or fund company."
-        ),
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "--config",
@@ -123,7 +120,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
 
     prompter.say("\n" + format_subheading("Stock and bond allocation"))
     stock_pct, bond_pct = prompt_stock_bond_allocation(
-        prompter, default_stock=config.stock_pct, default_bond=config.bond_pct
+        prompter, default_stock=config.stock_pct
     )
 
     prompter.say("\n" + format_subheading("U.S. and international stock allocation"))

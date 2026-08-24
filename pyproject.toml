@@ -35,5 +35,17 @@ include = ["three_fund_rebalance*"]
 line-length = 100
 target-version = "py310"
 
+# Pinned explicitly rather than left to whatever the resolved ruff version
+# enables by default. The default set has drifted before -- isort (I) and
+# flake8-simplify (SIM) arrived in it without anyone choosing them -- which
+# means a `ruff>=0.6` floor could change what CI accepts on an upgrade, in
+# either direction. Naming the rules makes the lint reproducible.
+#
+# E is what turns line-length above from a decorative setting into an
+# enforced one: E501 is not in ruff's default set, so the 100 was advisory
+# and a handful of lines had quietly passed it.
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

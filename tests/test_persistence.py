@@ -31,7 +31,12 @@ def sample_config() -> PersistedConfig:
         name="Acme 401k",
         tax_treatment=TaxTreatment.TAX_DEFERRED,
         holdings=[
-            Holding(fund_type=FundType.TARGET_DATE, name="Target 2050", value=Decimal(0), target_date_allocation=allocation),
+            Holding(
+                fund_type=FundType.TARGET_DATE,
+                name="Target 2050",
+                value=Decimal(0),
+                target_date_allocation=allocation,
+            ),
             Holding(fund_type=FundType.CASH, name="", value=Decimal("125.50")),
         ],
     )
@@ -76,7 +81,9 @@ class TestRoundTrip:
         assert loaded_account.total_value() == original_account.total_value()
 
         loaded_target_date_holding = loaded_account.get_holding(FundType.TARGET_DATE)
-        assert loaded_target_date_holding.target_date_allocation == target_date_allocation_of(original_account)
+        assert loaded_target_date_holding.target_date_allocation == target_date_allocation_of(
+            original_account
+        )
 
     def test_load_missing_file_returns_blank_config(self, tmp_path):
         config = load_config(tmp_path / "does_not_exist.json")
@@ -417,7 +424,8 @@ class TestErrorHandling:
             json.dumps(
                 {
                     "schema_version": 2,
-                    "accounts": [{"account_type": "Roth IRA", "name": "X"}],  # missing tax_treatment
+                    # missing tax_treatment
+                    "accounts": [{"account_type": "Roth IRA", "name": "X"}],
                 }
             )
         )
@@ -426,7 +434,9 @@ class TestErrorHandling:
 
     def test_unparseable_stock_pct_raises(self, tmp_path):
         path = tmp_path / "config.json"
-        path.write_text(json.dumps({"schema_version": 2, "stock_pct": "not-a-number", "accounts": []}))
+        path.write_text(
+            json.dumps({"schema_version": 2, "stock_pct": "not-a-number", "accounts": []})
+        )
         with pytest.raises(PersistenceError, match="Could not parse 'stock_pct'"):
             load_config(path)
 

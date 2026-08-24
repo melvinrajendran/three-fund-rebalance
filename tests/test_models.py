@@ -123,26 +123,37 @@ class TestHolding:
 
     def test_components_for_plain_fund(self):
         holding = Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1000))
-        assert holding.bond_component() == Decimal(1000)
-        assert holding.us_stock_component() == Decimal(0)
-        assert holding.international_stock_component() == Decimal(0)
+        assert holding.component(FundType.US_BOND) == Decimal(1000)
+        assert holding.component(FundType.US_STOCK) == Decimal(0)
+        assert holding.component(FundType.INTERNATIONAL_STOCK) == Decimal(0)
 
     def test_components_for_target_date_fund_divide_correctly(self):
         holding = Holding(
             fund_type=FundType.TARGET_DATE,
             name="Target 2050",
             value=Decimal(1000),
-            target_date_allocation=make_target_date(us_stock=Decimal(60), international=Decimal(20), bond=Decimal(20)),
+            target_date_allocation=make_target_date(
+                us_stock=Decimal(60), international=Decimal(20), bond=Decimal(20)
+            ),
         )
-        assert holding.us_stock_component() == Decimal(600)
-        assert holding.international_stock_component() == Decimal(200)
-        assert holding.bond_component() == Decimal(200)
+        assert holding.component(FundType.US_STOCK) == Decimal(600)
+        assert holding.component(FundType.INTERNATIONAL_STOCK) == Decimal(200)
+        assert holding.component(FundType.US_BOND) == Decimal(200)
 
     def test_cash_has_no_components(self):
         holding = Holding(fund_type=FundType.CASH, name="", value=Decimal(500))
-        assert holding.us_stock_component() == Decimal(0)
-        assert holding.international_stock_component() == Decimal(0)
-        assert holding.bond_component() == Decimal(0)
+        assert holding.component(FundType.US_STOCK) == Decimal(0)
+        assert holding.component(FundType.INTERNATIONAL_STOCK) == Decimal(0)
+        assert holding.component(FundType.US_BOND) == Decimal(0)
+
+    def test_a_fund_is_wholly_its_own_asset_class(self):
+        """`fraction_of` is the rule `component` is built on, and the solver's
+        `_fund_type_coefficient` is the same number as a float. Pinned here so
+        the two cannot drift apart again."""
+        holding = Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1000))
+        assert holding.fraction_of(FundType.US_STOCK) == Decimal(1)
+        assert holding.fraction_of(FundType.US_BOND) == Decimal(0)
+        assert holding.fraction_of(FundType.CASH) == Decimal(0)
 
 
 class TestAccountHoldsOneKind:
