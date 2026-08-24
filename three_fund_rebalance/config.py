@@ -76,6 +76,16 @@ VT_DIVERSIFICATION_API_URL = (
 # at the same time.
 VT_FACT_SHEET_URL = "https://fund-docs.vanguard.com/F3141.pdf"
 
+# Where the manual-entry prompt sends someone who has to read the number off
+# for themselves. The profile page, not the fact sheet PDF: it is the page a
+# person lands on from a search or from their broker, it carries the same
+# country table the API above is backing, and it is current rather than
+# quarterly. The PDF stays as VT_FACT_SHEET_URL because the *fetch* chain
+# still falls back to it -- that is a machine reading a static file, which is
+# exactly what makes it a good second source and a poor thing to hand a
+# reader.
+VT_FUND_PAGE_URL = "https://investor.vanguard.com/investment-products/etfs/profile/vt"
+
 # Baked-in emergency fallback, only ever offered as a *suggested default* in
 # the manual-entry prompt (never used silently) when both the live fetch and
 # any previously cached value are unavailable, e.g. on a brand new machine

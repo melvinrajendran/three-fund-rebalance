@@ -101,12 +101,17 @@ to liquidate a target-date fund to relocate the bond sleeve inside it.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
 
 from scipy.optimize import linprog
 
-from three_fund_rebalance.allocation import target_dollar_amounts, target_dollar_bounds
+from three_fund_rebalance.allocation import (
+    ASSET_CLASS_KEYS,
+    target_dollar_amounts,
+    target_dollar_bounds,
+)
 from three_fund_rebalance.config import MIN_TRADE_DOLLARS
 from three_fund_rebalance.formatting import ASSET_CLASS_LABELS
 from three_fund_rebalance.models import (
@@ -114,6 +119,7 @@ from three_fund_rebalance.models import (
     Account,
     FundType,
     Holding,
+    RebalanceResult,
     TargetAllocation,
     TaxTreatment,
     Trade,
@@ -139,12 +145,13 @@ _OBJECTIVE_SLACK = 0.001
 
 # Fund types whose dollar target we're solving for (CASH is excluded: it is
 # not a security, and its target is implicitly zero -- see _build_slots).
+# Bonds last is load-bearing, not alphabetical: compute_trades states
+# _TARGET_FUND_TYPES[:-1] as equalities and lets the account budgets imply the
+# third, so this tuple's order decides which class is the implied one.
 _TARGET_FUND_TYPES = (FundType.US_STOCK, FundType.INTERNATIONAL_STOCK, FundType.US_BOND)
-_TARGET_KEYS = {
-    FundType.US_STOCK: "us_stock",
-    FundType.INTERNATIONAL_STOCK: "international_stock",
-    FundType.US_BOND: "bond",
-}
+# The keys the dollar dicts are keyed by, defined once in allocation.py --
+# note "bond", not FundType.US_BOND.value.
+_TARGET_KEYS = ASSET_CLASS_KEYS
 
 
 class RebalanceError(Exception):
@@ -188,20 +195,6 @@ class _ShelteredPurchase:
     slot_index: int
 
 
-@dataclass
-class RebalanceResult:
-    trades: list[Trade]
-    warnings: list[str]
-    # Total $ of bonds left in taxable accounts in the final solution (0 if
-    # tax-advantaged capacity was sufficient to hold the whole bond target).
-    taxable_bond_dollars: Decimal
-    # How many moves were wanted but left out for being smaller than
-    # MIN_TRADE_DOLLARS. The report says so: with them dropped, the orders
-    # shown do not reach the target exactly, and silence about that reads as
-    # a rounding error nobody can account for.
-    dropped_trades: int = 0
-
-
 def _to_decimal(value: float) -> Decimal:
     # Route through str() to avoid dragging in float's binary-fraction noise
     # (Decimal(0.1) != Decimal("0.1")); six decimal places is far finer than
@@ -210,17 +203,19 @@ def _to_decimal(value: float) -> Decimal:
 
 
 def _fund_type_coefficient(slot: _Slot, target_type: FundType) -> float:
-    """How much of slot's dollar value counts toward `target_type` (1.0 for
-    a direct match, the fund's internal % for a target-date slot, 0.0
-    otherwise)."""
-    if slot.fund_type == target_type:
-        return 1.0
-    if slot.fund_type == FundType.TARGET_DATE:
-        # `fraction_of`, not the raw percentage over 100: the three have to
-        # sum to exactly 1, or this slot's asset-class rows and its account's
-        # budget row contradict each other. See TargetDateAllocation.
-        return float(slot.holding.target_date_allocation.fraction_of(target_type))
-    return 0.0
+    """`Holding.fraction_of` as the float the LP needs.
+
+    The rule itself -- 1 for a direct match, the fund's own internal share for
+    a target-date slot, 0 otherwise -- is stated once, on the holding. This is
+    only the conversion: the LP necessarily works in floats, and this is one
+    of the two boundaries where money crosses into them.
+
+    Note `Holding.fraction_of` delegates to `TargetDateAllocation.fraction_of`
+    rather than dividing the raw percentage by 100, because the three sleeves
+    have to sum to exactly 1 or this slot's asset-class rows and its account's
+    budget row contradict each other. See TargetDateAllocation.
+    """
+    return float(slot.holding.fraction_of(target_type))
 
 
 def _build_slots(accounts: list[Account]) -> list[_Slot]:
@@ -236,9 +231,29 @@ def _build_slots(accounts: list[Account]) -> list[_Slot]:
     return slots
 
 
+def _slot_indices_by_account(slots: list[_Slot]) -> dict[int, list[int]]:
+    """Which slot indices belong to which account, grouped in a single pass.
+
+    Three separate places want this -- the capacity check, the LP's per-account
+    budget rows, and the rounding pass that turns solved values back into
+    trades. Each used to rescan the whole slot list once per account, which is
+    O(accounts x slots) for what one pass answers. Nothing here is ever big
+    enough for that to be slow; grouping once is just the shape the code
+    already used in one of the three, and having the other two disagree read
+    as an oversight rather than a decision.
+
+    Accounts with no slots at all are absent, which is what every caller wants
+    -- an account with nothing to invest contributes no rows.
+    """
+    grouped: dict[int, list[int]] = {}
+    for index, slot in enumerate(slots):
+        grouped.setdefault(slot.account_index, []).append(index)
+    return grouped
+
+
 def _check_names_unique(accounts: list[Account]) -> None:
-    names = [a.name for a in accounts]
-    duplicates = {name for name in names if names.count(name) > 1}
+    counts = Counter(a.name for a in accounts)
+    duplicates = {name for name, count in counts.items() if count > 1}
     if duplicates:
         listed = ", ".join(repr(name) for name in sorted(duplicates))
         raise RebalanceError(f"Account names must be unique; duplicated: {listed}")
@@ -303,7 +318,9 @@ def _band_note(target: Decimal, edge: Decimal) -> str:
 
 
 def _asset_class_reach(
-    accounts: list[Account], slots: list[_Slot]
+    accounts: list[Account],
+    slots: list[_Slot],
+    slots_by_account: dict[int, list[int]],
 ) -> dict[FundType, tuple[float, float]]:
     """The smallest and largest dollar total each asset class can reach given
     which fund types are declared where.
@@ -320,16 +337,12 @@ def _asset_class_reach(
     account has to satisfy all three at once -- so it is sound for rejecting
     the impossible, not for certifying the possible.
     """
-    slots_by_account: dict[int, list[_Slot]] = {}
-    for slot in slots:
-        slots_by_account.setdefault(slot.account_index, []).append(slot)
-
     reach = {}
     for fund_type in _TARGET_FUND_TYPES:
         floor = ceiling = 0.0
-        for account_index, account_slots in slots_by_account.items():
+        for account_index, indices in slots_by_account.items():
             total = float(accounts[account_index].total_value())
-            coefficients = [_fund_type_coefficient(s, fund_type) for s in account_slots]
+            coefficients = [_fund_type_coefficient(slots[i], fund_type) for i in indices]
             floor += total * min(coefficients)
             ceiling += total * max(coefficients)
         reach[fund_type] = (floor, ceiling)
@@ -360,9 +373,10 @@ def _check_capacity_feasible(
             raise RebalanceError(
                 f"Target {ASSET_CLASS_LABELS[fund_type]} allocation is "
                 f"${target:,.2f}{_band_note(target, lowest_allowed)}, but no combination of "
-                f"the funds you listed can hold more than ${ceiling:,.2f} -- add a matching "
-                "fund to an account that holds individual funds, or open one that does, to "
-                "make room."
+                f"the funds you hold can reach more than ${ceiling:,.2f} -- an account "
+                "holding a single fund has to put its whole value into it, and a "
+                "target-date fund's mix is fixed. Hold individual funds in a larger share "
+                "of your portfolio to make room."
             )
 
     for fund_type in _TARGET_FUND_TYPES:
@@ -383,11 +397,8 @@ def _current_asset_class_dollars(accounts: list[Account]) -> dict[str, Decimal]:
     """What each asset class is worth right now, target-date sleeves included."""
     holdings = [h for account in accounts for h in account.holdings]
     return {
-        "us_stock": sum((h.us_stock_component() for h in holdings), Decimal(0)),
-        "international_stock": sum(
-            (h.international_stock_component() for h in holdings), Decimal(0)
-        ),
-        "bond": sum((h.bond_component() for h in holdings), Decimal(0)),
+        _TARGET_KEYS[fund_type]: sum((h.component(fund_type) for h in holdings), Decimal(0))
+        for fund_type in _TARGET_FUND_TYPES
     }
 
 
@@ -418,6 +429,49 @@ def _reconcile_to_total(
         return class_totals
     largest = max(class_totals, key=lambda key: class_totals[key])
     return {**class_totals, largest: class_totals[largest] + residue}
+
+
+# Both allocation-stage LPs share one variable layout, three columns per
+# asset class:
+#
+#   [ p_0..p_2 | a_0..a_2 | b_0..b_2 ]
+#     the class   distance   distance
+#     total       from one   from a
+#                 anchor     second anchor
+#
+# What the two anchors mean differs by caller -- _place_cash measures band
+# violation then distance from target, _resolve_allocation measures distance
+# from target then from where the portfolio already sits -- but the shape is
+# the same, which is what lets both use the helpers below. The names exist
+# because the alternative is a dozen hand-written `row[3 + index]` and
+# `row[6 + index]` expressions whose only documentation is being read
+# carefully.
+_CLASS_TOTAL = 0
+_FIRST_ANCHOR = 3
+_SECOND_ANCHOR = 6
+_ALLOCATION_WIDTH = 9
+
+
+def _allocation_row(*terms: tuple[int, int, float]) -> list[float]:
+    """One constraint row over the layout above. Each term is a (block,
+    class index, coefficient) triple, so a row reads as the constraint it is
+    rather than as index arithmetic."""
+    row = [0.0] * _ALLOCATION_WIDTH
+    for block, index, coefficient in terms:
+        row[block + index] = coefficient
+    return row
+
+
+def _abs_value_rows(
+    block: int, index: int, anchor: float
+) -> tuple[list[tuple[list[float], float]], ...]:
+    """The standard pair linearizing |p_i - anchor| into the variable at
+    `block + index`: it is forced to at least the gap in either direction, so
+    any objective that wants it small drives it to exactly the gap."""
+    return (
+        (_allocation_row((_CLASS_TOTAL, index, 1.0), (block, index, -1.0)), anchor),
+        (_allocation_row((_CLASS_TOTAL, index, -1.0), (block, index, -1.0)), -anchor),
+    )
 
 
 def _place_cash(
@@ -457,34 +511,27 @@ def _place_cash(
         bounds.append((min(floor, ceiling), ceiling))
     bounds += [(0.0, None)] * 6
 
-    A_eq = [[1.0, 1.0, 1.0] + [0.0] * 6]
+    A_eq = [_allocation_row(*((_CLASS_TOTAL, i, 1.0) for i in range(3)))]
     b_eq = [float(total_value)]
 
     A_ub, b_ub = [], []
     for index, key in enumerate(keys):
         low, high = dollar_bounds[key]
-        # v_i >= low - p_i and v_i >= p_i - high. The two cannot both bind,
-        # so a single variable measures the violation in whichever direction
-        # it happens to fall.
-        below = [0.0] * 9
-        below[index], below[3 + index] = -1.0, -1.0
-        A_ub.append(below)
+        # The band violation is not an absolute value around one anchor but a
+        # gap outside a range: v_i >= low - p_i and v_i >= p_i - high. The two
+        # cannot both bind, so a single variable measures the violation in
+        # whichever direction it happens to fall, and a class inside its band
+        # drives it to zero.
+        A_ub.append(
+            _allocation_row((_CLASS_TOTAL, index, -1.0), (_FIRST_ANCHOR, index, -1.0))
+        )
         b_ub.append(-float(low))
-
-        above = [0.0] * 9
-        above[index], above[3 + index] = 1.0, -1.0
-        A_ub.append(above)
+        A_ub.append(_allocation_row((_CLASS_TOTAL, index, 1.0), (_FIRST_ANCHOR, index, -1.0)))
         b_ub.append(float(high))
 
-        rising = [0.0] * 9
-        rising[index], rising[6 + index] = 1.0, -1.0
-        A_ub.append(rising)
-        b_ub.append(float(dollar_targets[key]))
-
-        falling = [0.0] * 9
-        falling[index], falling[6 + index] = -1.0, -1.0
-        A_ub.append(falling)
-        b_ub.append(-float(dollar_targets[key]))
+        for row, bound in _abs_value_rows(_SECOND_ANCHOR, index, float(dollar_targets[key])):
+            A_ub.append(row)
+            b_ub.append(bound)
 
     inside_the_band = [0.0] * 3 + [1.0] * 3 + [0.0] * 3
     toward_target = [0.0] * 6 + [1.0] * 3
@@ -608,21 +655,15 @@ def _resolve_allocation(
         bounds.append((min(lower, upper), upper))
     bounds += [(0.0, None)] * 6
 
-    A_eq = [[1.0, 1.0, 1.0] + [0.0] * 6]
+    A_eq = [_allocation_row(*((_CLASS_TOTAL, i, 1.0) for i in range(3)))]
     b_eq = [float(total_value)]
 
     A_ub, b_ub = [], []
-    for offset, anchor in ((3, current), (6, dollar_targets)):
+    for block, anchor in ((_FIRST_ANCHOR, current), (_SECOND_ANCHOR, dollar_targets)):
         for index, key in enumerate(keys):
-            rising = [0.0] * 9
-            rising[index], rising[offset + index] = 1.0, -1.0
-            A_ub.append(rising)
-            b_ub.append(float(anchor[key]))
-
-            falling = [0.0] * 9
-            falling[index], falling[offset + index] = -1.0, -1.0
-            A_ub.append(falling)
-            b_ub.append(-float(anchor[key]))
+            for row, bound in _abs_value_rows(block, index, float(anchor[key])):
+                A_ub.append(row)
+                b_ub.append(bound)
 
     stay_put = [0.0] * 3 + [1.0] * 3 + [0.0] * 3
     toward_target = [0.0] * 6 + [1.0] * 3
@@ -666,6 +707,13 @@ def _distribute_residual(
 
     # Bounded loop: a slot clamped at zero is skipped, so allow enough passes
     # to cycle past clamped slots without ever spinning forever.
+    #
+    # The bound is written to be *safe* rather than tight, but it is worth
+    # knowing it is also small. `residual` is what independent per-slot
+    # rounding left over against the account's own total, so it is under half
+    # a cent per slot -- a handful of cents at the outside, and this runs in
+    # single-digit iterations. Nothing enforces that; a future caller passing
+    # a large residual would get O(cents x slots) rather than a hang.
     for position in range(cents_remaining * len(ordered) + len(ordered)):
         if cents_remaining == 0:
             break
@@ -773,11 +821,86 @@ def _wash_sale_warnings(accounts: list[Account], trades: list[Trade]) -> list[st
             "substantially identical shares are bought within 30 days either side of the "
             "sale, in any account you control -- and the IRS has taken the position "
             "(Rev. Rul. 2008-5) that a replacement bought inside an IRA forfeits the basis "
-            "adjustment that would otherwise offset it. Buying a different fund in the "
-            "tax-advantaged account avoids the question. This check matches funds by name, "
-            "so two share classes of one index (VTI and VTSAX) slip past it."
+            "adjustment that would otherwise offset it."
         )
     return warnings
+
+
+def _location_objectives(
+    accounts: list[Account], slots: list[_Slot], n: int, k: int
+) -> list[tuple[list[float], str]]:
+    """The six location phases, in priority order, as vectors over the shared
+    variable layout `[ x (n) | y (n) | w (k) ]`.
+
+    Pure data: every one is a cost vector and the sentence `_solve` prints if
+    that phase turns out to be infeasible. The ranking *is* the design -- it
+    is what decides that a couple of basis points of foreign tax credit never
+    justifies opening a taxable trade -- so it reads better as a list you can
+    take in at once than as forty lines wedged between the constraint rows
+    and the rounding pass. The module docstring is the long form.
+
+    Each phase's optimum is carried forward by the caller as a `<=` bound, so
+    a phase below can refine an earlier one's answer but never undo it.
+    """
+    taxable = [accounts[s.account_index].tax_treatment == TaxTreatment.TAXABLE for s in slots]
+    tax_free = [accounts[s.account_index].tax_treatment == TaxTreatment.TAX_FREE for s in slots]
+
+    def over_slots(weights: list[float]) -> list[float]:
+        """A cost on the slot values themselves -- the x block."""
+        return weights + [0.0] * (n + k)
+
+    def over_movement(weights: list[float]) -> list[float]:
+        """A cost on how far a slot moves -- the y block, which the absolute
+        value rows pin to |x - current|."""
+        return [0.0] * n + weights + [0.0] * k
+
+    return [
+        (
+            over_slots(
+                [
+                    _fund_type_coefficient(slot, FundType.US_BOND) if is_taxable else 0.0
+                    for slot, is_taxable in zip(slots, taxable, strict=True)
+                ]
+            ),
+            "moving bonds out of your taxable accounts",
+        ),
+        (
+            over_movement([1.0 if is_taxable else 0.0 for is_taxable in taxable]),
+            "holding down the amount sold in your taxable accounts",
+        ),
+        (
+            [0.0] * (2 * n) + [1.0] * k,
+            "steering clear of a wash sale",
+        ),
+        (
+            over_slots(
+                [
+                    _fund_type_coefficient(slot, FundType.US_BOND) if is_tax_free else 0.0
+                    for slot, is_tax_free in zip(slots, tax_free, strict=True)
+                ]
+            ),
+            "holding your bonds in tax-deferred rather than tax-free accounts",
+        ),
+        (
+            over_slots(
+                [
+                    # slot.fund_type directly, not _fund_type_coefficient: a
+                    # target-date fund is not majority-foreign and passes no
+                    # credit through, so counting its international sleeve
+                    # would have the solver liquidate half a TDF for nothing.
+                    1.0
+                    if slot.fund_type == FundType.INTERNATIONAL_STOCK and not is_taxable
+                    else 0.0
+                    for slot, is_taxable in zip(slots, taxable, strict=True)
+                ]
+            ),
+            "holding your international stock in taxable accounts",
+        ),
+        (
+            over_movement([1.0] * n),
+            "keeping the total amount traded down",
+        ),
+    ]
 
 
 def compute_trades(
@@ -804,7 +927,8 @@ def compute_trades(
     # positive-value account that declares no tradeable holdings.
     n = len(slots)
 
-    reach = _asset_class_reach(accounts, slots)
+    slots_by_account = _slot_indices_by_account(slots)
+    reach = _asset_class_reach(accounts, slots, slots_by_account)
     _check_capacity_feasible(dollar_targets, dollar_bounds, reach)
 
     # What each asset class should be worth is settled here, once, before any
@@ -835,7 +959,7 @@ def compute_trades(
     # --- equalities: each account spends exactly its own total -----------
     A_eq, b_eq = [], []
     for account_index, account in enumerate(accounts):
-        indices = [i for i, s in enumerate(slots) if s.account_index == account_index]
+        indices = slots_by_account.get(account_index)
         if not indices:
             continue
         budget = row()
@@ -898,56 +1022,7 @@ def compute_trades(
         A_ub.append(bought)  # x_i - w_j <= current_i
         b_ub.append(current[i])
 
-    # --- objectives, in priority order -----------------------------------
-    taxable = [accounts[s.account_index].tax_treatment == TaxTreatment.TAXABLE for s in slots]
-    tax_free = [accounts[s.account_index].tax_treatment == TaxTreatment.TAX_FREE for s in slots]
-
-    def over_slots(weights: list[float]) -> list[float]:
-        return weights + [0.0] * (n + k)
-
-    phases = [
-        (
-            over_slots(
-                [
-                    _fund_type_coefficient(slot, FundType.US_BOND) if is_taxable else 0.0
-                    for slot, is_taxable in zip(slots, taxable)
-                ]
-            ),
-            "moving bonds out of your taxable accounts",
-        ),
-        (
-            [0.0] * n + [1.0 if is_taxable else 0.0 for is_taxable in taxable] + [0.0] * k,
-            "holding down the amount sold in your taxable accounts",
-        ),
-        (
-            [0.0] * (2 * n) + [1.0] * k,
-            "steering clear of a wash sale",
-        ),
-        (
-            over_slots(
-                [
-                    _fund_type_coefficient(slot, FundType.US_BOND) if is_tax_free else 0.0
-                    for slot, is_tax_free in zip(slots, tax_free)
-                ]
-            ),
-            "holding your bonds in tax-deferred rather than tax-free accounts",
-        ),
-        (
-            over_slots(
-                [
-                    1.0
-                    if slot.fund_type == FundType.INTERNATIONAL_STOCK and not is_taxable
-                    else 0.0
-                    for slot, is_taxable in zip(slots, taxable)
-                ]
-            ),
-            "holding your international stock in taxable accounts",
-        ),
-        (
-            [0.0] * n + [1.0] * n + [0.0] * k,
-            "keeping the total amount traded down",
-        ),
-    ]
+    phases = _location_objectives(accounts, slots, n, k)
 
     solution = None
     for objective, context in phases:
@@ -966,7 +1041,7 @@ def compute_trades(
     new_values = [Decimal(0)] * n
     dropped_trades = 0
     for account_index, account in enumerate(accounts):
-        indices = [i for i, s in enumerate(slots) if s.account_index == account_index]
+        indices = slots_by_account.get(account_index)
         if not indices:
             continue
         finalized, dropped = _finalize_account_values(account, indices, slots, raw_values)
@@ -977,7 +1052,7 @@ def compute_trades(
     # _finalize_account_values already snapped every sub-minimum move back to
     # its current value, so any remaining delta is a real, fillable trade.
     trades = []
-    for slot, new_value in zip(slots, new_values):
+    for slot, new_value in zip(slots, new_values, strict=True):
         delta = new_value - slot.holding.value
         if delta == 0:
             continue
@@ -993,10 +1068,13 @@ def compute_trades(
     trades.sort(key=lambda t: (t.account_name, t.action == "buy", t.fund_type.value, t.fund_name))
 
     taxable_bond_dollars = Decimal(0)
-    for slot, new_value in zip(slots, new_values):
+    for slot, new_value in zip(slots, new_values, strict=True):
         if accounts[slot.account_index].tax_treatment != TaxTreatment.TAXABLE:
             continue
-        taxable_bond_dollars += new_value * Decimal(str(_fund_type_coefficient(slot, FundType.US_BOND)))
+        # `fraction_of`, not `_fund_type_coefficient`: this is a dollar
+        # amount the report prints, so it stays in Decimal rather than
+        # round-tripping the sleeve through a float on the way back out.
+        taxable_bond_dollars += new_value * slot.holding.fraction_of(FundType.US_BOND)
     taxable_bond_dollars = to_cents(taxable_bond_dollars)
 
     warnings = []

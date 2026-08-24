@@ -4,7 +4,7 @@ import pytest
 
 from three_fund_rebalance import __version__
 from three_fund_rebalance.cli import parse_args, run
-from three_fund_rebalance.config import VT_FACT_SHEET_URL
+from three_fund_rebalance.config import VT_FUND_PAGE_URL
 from three_fund_rebalance.formatting import prose_width
 from three_fund_rebalance.models import FundType
 from three_fund_rebalance.persistence import load_config
@@ -42,10 +42,10 @@ def new_account_responses(
     return [
         account_type_index,
         nickname,
-        "1",  # holds individual funds rather than a target-date fund
-        "y", "VTI", us_stock_value,
-        "y", "VXUS", intl_value,
-        "y", "BND", bond_value,
+        "1",  # three individual funds rather than a target-date fund
+        "VTI", us_stock_value,
+        "VXUS", intl_value,
+        "BND", bond_value,
         cash,
     ]
 
@@ -59,7 +59,7 @@ def target_date_account_responses(
         nickname,
         "2",  # holds a single target-date fund
         "Target 2050", value,
-        "60", "20", "20",  # its underlying allocation
+        "60", "20", "y",  # its underlying allocation; 20% bonds derived
         cash,
     ]
 
@@ -94,7 +94,7 @@ class TestEndToEndRun:
         # touching the network.
         config_path = tmp_path / "config.json"
         responses = [
-            "80", "20",  # stock/bond target
+            "80", "y",  # stock target, then the derived 20% bonds confirmed
             "75",  # manual VT US % entry (offline, no cache)
             "0",  # rebalancing band -- exact target, as before it existed
             "0",  # ...and its relative half, which zero already settles
@@ -112,7 +112,7 @@ class TestEndToEndRun:
     def test_full_run_computes_trades_and_saves_config(self, tmp_path):
         config_path = tmp_path / "config.json"
         responses = [
-            "80", "20",  # stock/bond target
+            "80", "y",  # stock target, then the derived 20% bonds confirmed
             "0",  # rebalancing band -- exact target, as before it existed
             "0",  # ...and its relative half, which zero already settles
             "y",  # Add an account?
@@ -145,7 +145,7 @@ class TestEndToEndRun:
         editable defaults on the next run like every other answer."""
         config_path = tmp_path / "config.json"
         responses = [
-            "80", "20",
+            "80", "y",
             "5",   # rebalancing band
             "25",  # ...as a share of each class's own target
             "y",
@@ -166,7 +166,7 @@ class TestEndToEndRun:
     def test_already_balanced_reports_no_trades_needed(self, tmp_path):
         config_path = tmp_path / "config.json"
         responses = [
-            "100", "0",
+            "100", "y",
             "0",  # rebalancing band -- exact target, as before it existed
             "0",  # ...and its relative half, which zero already settles
             "y",
@@ -185,7 +185,7 @@ class TestEndToEndRun:
     def test_no_save_flag_skips_save_prompt_and_file(self, tmp_path):
         config_path = tmp_path / "config.json"
         responses = [
-            "100", "0",
+            "100", "y",
             "0",  # rebalancing band -- exact target, as before it existed
             "0",  # ...and its relative half, which zero already settles
             "y",
@@ -203,7 +203,7 @@ class TestEndToEndRun:
 
     def test_no_accounts_entered_exits_cleanly(self, tmp_path):
         config_path = tmp_path / "config.json"
-        responses = ["100", "0", "0", "0", "n"]  # both band halves, then no accounts
+        responses = ["100", "y", "0", "0", "n"]  # both band halves, then no accounts
         prompter = ScriptedPrompter(responses)
         exit_code = run(
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
@@ -212,16 +212,19 @@ class TestEndToEndRun:
         assert "nothing to rebalance" in prompter.full_output
 
     def test_infeasible_target_reports_error_and_exits_nonzero(self, tmp_path):
+        """A target-date account is the only thing that can still pin an
+        asset class out of reach: an account holding individual funds
+        declares all three, so it can always be traded to any mix."""
         config_path = tmp_path / "config.json"
         responses = [
-            "50", "50",  # 50% bond target
+            "50", "y",  # a 50% bond target
             "0",  # rebalancing band -- exact target, as before it existed
             "0",  # ...and its relative half, which zero already settles
             "y",
             "1", "Roth",
-            "1",  # individual funds
-            "y", "VTI", "10000",  # only a U.S. stock fund -- no bond slot
-            "n", "n",  # no international, no bond
+            "2",  # a single target-date fund, held whole
+            "All-Stock 2065", "10000",
+            "100", "0", "y",  # ...that holds no bonds at all
             "0",
             "n",
         ]
@@ -236,7 +239,7 @@ class TestEndToEndRun:
         config_path = tmp_path / "config.json"
         config_path.write_text("{not valid json")
         responses = [
-            "100", "0",
+            "100", "y",
             "0",  # rebalancing band -- exact target, as before it existed
             "0",  # ...and its relative half, which zero already settles
             "n",  # no accounts, just check it doesn't crash
@@ -253,7 +256,7 @@ class TestEndToEndRun:
         deeper than json.loads. It still has to be recoverable."""
         config_path = tmp_path / "config.json"
         config_path.write_text('{"schema_version": 2, "accounts": ["not an account"]}')
-        prompter = ScriptedPrompter(["100", "0", "0", "0", "n"])
+        prompter = ScriptedPrompter(["100", "y", "0", "0", "n"])
         exit_code = run(
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
         )
@@ -264,19 +267,22 @@ class TestEndToEndRun:
         config_path = tmp_path / "config.json"
         # First run: create and save a config with one account.
         first_responses = [
-            "100", "0",
+            "100", "y",
             "0",  # rebalancing band -- exact target, as before it existed
             "0",  # ...and its relative half, which zero already settles
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n", "y",
         ]
-        run(["--config", str(config_path), "--vt-us-pct", "100"], prompter=ScriptedPrompter(first_responses))
+        run(
+            ["--config", str(config_path), "--vt-us-pct", "100"],
+            prompter=ScriptedPrompter(first_responses),
+        )
         assert config_path.exists()
 
         # Second run with --fresh should not see the saved account at all,
         # i.e. it should prompt to add a fresh one rather than offer to keep it.
-        second_responses = ["100", "0", "0", "0", "n"]
+        second_responses = ["100", "y", "0", "0", "n"]
         prompter = ScriptedPrompter(second_responses)
         exit_code = run(
             ["--config", str(config_path), "--vt-us-pct", "100", "--fresh"], prompter=prompter
@@ -306,18 +312,18 @@ class TestLongMessagesWrap:
     def test_a_corrupt_config_warning_wraps(self, tmp_path):
         config_path = tmp_path / "a-fairly-long-config-file-name.json"
         config_path.write_text("{not valid json")
-        prompter = ScriptedPrompter(["100", "0", "0", "0", "n"])
+        prompter = ScriptedPrompter(["100", "y", "0", "0", "n"])
         run(["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter)
         assert "could not read your saved portfolio" in prompter.full_output
         assert self._unwrapped(prompter) == []
 
     def test_an_infeasible_target_error_wraps(self, tmp_path):
         prompter = ScriptedPrompter([
-            "50", "50",  # a bond target no declared fund can reach
+            "50", "y",  # a bond target the one fund held cannot reach
             "0", "0",
-            "y", "1", "Roth", "1",
-            "y", "VTI", "10000",
-            "n", "n",
+            "y", "1", "Roth", "2",
+            "All-Stock 2065", "10000",
+            "100", "0", "y",
             "0",
             "n",
         ])
@@ -329,8 +335,8 @@ class TestLongMessagesWrap:
         assert self._unwrapped(prompter) == []
 
     def test_the_manual_vt_prompt_wraps_without_breaking_the_url(self, tmp_path):
-        prompter = ScriptedPrompter(["100", "0", "62", "0", "0", "n", "n"])
+        prompter = ScriptedPrompter(["100", "y", "62", "0", "0", "n", "n"])
         run(["--config", str(tmp_path / "c.json"), "--offline"], prompter=prompter)
         output = prompter.full_output
-        assert VT_FACT_SHEET_URL in output, "the URL must survive wrapping intact"
+        assert VT_FUND_PAGE_URL in output, "the URL must survive wrapping intact"
         assert self._unwrapped(prompter) == []

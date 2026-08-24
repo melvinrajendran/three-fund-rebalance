@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 
 from three_fund_rebalance.allocation import (
+    ASSET_CLASS_KEYS,
     effective_band_points,
     target_dollar_amounts,
     target_percentages,
@@ -47,25 +48,28 @@ from three_fund_rebalance.formatting import (
 from three_fund_rebalance.models import (
     Account,
     FundType,
-    Holding,
+    RebalanceResult,
     TargetAllocation,
     TaxTreatment,
     Trade,
     to_cents,
 )
-from three_fund_rebalance.rebalance import RebalanceResult
 from three_fund_rebalance.vt_allocation import VTAllocationResult
 
-_CATEGORY_LABELS = ("U.S. stocks", "International stocks", "Bonds")
-_CATEGORY_TARGET_KEYS = {
-    "U.S. stocks": "us_stock",
-    "International stocks": "international_stock",
-    "Bonds": "bond",
+#: What the report calls each asset class, in the order every table lists
+#: them. Plural, unlike `formatting.ASSET_CLASS_LABELS`: these stand alone as
+#: a column label, where those are attributive and precede "fund".
+_CATEGORY_FUND_TYPES = {
+    "U.S. stocks": FundType.US_STOCK,
+    "International stocks": FundType.INTERNATIONAL_STOCK,
+    "Bonds": FundType.US_BOND,
 }
-_COMPONENT_GETTERS = {
-    "U.S. stocks": Holding.us_stock_component,
-    "International stocks": Holding.international_stock_component,
-    "Bonds": Holding.bond_component,
+_CATEGORY_LABELS = tuple(_CATEGORY_FUND_TYPES)
+#: The label-to-key hop the dollar and percentage dicts are keyed by. Derived
+#: rather than re-typed: `allocation.ASSET_CLASS_KEYS` is where those keys are
+#: decided, and "bond" is not the spelling anyone would guess.
+_CATEGORY_TARGET_KEYS = {
+    label: ASSET_CLASS_KEYS[fund_type] for label, fund_type in _CATEGORY_FUND_TYPES.items()
 }
 
 #: Closes every report, because the report is the artifact that gets
@@ -158,8 +162,8 @@ def summarize_allocation(
     holdings = [h for account in accounts for h in account.holdings]
 
     current_by_label = {
-        label: sum((getter(h) for h in holdings), Decimal(0))
-        for label, getter in _COMPONENT_GETTERS.items()
+        label: sum((h.component(fund_type) for h in holdings), Decimal(0))
+        for label, fund_type in _CATEGORY_FUND_TYPES.items()
     }
     target_pct_by_label = {
         "U.S. stocks": target.us_stock_pct,
@@ -249,8 +253,8 @@ def allocation_after_trades(accounts: list[Account], trades: list[Trade]) -> dic
             after.append(replace(holding, value=holding.value + delta))
 
     return {
-        label: sum((getter(h) for h in after), Decimal(0))
-        for label, getter in _COMPONENT_GETTERS.items()
+        label: sum((h.component(fund_type) for h in after), Decimal(0))
+        for label, fund_type in _CATEGORY_FUND_TYPES.items()
     }
 
 
@@ -259,7 +263,7 @@ def _describe_target(inputs: RebalanceInputs) -> list[str]:
     width = max(len(label) for label in _CATEGORY_LABELS)
     lines = _subheading("Target asset allocation")
     percentages = (target.us_stock_pct, target.international_stock_pct, target.bond_pct)
-    for label, pct in zip(_CATEGORY_LABELS, percentages):
+    for label, pct in zip(_CATEGORY_LABELS, percentages, strict=True):
         lines.append(f"{INDENT_UNIT}{label:<{width}}  {pct:>5.1f}%")
     lines.append("")
     lines.append(
