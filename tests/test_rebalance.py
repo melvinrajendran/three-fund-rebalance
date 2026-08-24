@@ -522,7 +522,7 @@ class TestPerAccountConservation:
         # yields repeating-decimal dollar targets.
         accounts = [
             account(
-                "Roth IRA", "Fidelity Roth", TaxTreatment.TAX_DEFERRED,
+                "Roth IRA", "Vanguard Roth", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(FundType.US_STOCK, "VTI", 20_000),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 10_000),
@@ -537,7 +537,7 @@ class TestPerAccountConservation:
                 ],
             ),
             account(
-                "Brokerage", "Fidelity Brokerage", TaxTreatment.TAXABLE,
+                "Brokerage", "Vanguard Brokerage", TaxTreatment.TAXABLE,
                 [
                     holding(FundType.US_STOCK, "VTI", 25_000),
                     holding(FundType.INTERNATIONAL_STOCK, "VXUS", 5_000),
@@ -556,7 +556,7 @@ class TestPerAccountConservation:
         self.assert_conserved(accounts, result)
         # The taxable account should spend exactly its cash, to the cent.
         taxable_buys = sum(
-            t.amount for t in result.trades if t.account_name == "Fidelity Brokerage"
+            t.amount for t in result.trades if t.account_name == "Vanguard Brokerage"
         )
         assert taxable_buys == Decimal("5000.00")
 
@@ -740,7 +740,7 @@ class TestWashSaleAvoidance:
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 40_000),
             ]),
             account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
-                holding(FundType.US_STOCK, "FSKAX", 20_000),
+                holding(FundType.US_STOCK, "VFIAX", 20_000),
                 holding(FundType.US_BOND, "BND", 30_000),
             ]),
         ]
@@ -922,15 +922,15 @@ class TestRebalancingBand:
         it fine. A quarter of the target puts the floor at 3.75%."""
         accounts = [
             account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
-                holding(FundType.US_STOCK, "FZROX", 58_800),
-                holding(FundType.INTERNATIONAL_STOCK, "FZILX", 40_000),
-                holding(FundType.US_BOND, "FXNAX", 1_200),
+                holding(FundType.US_STOCK, "VTSAX", 58_800),
+                holding(FundType.INTERNATIONAL_STOCK, "VTIAX", 40_000),
+                holding(FundType.US_BOND, "VBTLX", 1_200),
             ]),
         ]
         goal = target("58.8", "36.2", 5)
         assert compute_trades(accounts, goal, Decimal(5)).trades == []
         result = compute_trades(accounts, goal, Decimal(5), Decimal(25))
-        assert trades_by_key(result)[("Roth", "FXNAX")] == ("buy", Decimal("3800.00"))
+        assert trades_by_key(result)[("Roth", "VBTLX")] == ("buy", Decimal("3800.00"))
 
     def test_a_relative_band_does_not_tighten_a_large_target(self):
         """A quarter of a 58.8% target is 14.7 points, which would let the
@@ -938,9 +938,9 @@ class TestRebalancingBand:
         The tighter of the two binds, so nothing changes here."""
         accounts = [
             account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
-                holding(FundType.US_STOCK, "FZROX", 62_000),  # +3.2 points
-                holding(FundType.INTERNATIONAL_STOCK, "FZILX", 33_000),
-                holding(FundType.US_BOND, "FXNAX", 5_000),
+                holding(FundType.US_STOCK, "VTSAX", 62_000),  # +3.2 points
+                holding(FundType.INTERNATIONAL_STOCK, "VTIAX", 33_000),
+                holding(FundType.US_BOND, "VBTLX", 5_000),
             ]),
         ]
         goal = target("58.8", "36.2", 5)
@@ -1030,9 +1030,9 @@ class TestAllocationIsSettledBeforeLocation:
                 holding(FundType.TARGET_DATE, "Target 2070", "10966.76", target_date),
             ]),
             account("Roth IRA", "Roth IRA", TaxTreatment.TAX_FREE, [
-                holding(FundType.US_STOCK, "FZROX", "22549.52"),
-                holding(FundType.INTERNATIONAL_STOCK, "FZILX", "15491.08"),
-                holding(FundType.US_BOND, "FXNAX", "400.67"),
+                holding(FundType.US_STOCK, "VTSAX", "22549.52"),
+                holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "15491.08"),
+                holding(FundType.US_BOND, "VBTLX", "400.67"),
             ]),
             account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
                 holding(FundType.US_STOCK, "VTI", "6663.90"),
@@ -1050,7 +1050,7 @@ class TestAllocationIsSettledBeforeLocation:
         trades toward the bond target, not away from it."""
         accounts = self._in_band_portfolio()
         trades = trades_by_key(compute_trades(accounts, target("58.805", "36.195", 5), Decimal(0)))
-        assert trades[("Roth IRA", "FXNAX")][0] == "buy"
+        assert trades[("Roth IRA", "VBTLX")][0] == "buy"
 
     def test_a_location_phase_never_sells_an_asset_class_down_into_the_band(self):
         """Underweight bonds held in tax-free space: phase 4 would rather
@@ -1060,7 +1060,7 @@ class TestAllocationIsSettledBeforeLocation:
         accounts = self._in_band_portfolio()
         result = compute_trades(accounts, target("58.805", "36.195", 5), Decimal(5))
         sold = sum(
-            (t.amount for t in result.trades if t.action == "sell" and t.fund_name == "FXNAX"),
+            (t.amount for t in result.trades if t.action == "sell" and t.fund_name == "VBTLX"),
             Decimal(0),
         )
         assert sold == Decimal(0)
@@ -1267,17 +1267,17 @@ class TestClassTotalsSumToThePortfolio:
             ),
             account(
                 "Roth IRA",
-                "Fidelity Roth IRA",
+                "Vanguard Roth IRA",
                 TaxTreatment.TAX_FREE,
                 [
-                    holding(FundType.US_STOCK, "FZROX", "22515.98"),
-                    holding(FundType.INTERNATIONAL_STOCK, "FZILX", "15744.14"),
-                    holding(FundType.US_BOND, "FXNAX", "400.28"),
+                    holding(FundType.US_STOCK, "VTSAX", "22515.98"),
+                    holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "15744.14"),
+                    holding(FundType.US_BOND, "VBTLX", "400.28"),
                 ],
             ),
             account(
                 "Brokerage",
-                "Fidelity Individual Brokerage Account",
+                "Vanguard Individual Brokerage Account",
                 TaxTreatment.TAXABLE,
                 [
                     holding(FundType.US_STOCK, "VTI", "6649.83"),
@@ -1296,9 +1296,9 @@ class TestClassTotalsSumToThePortfolio:
         # the correction is real -- and it happens entirely inside the Roth
         # IRA, the only account with room to move.
         assert trades_by_key(result) == {
-            ("Fidelity Roth IRA", "FZILX"): ("sell", Decimal("1456.96")),
-            ("Fidelity Roth IRA", "FZROX"): ("sell", Decimal("2616.72")),
-            ("Fidelity Roth IRA", "FXNAX"): ("buy", Decimal("4073.68")),
+            ("Vanguard Roth IRA", "VTIAX"): ("sell", Decimal("1456.96")),
+            ("Vanguard Roth IRA", "VTSAX"): ("sell", Decimal("2616.72")),
+            ("Vanguard Roth IRA", "VBTLX"): ("buy", Decimal("4073.68")),
         }
 
     @pytest.mark.parametrize(
@@ -1330,9 +1330,9 @@ class TestClassTotalsSumToThePortfolio:
                 "Roth",
                 TaxTreatment.TAX_FREE,
                 [
-                    holding(FundType.US_STOCK, "FZROX", "22515.98"),
-                    holding(FundType.INTERNATIONAL_STOCK, "FZILX", "15744.14"),
-                    holding(FundType.US_BOND, "FXNAX", "5000.28"),
+                    holding(FundType.US_STOCK, "VTSAX", "22515.98"),
+                    holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "15744.14"),
+                    holding(FundType.US_BOND, "VBTLX", "5000.28"),
                 ],
             ),
         ]
@@ -1395,9 +1395,9 @@ class TestClassTotalsSumToThePortfolio:
                 "Roth",
                 TaxTreatment.TAX_FREE,
                 [
-                    holding(FundType.US_STOCK, "FZROX", "2251598000"),
-                    holding(FundType.INTERNATIONAL_STOCK, "FZILX", "1574414000"),
-                    holding(FundType.US_BOND, "FXNAX", "500028000"),
+                    holding(FundType.US_STOCK, "VTSAX", "2251598000"),
+                    holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "1574414000"),
+                    holding(FundType.US_BOND, "VBTLX", "500028000"),
                 ],
             ),
         ]
