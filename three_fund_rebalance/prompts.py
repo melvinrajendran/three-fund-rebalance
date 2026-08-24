@@ -13,15 +13,12 @@ from decimal import Decimal, InvalidOperation
 
 from three_fund_rebalance.config import (
     ACCOUNT_TYPE_CHOICES,
-    DEFAULT_REBALANCE_BAND_PCT,
-    DEFAULT_REBALANCE_RELATIVE_BAND_PCT,
     FALLBACK_VT_US_PCT,
     MAX_ACCOUNT_NAME_LENGTH,
-    VT_FACT_SHEET_URL,
+    VT_FUND_PAGE_URL,
     infer_tax_treatment,
 )
 from three_fund_rebalance.formatting import (
-    ASSET_CLASS_LABELS,
     INDENT_UNIT,
     format_account_heading,
     format_percent,
@@ -30,8 +27,6 @@ from three_fund_rebalance.formatting import (
     wrap,
 )
 from three_fund_rebalance.models import (
-    INDIVIDUAL_FUND_TYPES,
-    PERCENT_SUM_TOLERANCE,
     Account,
     FundType,
     Holding,
@@ -40,19 +35,44 @@ from three_fund_rebalance.models import (
 )
 from three_fund_rebalance.vt_allocation import VTAllocationResult, VTFetchError, fetch_vt_us_pct
 
-# (fund type, how the question names it) -- also the order the slots are asked in.
+# (fund type, what the question calls the slot) -- also the order the slots
+# are asked in, and the order they end up in on the account.
+#
+# Singular before "fund", because an attributive noun does not pluralize: a
+# bond fund, the way it is a shoe store. The asset classes standing on their
+# own are plural everywhere else -- see _HOLDING_KIND_CHOICES below, the
+# target-date allocation questions, and report._CATEGORY_LABELS.
 _INDIVIDUAL_SLOT_PROMPTS: list[tuple[FundType, str]] = [
-    (FundType.US_STOCK, "a U.S. stock fund"),
-    (FundType.INTERNATIONAL_STOCK, "an international stock fund"),
-    (FundType.US_BOND, "a U.S. bond fund"),
+    (FundType.US_STOCK, "U.S. stock fund"),
+    (FundType.INTERNATIONAL_STOCK, "International stock fund"),
+    (FundType.US_BOND, "Bond fund"),
 ]
+
+_TARGET_DATE_LABEL = "Target-date fund"
 
 # An account holds one or the other, never a mix, so this is asked once up
 # front rather than as a fourth "does it hold..." question that could be
 # answered yes alongside the others.
-_INDIVIDUAL_FUNDS_CHOICE = "Individual funds (U.S. stock, international stock, bonds)"
+#
+# "Three" against "a single" is the contrast the question actually draws, and
+# it is the honest one: choosing individual funds collects all three slots,
+# so a label reading "Individual funds" would promise a menu that is not
+# offered.
+_INDIVIDUAL_FUNDS_CHOICE = "Three individual funds (U.S. stocks, international stocks, bonds)"
 _TARGET_DATE_CHOICE = "A single target-date fund"
 _HOLDING_KIND_CHOICES = [_INDIVIDUAL_FUNDS_CHOICE, _TARGET_DATE_CHOICE]
+
+#: Said once, above the three fund questions. The flow otherwise asks bare
+#: questions and lets the report explain, and the labels below do carry their
+#: own meaning -- but nothing in "Bond fund:" says that a fund you own none of
+#: still belongs in the answer, and that is the whole point of asking for all
+#: three. One sentence for what to type, one granting permission to enter a
+#: fund not yet bought: the failure mode here is not confusion but hesitation,
+#: and "is fine" answers that in two words.
+#:
+#: "Position" is what every brokerage calls a line item, and "asset class" is
+#: the vocabulary the band prompt and the report already use.
+FUND_EXPLANATION = "Enter a name or ticker for each asset class. A $0 position is fine."
 
 # Asked only for an account type we don't recognize. Worded by when the tax
 # is paid rather than by the category name, since "tax-deferred" versus
@@ -263,18 +283,25 @@ def prompt_choice(
 
 
 def prompt_stock_bond_allocation(
-    prompter: Prompter,
-    *,
-    default_stock: Decimal | None = None,
-    default_bond: Decimal | None = None,
+    prompter: Prompter, *, default_stock: Decimal | None = None
 ) -> tuple[Decimal, Decimal]:
+    """Ask for the stock share and derive the bond share from it.
+
+    Percentages that must sum to 100 carry one fewer degree of freedom than
+    they have questions, so asking for every one of them invites an answer
+    that cannot be honored and turns a typo into a form the user has to
+    re-fill. Ask for all but the last, state the last, and confirm it. A
+    denial restarts from the first question, because the number the user
+    wants to change is one they typed -- the derived one is not theirs to
+    edit.
+    """
     while True:
         stock = prompt_percent(prompter, "Target stock allocation", default=default_stock)
-        bond = prompt_percent(prompter, "Target bond allocation", default=default_bond)
-        total = stock + bond
-        if abs(total - Decimal(100)) <= PERCENT_SUM_TOLERANCE:
+        bond = Decimal(100) - stock
+        if prompt_yes_no(
+            prompter, f"That leaves {format_percent(bond)}% bonds. Correct?", default=True
+        ):
             return stock, bond
-        prompter.say(f"Stock % and bond % must sum to 100 (got {total}). Let's try again.")
 
 
 # --------------------------------------------------------------------------
@@ -320,11 +347,15 @@ def prompt_rebalance_band(prompter: Prompter, *, default: Decimal | None = None)
     above them they read as two settings of one policy; each question then
     only has to say which unit it wants, which is the part that was actually
     ambiguous.
+
+    **There is no suggested default.** `default` carries a saved answer and
+    nothing else, so on a first run both halves have to be typed -- see
+    prompt_relative_rebalance_band for why.
     """
     return prompt_percent(
         prompter,
         "Absolute band, in percentage points of the portfolio",
-        default=default if default is not None else DEFAULT_REBALANCE_BAND_PCT,
+        default=default,
         unit="pts",
     )
 
@@ -333,11 +364,25 @@ def prompt_relative_rebalance_band(
     prompter: Prompter, *, default: Decimal | None = None
 ) -> Decimal:
     """The relative band: a share of the class's own target, so it scales
-    with the target where the absolute band does not."""
+    with the target where the absolute band does not.
+
+    Like the absolute half, this offers a saved answer and never a suggested
+    one. The pair used to default to the 5/25 convention, which meant a first
+    run could be walked past with two keystrokes -- and the band is the one
+    setting here that decides whether the program does anything at all. A
+    number the user did not choose, sitting under a heading that says
+    "Rebalancing band", reads in the report as their own policy. Neither
+    figure is universal: 5 and 25 are a convention, not a recommendation this
+    program is in a position to make.
+
+    The constants remain in `config.py` as the documented convention, and the
+    README still names the 5/25 rule -- what is gone is the program answering
+    the question on the user's behalf.
+    """
     return prompt_percent(
         prompter,
         "Relative band, as a share of the asset class's target",
-        default=default if default is not None else DEFAULT_REBALANCE_RELATIVE_BAND_PCT,
+        default=default,
     )
 
 
@@ -381,13 +426,15 @@ def resolve_vt_allocation(
         )
         spoken = True
         if prompt_yes_no(prompter, "  Use this cached value?", default=True):
-            return VTAllocationResult(us_pct=cached_us_pct, as_of=cached_as_of or "unknown date", source="cache")
+            return VTAllocationResult(
+                us_pct=cached_us_pct, as_of=cached_as_of or "unknown date", source="cache"
+            )
 
     suggested_default = cached_us_pct if cached_us_pct is not None else FALLBACK_VT_US_PCT
     lead = "\n" if spoken else ""
     prompter.say_wrapped(
         f"{lead}Please enter VT's U.S. stock allocation % manually "
-        f"(see {VT_FACT_SHEET_URL} or Vanguard's fund page)."
+        f"(see {VT_FUND_PAGE_URL})."
     )
     manual = prompt_percent(prompter, "U.S. stock", default=suggested_default)
     return VTAllocationResult(us_pct=manual, as_of="manually entered", source="manual")
@@ -409,31 +456,73 @@ def _describe_target_date_allocation(allocation: TargetDateAllocation) -> str:
 
 
 def _prompt_target_date_allocation(prompter: Prompter) -> TargetDateAllocation:
+    """The fund's own mix. Two questions, not three -- the bond sleeve is
+    what the other two leave behind; see prompt_stock_bond_allocation for why
+    the last of a set summing to 100 is stated rather than asked.
+
+    Note this makes the three entered percentages sum to exactly 100, where a
+    fact sheet rounding each sleeve to a tenth often does not.
+    `TargetDateAllocation` still tolerates a sum that is off by
+    PERCENT_SUM_TOLERANCE and `fraction_of` still normalizes, because a
+    config file written by an older version -- or by hand -- can still hold
+    one. The consequence to know about is that a fact sheet printing
+    64.0 / 34.3 / 1.6 is confirmed back as 1.7% bonds, a tenth of a point off
+    what it says. That difference survives no further than `fraction_of`,
+    which would have spread the same tenth across the three sleeves anyway.
+    """
     prompter.say("Enter this fund's underlying allocation (from its fact sheet):")
     with prompter.indented():
         while True:
-            us_stock = prompt_percent(prompter, "U.S. stock")
-            international = prompt_percent(prompter, "International stock")
-            bond = prompt_percent(prompter, "Bond")
-            total = us_stock + international + bond
-            if abs(total - Decimal(100)) <= PERCENT_SUM_TOLERANCE:
+            us_stock = prompt_percent(prompter, "U.S. stocks")
+            international = prompt_percent(prompter, "International stocks")
+            if us_stock + international > Decimal(100):
+                prompter.say("Those add up to more than 100%. Let's try again.")
+                continue
+            bond = Decimal(100) - us_stock - international
+            if prompt_yes_no(
+                prompter, f"That leaves {format_percent(bond)}% bonds. Correct?", default=True
+            ):
                 return TargetDateAllocation(
                     us_stock_pct=us_stock, international_stock_pct=international, bond_pct=bond
                 )
-            prompter.say(f"These must sum to 100 (got {total}). Let's try again.")
 
 
-def _prompt_new_holding(prompter: Prompter, fund_type: FundType) -> Holding:
-    # Depth comes from the prompter, never from spaces baked into the prompt
-    # text: this helper is called from two places at different depths, and a
-    # literal indent that lines up in one lands two levels off in the other.
+def _prompt_holding(
+    prompter: Prompter, fund_type: FundType, label: str, *, existing: Holding | None = None
+) -> Holding:
+    """Ask for one fund: what it is at the current depth, everything about it
+    one level deeper.
+
+    The same helper serves a new account and a saved one -- `existing` only
+    decides what the two questions offer as defaults, and whether a
+    target-date fund's mix is asked for outright or shown for confirmation.
+    One shape for both is what stops the two flows drifting apart.
+
+    Depth comes from the prompter, never from spaces baked into the prompt
+    text: this is called from two places at different depths, and a literal
+    indent that lines up in one lands two levels off in the other.
+    """
+    name = prompt_str(prompter, label, default=existing.name if existing else None)
     with prompter.indented():
-        name = prompt_str(prompter, "Fund name or ticker symbol")
-        value = prompt_decimal(prompter, "Current value ($)", default=Decimal(0), min_value=Decimal(0))
-        target_date_allocation = (
-            _prompt_target_date_allocation(prompter) if fund_type == FundType.TARGET_DATE else None
+        value = prompt_decimal(
+            prompter,
+            "Current value ($)",
+            default=existing.value if existing else Decimal(0),
+            min_value=Decimal(0),
         )
-    return Holding(fund_type=fund_type, name=name, value=value, target_date_allocation=target_date_allocation)
+        allocation = existing.target_date_allocation if existing else None
+        if fund_type == FundType.TARGET_DATE:
+            if allocation is None:
+                allocation = _prompt_target_date_allocation(prompter)
+            else:
+                prompter.say_wrapped(f"Currently {_describe_target_date_allocation(allocation)}")
+                if prompt_yes_no(
+                    prompter, "Update this fund's underlying allocation?", default=False
+                ):
+                    allocation = _prompt_target_date_allocation(prompter)
+    return Holding(
+        fund_type=fund_type, name=name, value=value, target_date_allocation=allocation
+    )
 
 
 def _prompt_cash(prompter: Prompter, *, default: Decimal = Decimal(0)) -> Holding | None:
@@ -443,40 +532,48 @@ def _prompt_cash(prompter: Prompter, *, default: Decimal = Decimal(0)) -> Holdin
     return Holding(fund_type=FundType.CASH, name="", value=cash) if cash > 0 else None
 
 
+def _slots_for(holdings: list[Holding]) -> list[tuple[FundType, str]]:
+    """Which slots an account of this kind is asked about, in order. A
+    target-date account has exactly one; anything else has all three."""
+    if any(h.fund_type == FundType.TARGET_DATE for h in holdings):
+        return [(FundType.TARGET_DATE, _TARGET_DATE_LABEL)]
+    return _INDIVIDUAL_SLOT_PROMPTS
+
+
 def _prompt_fund_holdings(prompter: Prompter) -> list[Holding]:
-    """The funds an account holds -- one target-date fund, or any combination
-    of the three individual funds. Never both; see Account's validation."""
+    """The funds an account holds -- one target-date fund, or all three
+    individual funds. Never both; see Account's validation.
+
+    All three, not a chosen subset: an account that holds individual funds is
+    taken to be able to buy any of the three, so a fund the user owns none of
+    is still worth a slot. That slot is capacity -- the solver can buy into
+    it -- and gating each one behind "does this account hold...?" meant the
+    truthful answer for a fund not yet bought silently removed the only place
+    the plan could ever put that asset class. It also re-asked the question
+    the choice below has just answered.
+    """
     kind = prompt_choice(
         prompter,
         "What does this account hold?",
         _HOLDING_KIND_CHOICES,
         default=_INDIVIDUAL_FUNDS_CHOICE,
     )
+    # Both branches open with a blank line, so the fund questions are set off
+    # from the choice above them whichever way it was answered.
     if kind == _TARGET_DATE_CHOICE:
-        return [_prompt_new_holding(prompter, FundType.TARGET_DATE)]
+        prompter.say("")
+        return [_prompt_holding(prompter, FundType.TARGET_DATE, _TARGET_DATE_LABEL)]
 
-    holdings = []
-    for fund_type, description in _INDIVIDUAL_SLOT_PROMPTS:
-        if prompt_yes_no(prompter, f"Does this account hold {description}?", default=False):
-            holdings.append(_prompt_new_holding(prompter, fund_type))
-    return holdings
+    prompter.say_wrapped("\n" + FUND_EXPLANATION)
+    prompter.say("")
+    return [
+        _prompt_holding(prompter, fund_type, label)
+        for fund_type, label in _INDIVIDUAL_SLOT_PROMPTS
+    ]
 
 
-def _prompt_holdings(prompter: Prompter, tax_treatment: TaxTreatment) -> list[Holding]:
+def _prompt_holdings(prompter: Prompter) -> list[Holding]:
     holdings = _prompt_fund_holdings(prompter)
-
-    # Said here rather than after the cash question: it is about the answer
-    # the user has just given, and three prompts later it reads as a non
-    # sequitur.
-    has_bonds = any(h.fund_type in (FundType.US_BOND, FundType.TARGET_DATE) for h in holdings)
-    if tax_treatment == TaxTreatment.TAXABLE and has_bonds:
-        prompter.say_wrapped(
-            "Note: bonds in a taxable account (target-date funds included) pay interest "
-            "taxed yearly as ordinary income, so where there is room this plan holds "
-            "bonds in tax-advantaged accounts, tax-deferred first -- a common convention, "
-            "not a prediction."
-        )
-
     cash_holding = _prompt_cash(prompter)
     if cash_holding:
         holdings.append(cash_holding)
@@ -512,55 +609,41 @@ def _prompt_new_account(
     with prompter.indented():
         prompter.say(format_account_heading(name, account_type))
         with prompter.indented():
-            holdings = _prompt_holdings(prompter, tax_treatment)
-    return Account(account_type=account_type, name=name, tax_treatment=tax_treatment, holdings=holdings)
+            holdings = _prompt_holdings(prompter)
+    return Account(
+        account_type=account_type,
+        name=name,
+        tax_treatment=tax_treatment,
+        holdings=holdings,
+    )
 
 
 def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Account:
-    prompter.say("Press Enter to keep the last value.")
-    new_holdings = []
-    with prompter.indented():
-        for holding in existing.holdings:
-            if holding.fund_type == FundType.CASH:
-                continue
-            prompter.say(f"{holding.name} ({ASSET_CLASS_LABELS[holding.fund_type]} fund)")
-            with prompter.indented():
-                value = prompt_decimal(
-                    prompter, "Current value ($)", default=holding.value, min_value=Decimal(0)
-                )
-                target_date_allocation = holding.target_date_allocation
-                if holding.fund_type == FundType.TARGET_DATE:
-                    prompter.say_wrapped(
-                        f"Currently {_describe_target_date_allocation(target_date_allocation)}"
-                    )
-                    if prompt_yes_no(
-                        prompter, "Update this fund's underlying allocation?", default=False
-                    ):
-                        target_date_allocation = _prompt_target_date_allocation(prompter)
-            new_holdings.append(
-                Holding(
-                    fund_type=holding.fund_type,
-                    name=holding.name,
-                    value=value,
-                    target_date_allocation=target_date_allocation,
-                )
-            )
+    """Re-ask a saved account's holdings, its own answers pre-filled.
 
-    # What can be added depends on which kind of account this already is: a
-    # target-date account is full at one fund, an individual-fund account can
-    # gain the asset classes it's missing, and one holding only cash hasn't
-    # committed to either yet.
-    declared_types = {h.fund_type for h in existing.holdings}
-    if FundType.TARGET_DATE in declared_types:
-        pass
-    elif declared_types & set(INDIVIDUAL_FUND_TYPES):
-        for fund_type, description in _INDIVIDUAL_SLOT_PROMPTS:
-            if fund_type in declared_types:
-                continue
-            if prompt_yes_no(prompter, f"Add {description} to this account?", default=False):
-                new_holdings.append(_prompt_new_holding(prompter, fund_type))
+    Every question sits at the depth the same question sits at when the
+    account is new -- one flow asking the same things twice should look the
+    same both times, and it now does ask the same things.
+
+    Both the ticker and the value are offered as editable defaults. A fund's
+    name was fixed once saved, which was survivable while every declared
+    holding was something the user owned; with a slot standing open for a
+    fund they have not bought, the name is the part most likely to change --
+    a plan swaps its bond fund, or the user picks a different one than the
+    slot was opened with. Making it editable is also why no slot ever needs
+    removing: a lineup change is a rename.
+    """
+    prompter.say("Press Enter to keep the last value.")
+    by_type = {h.fund_type: h for h in existing.holdings if h.fund_type != FundType.CASH}
+    if by_type:
+        new_holdings = [
+            _prompt_holding(prompter, fund_type, label, existing=by_type.get(fund_type))
+            for fund_type, label in _slots_for(existing.holdings)
+        ]
     else:
-        new_holdings.extend(_prompt_fund_holdings(prompter))
+        # Cash and nothing else: this account never committed to either kind,
+        # so ask as though it were new.
+        new_holdings = _prompt_fund_holdings(prompter)
 
     cash_holding = _prompt_cash(prompter, default=existing.available_cash())
     if cash_holding:
@@ -615,7 +698,8 @@ def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> lis
         label = "Add an account?" if not accounts else "Add another account?"
         # Only the first question sits directly under the subheading; later
         # ones need a blank line to separate them from the account above.
-        if not prompt_yes_no(prompter, label if is_first_prompt else f"\n{label}", default=not accounts):
+        question = label if is_first_prompt else f"\n{label}"
+        if not prompt_yes_no(prompter, question, default=not accounts):
             break
         # The eleven account types are worth seeing once. Reprinting them for
         # every account is most of the screen, so later ones ask in one line.

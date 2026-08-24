@@ -157,29 +157,31 @@ class Holding:
         if self.fund_type != FundType.CASH and not self.name.strip():
             raise ValueError("A fund holding must have a non-empty name/ticker")
 
-    def us_stock_component(self) -> Decimal:
-        """Dollar amount of this holding attributable to U.S. stocks."""
-        if self.fund_type == FundType.US_STOCK:
-            return self.value
+    def fraction_of(self, asset_class: FundType) -> Decimal:
+        """How much of one dollar held here counts toward `asset_class`: 1 for
+        a direct match, the fund's own internal share for a target-date fund,
+        0 otherwise.
+
+        The single statement of that rule. It used to be written out four
+        times -- once per asset class here, and again as
+        `rebalance._fund_type_coefficient` for the solver, which needs the
+        same number as a float. Four copies of one invariant is three chances
+        for them to disagree, and the solver reading a holding differently
+        from the report is the exact disagreement that makes a portfolio
+        infeasible rather than merely misreported.
+
+        Named to match `TargetDateAllocation.fraction_of`, which answers the
+        same question one level down and which this delegates to.
+        """
+        if self.fund_type == asset_class:
+            return Decimal(1)
         if self.fund_type == FundType.TARGET_DATE:
-            return self.value * self.target_date_allocation.fraction_of(FundType.US_STOCK)
+            return self.target_date_allocation.fraction_of(asset_class)
         return Decimal(0)
 
-    def international_stock_component(self) -> Decimal:
-        """Dollar amount of this holding attributable to international stocks."""
-        if self.fund_type == FundType.INTERNATIONAL_STOCK:
-            return self.value
-        if self.fund_type == FundType.TARGET_DATE:
-            return self.value * self.target_date_allocation.fraction_of(FundType.INTERNATIONAL_STOCK)
-        return Decimal(0)
-
-    def bond_component(self) -> Decimal:
-        """Dollar amount of this holding attributable to bonds."""
-        if self.fund_type == FundType.US_BOND:
-            return self.value
-        if self.fund_type == FundType.TARGET_DATE:
-            return self.value * self.target_date_allocation.fraction_of(FundType.US_BOND)
-        return Decimal(0)
+    def component(self, asset_class: FundType) -> Decimal:
+        """Dollar amount of this holding attributable to `asset_class`."""
+        return self.value * self.fraction_of(asset_class)
 
 
 @dataclass
@@ -271,3 +273,26 @@ class Trade:
             raise ValueError(f"Trade.action must be 'buy' or 'sell', got {self.action!r}")
         if self.amount <= 0:
             raise ValueError(f"Trade.amount must be positive, got {self.amount}")
+
+
+@dataclass
+class RebalanceResult:
+    """What a rebalance came out to: the orders, anything the user has to be
+    told about them, and two figures the report discloses.
+
+    Lives here rather than in `rebalance` so that `report` -- whose whole job
+    is to render this -- depends on the data and not on the solver that
+    produced it. `Trade` was already here; this was the one piece of the
+    solver's output that still dragged scipy into the reporting layer.
+    """
+
+    trades: list[Trade]
+    warnings: list[str]
+    # Total $ of bonds left in taxable accounts in the final solution (0 if
+    # tax-advantaged capacity was sufficient to hold the whole bond target).
+    taxable_bond_dollars: Decimal
+    # How many moves were wanted but left out for being smaller than
+    # MIN_TRADE_DOLLARS. The report says so: with them dropped, the orders
+    # shown do not reach the target exactly, and silence about that reads as
+    # a rounding error nobody can account for.
+    dropped_trades: int = 0

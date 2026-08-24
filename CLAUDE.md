@@ -55,6 +55,13 @@ Modules map to stages: `persistence` ↔ config file, `prompts` ↔ all input,
 `rebalance` ↔ the solver, `report`/`formatting` ↔ output. `config.py` holds
 constants only; `models.py` holds the dataclasses everything else passes around.
 
+The imports form a DAG with `models` at the bottom and `cli` at the top, and it is
+worth keeping that way. In particular **`report` does not import `rebalance`**: it
+renders a `RebalanceResult`, which lives in `models` alongside `Trade` for exactly
+that reason, so the reporting layer depends on the data and not on the scipy-backed
+solver that produced it. (`report.py` must not import `prompts.py` either — shared
+presentation constants live in `formatting.py`.)
+
 The user walks **three** numbered steps — target allocation, rebalancing band,
 account holdings. The report is not a fourth: it is what those produce, so it gets
 `format_result_header` (same `=` rule, no "STEP x OF y") rather than a step banner.
@@ -65,6 +72,19 @@ account holdings. The report is not a fourth: it is what those produce, so it ge
 **Money is `Decimal`, never `float`.** The sole exception is inside the LP, which
 necessarily works in floats; `rebalance._to_decimal` and `models.to_cents` convert
 back at the boundary. Introducing a float into a dollar amount elsewhere is a bug.
+The two crossings *into* float are `_fund_type_coefficient` and the `float(...)` calls
+building constraint rows; anything coming back out — `taxable_bond_dollars` included —
+reads the Decimal from the holding rather than round-tripping a coefficient through
+`Decimal(str(some_float))`.
+
+**An asset class has one key, defined in one place.** The dicts of dollar amounts and
+percentages that pass between `allocation`, `rebalance` and `report` are keyed by
+`allocation.ASSET_CLASS_KEYS` — and note bonds are `"bond"` there, not
+`FundType.US_BOND.value` (`"us_bond"`, which is the *storage* spelling that goes into
+config.json). Two of the three keys coincide with the enum values and the third does
+not, which is exactly why the mapping is imported rather than re-typed: `_TARGET_KEYS`
+in the solver and `_CATEGORY_TARGET_KEYS` in the report both derive from it. A reader
+who infers the pattern from the first two is wrong about the third.
 
 **A rebalance never moves money between accounts.** Each account's total value is an
 equality constraint. Trades only reallocate *within* an account, including investing
@@ -100,8 +120,13 @@ not intend to invest must simply not be entered — a README limitation, not
 something the solver can see.
 
 **A target-date fund is one position holding a fixed internal ratio,** not three
-positions. `_fund_type_coefficient` is what lets a single slot contribute
-fractionally to all three targets.
+positions. `Holding.fraction_of` is what lets a single slot contribute fractionally
+to all three targets, and it is stated once: `Holding.component` is it times the
+value, and `rebalance._fund_type_coefficient` is it as the float the LP needs. It
+used to be written out four times — once per asset class as
+`Holding.us_stock_component()` and friends, and again for the solver — which is four
+copies of one invariant and three chances for the report and the solver to disagree
+about what an account holds.
 
 **The LP must never over-determine the portfolio total.** Each account spends
 exactly its own total, and each asset class hits exactly the figure
@@ -133,10 +158,11 @@ Two things feed it, and both shipped as infeasible portfolios reported to the us
   percent of its account belonging to no asset class — which the implied row would
   silently dump into bonds. `TargetDateAllocation.fraction_of` divides by the actual
   sum instead, and is the **one** place the three sleeves become fractions:
-  `Holding.us_stock_component()` and friends and `rebalance._fund_type_coefficient` all
-  go through it, which is also what keeps `_current_asset_class_dollars` agreeing with
-  what the solver sees. It normalizes the derived view only; the entered percentages
-  are stored and echoed back untouched.
+  `Holding.fraction_of` delegates to it, `Holding.component` is that times the value,
+  and `rebalance._fund_type_coefficient` is `Holding.fraction_of` as a float — so the
+  report, `_current_asset_class_dollars` and the solver all read a holding the same
+  way by construction rather than by agreement. It normalizes the derived view only;
+  the entered percentages are stored and echoed back untouched.
 
 Nothing may assume the normalized fractions sum to exactly 1 — as Decimals they leave
 an artifact around 1e-28, as floats around 1e-16, and CPython 3.12's compensated
@@ -150,6 +176,24 @@ sub-cent cash is under `MIN_TRADE_DOLLARS` regardless.
 sit alongside either). `Account.__post_init__` enforces it, `prompts` asks which kind
 up front instead of offering a fourth yes/no, and `INDIVIDUAL_FUND_TYPES` is the set
 that clashes with `TARGET_DATE`.
+
+**A declared holding is capacity, whatever it is worth — and an account holding
+individual funds declares all three.** A slot exists because the account *can* hold
+that asset class, not because it currently does: `_build_slots` takes every non-cash
+holding regardless of value, its LP bound is `(0, account total)`, and `report`
+renders a zero one as `--` rather than `$0.00`. The model always allowed this; for a
+long time the only way to reach it was to answer "yes" to "does this account hold a
+bond fund?" and then type `0`, so the truthful answer removed the only place an asset
+class could ever go. `prompts._prompt_fund_holdings` now asks for all three outright,
+which also stops it re-asking what the kind question has just answered. The
+assumption that comes with that — every such account can buy all three — is a README
+limitation: a 401(k) with no international option may be handed an order it cannot
+fill.
+
+The reason it matters is that capacity is what the solver is short of. In the
+README's own example the added slots are what let the whole bond target be reached
+inside the shelters, so the taxable account is not touched at all; with the bond slot
+missing from the Roth it had to sell there.
 
 The consequence worth holding onto: **a target-date account has exactly one slot, so
 the per-account budget equality pins it outright.** No objective can reach inside it.
@@ -241,6 +285,26 @@ once, so an objective is a vector over the same columns and a solved optimum is 
 appended to `A_ub`. An objective with no nonzero coefficient is skipped rather than
 solved: it would only re-find a feasible point and carry a vacuous bound.
 
+The six objectives themselves live in `_location_objectives`, apart from the
+constraint rows — they are pure data (a cost vector and the sentence `_solve` prints
+if that phase is infeasible), and the ranking *is* the design, so it reads better as
+a list than as forty lines wedged mid-function. Keep the constraint-row construction
+inside `compute_trades` though: the point of the shared layout is that every phase
+indexes the same columns, and splitting that across functions hides it.
+
+The two *allocation*-stage LPs (`_resolve_allocation` and `_place_cash`) share their
+own smaller layout, three columns per class: `[ p | first anchor | second anchor ]`.
+What the anchors measure differs by caller, but the shape does not, which is what
+lets both build rows through `_allocation_row` and `_abs_value_rows` instead of a
+dozen hand-written `row[3 + index]` expressions whose only documentation was being
+read carefully.
+
+`_slot_indices_by_account` groups the slots once for the three places that need them
+(the capacity check, the budget rows, the rounding pass). Each of those used to
+rescan the whole slot list per account. Nothing here is ever big enough for that to
+be slow — the LP solve dominates by orders of magnitude — but one of the three
+already grouped properly, and having the other two disagree read as an oversight.
+
 **Everything below phase 2 is free-rearrangement only.** Phases 3, 4 and 5 can decide
 *which* fund an account being traded anyway should end up in, and can rearrange
 sheltered accounts at will, but none of them can open a taxable trade. That ranking is
@@ -303,6 +367,16 @@ account holding one fund breaches both at once, and "nothing you hold can be bon
 points at the missing piece, while "you are stuck holding this much U.S. stock"
 describes the same problem from the side the user can do least about.
 
+Since an account holding individual funds declares all three, its coefficient for
+every class runs 0 to 1 — floor zero, ceiling its whole value — so **a target-date
+account is now the only thing that can breach either bound.** Both messages say so:
+"an account holding a single fund has to put its whole value into it, and a
+target-date fund's mix is fixed". The old ceiling message advised adding a matching
+fund to an account that holds individual funds, which is now something the user has
+already done by construction. Note the check itself is unchanged and still general —
+`compute_trades` is public and tests call it with partial slot sets — so the messages
+name the likely cause rather than asserting it.
+
 What has to be reachable is the nearest *band edge*, not the target — a band the
 portfolio can satisfy is satisfiable even when the exact target is not, which is one
 of the things a band is for. This is the band's **only** remaining role inside the LP:
@@ -339,9 +413,28 @@ keep meaning exactly what it did — every solver test that says nothing about t
 still asserts exact-target behavior — and it is the same "absent means never chosen"
 that `rebalance_band_pct` uses in the config file.
 
-**The relative half is the one question in the flow that gets explained before it is
-asked.** Everything else is asked bare and explained where its effect is visible, in
-the report. That does not work here: "or by more than this share of its own target"
+**Both halves are required input, and neither offers a suggested answer.**
+`prompt_rebalance_band` and `prompt_relative_rebalance_band` pass `default` straight
+through, so it carries a *saved* answer and nothing else: a returning user presses
+Enter to keep what they chose, and a first run has to type both. They used to fall
+back to `DEFAULT_REBALANCE_BAND_PCT` / `DEFAULT_REBALANCE_RELATIVE_BAND_PCT`, which
+meant the whole of step 2 could be walked past with two keystrokes. The band is the
+one setting here that decides whether the program does anything at all, 5 and 25 are
+a convention rather than a recommendation this program is in a position to make, and a
+number the user never chose reads back in the report's "Rebalancing band" section as
+their own policy. The constants stay in `config.py` as the documented convention and
+the README still names the 5/25 rule -- what is gone is the program answering on the
+user's behalf. `TestRebalanceBandPrompts` pins both halves of that: no suggested
+answer on a first run, a saved answer still offered.
+
+Note this makes `prompt_percent`'s no-default path load-bearing for the first time in
+the flow: pressing Enter falls through to "Please enter a number." rather than
+returning anything, which is what "required" means here.
+
+**The relative half is one of the two questions in the flow that get explained before
+they are asked** (the other is the three fund slots — see `prompts.FUND_EXPLANATION`).
+Everything else is asked bare and explained where its effect is visible, in the
+report. That does not work here: "or by more than this share of its own target"
 reads as an alternative when it is a second, tighter limit, and the reason the rule
 exists — five points of drift is the whole of a 5% bond sleeve — is invisible from the
 prompt. So `prompts.BAND_EXPLANATION` states the policy above the pair, worded the way
@@ -381,6 +474,14 @@ ever a *suggested default* in the manual prompt.
 
 The fund page's HTML is deliberately not scraped — client-side rendered behind bot
 protection. Don't "improve" this by adding a scraper.
+
+**The two URLs are for two different readers, and are not interchangeable.**
+`VT_FACT_SHEET_URL` is the PDF the *fetch chain* falls back to: a static file on a
+separate host, which is what makes it a good second source and a poor thing to hand a
+person. `VT_FUND_PAGE_URL` is what the manual-entry prompt names, because someone
+reading the number off for themselves wants the page they would reach from a search or
+from their broker — current rather than quarterly, and carrying the same country table
+the JSON endpoint backs. Being unscrapable is irrelevant to a human.
 
 ### Output structure (`formatting.py`)
 
@@ -453,9 +554,14 @@ loses them is a regression:
   legal prose at the foot of a page is something a reader learns to skip, which costs
   the disclosure the one thing it is there for. Those clauses are not restated elsewhere
   either: the README's Disclaimer section was cut back to the same two clauses plus a
-  pointer to Limitations, and `--version` is now the only place carrying
-  non-affiliation. Adding a clause here means finding one to cut.
+  pointer to Limitations. Adding a clause here means finding one to cut.
   `TestRequiredWording` pins both the wording and the line count.
+
+  **Non-affiliation is no longer stated anywhere the program prints.** `--version`
+  carried it until it was cut back to `prog + version`; nothing replaced it. Worth
+  knowing before the next edit here: this file's own history is the argument for
+  brevity, not for the clause being unnecessary, and the fund and broker names still
+  appear throughout the prompts and the README.
 - **Nothing is called a "recommendation" and no order is phrased as an instruction.**
   "Recommendation" is a term of art under Reg BI and FINRA Rule 2111. Hence "Orders to
   place" and "Review each order before placing it:" rather than "Recommended trades"
@@ -488,10 +594,16 @@ loses them is a regression:
   -- never that it *is* one or that a loss *is* lost. The tool cannot see cost basis,
   trade dates, or purchases made elsewhere in the 61-day window. It also names the
   rule it is talking about -- section 1091, "substantially identical" securities,
-  "within 30 days before or after the sale, in any account you control" -- because
-  without the standard, "funds are matched by name here" is a caveat about nothing in
-  particular, and the reader has no way to judge whether their own replacement fund is
-  far enough away.
+  "within 30 days before or after the sale, in any account you control" -- so a reader
+  can judge whether their own replacement fund is far enough away.
+
+  **It stops at the standard.** Two closing sentences were cut: one suggesting a
+  different fund in the sheltered account, and one noting that matching by name misses
+  two share classes of the same index. The first is advice, which is the one thing this
+  program does not give; the second is a limitation of the check rather than a fact
+  about the user's situation, and the README's Limitations section is where it lives.
+  Seven lines rather than nine, and everything left is either the rule or this
+  portfolio's own numbers.
 - **A taxable sale is disclosed as a taxable event.** `report._describe_taxable_sales`
   says it "may realize capital gains or losses" and that no cost basis is collected.
   Phase 2 minimizes taxable *volume*, which is not the same as pricing the sale, so the
@@ -512,9 +624,13 @@ loses them is a regression:
   distinction, and they had said gains in a taxable account are taxed "every year".
   They are also printed unwrapped by `prompt_choice`, so each has to fit
   `prose_width()` -- `TestTaxTreatmentChoices` holds both lines.
-- **No claim implies future performance.** The asset-location note calls preferring
-  tax-deferred space "a common asset-location convention, not a prediction" rather than
-  asserting that stocks will out-grow bonds.
+- **No claim implies future performance.** Nothing may assert that stocks will
+  out-grow bonds; where the asset-location preference is described at all — the
+  README's "Asset location" entry — it is "a common convention", not a prediction.
+  The onboarding flow used to say this itself, above the cash question, and no longer
+  does: it explained a trade the user had not been shown yet, and the program prints
+  no other unprompted commentary on its own reasoning.
+  `test_the_asset_location_note_is_not_said_during_onboarding` holds the line.
 - **Figures carry their provenance** -- "Values as entered, not live market prices.",
   plus "Last saved <date>." as its own sentence when they came from a config file. The
   numbers are the user's, and can be stale.
@@ -539,6 +655,23 @@ echoed-back values do the opposite and **trim trailing zeros** via
 prompt never offers `[80]` while the next offers `[62.0]`. `prompt_percent` is the
 single door for asking one: it owns the 0-100 bounds, the `(%)` suffix, and the default
 formatting.
+
+**A set of percentages that must sum to 100 is asked for one short, and the last one
+is stated and confirmed.** `prompt_stock_bond_allocation` asks for stock and says
+"That leaves 20% bonds. Correct?"; `_prompt_target_date_allocation` asks for two
+sleeves and derives the third. Questions for every member of the set outnumber the
+degrees of freedom, which invites an answer that cannot be honored and turns a typo
+into a form the user has to re-fill. A denial restarts from the *first* question,
+because the number they want to change is one they typed — the derived one is not
+theirs to edit — and the only remaining way to be wrong is for the entered values to
+exceed 100 outright, which the target-date prompt rejects in place.
+
+One consequence to know: entered target-date sleeves now sum to exactly 100, where a
+fact sheet rounding each to a tenth often does not, so a fund printed 64.0 / 34.3 /
+1.6 is confirmed back as 1.7% bonds. `TargetDateAllocation` keeps
+`PERCENT_SUM_TOLERANCE` and `fraction_of` keeps normalizing — a config written by an
+older version or by hand can still hold a sum of 99.9 — and the tenth of a point would
+have been spread across the three sleeves by `fraction_of` anyway.
 
 A share of the portfolio is `%`; a distance between two percentages is **percentage
 points**, abbreviated `pts` only where the words will not fit: the comparison table's
@@ -653,9 +786,12 @@ hand-idealized — re-generate it and paste the result. Any change to `report.py
 scripted prompter as the tests do (never by piping stdin — see "Running the CLI
 without side effects"), under `COLUMNS=80`, which is what `tests/conftest.py` pins the
 suite to and therefore the width every wrapping assertion in the repo assumes. The
-scenario is 80/20, a 5/25 band, and three accounts: a Brokerage holding VTI and VXUS,
-a Roth IRA holding VTI plus a declared-but-empty BND, and a Traditional 401(k) holding
-VTI and BND.
+scenario is 80/20, a 5/25 band, and three accounts, each declaring all three funds:
+a Brokerage holding $60k VTI and $30k VXUS, a Roth IRA holding $20k VTI, and a
+Traditional 401(k) holding $30k VTI and $10k BND. The two empty Roth slots are the
+point of the example — they are what lets the whole bond target land in the shelters,
+so the taxable account is left alone and the report carries no taxable-sale
+disclosure.
 
 **One line of the Example cannot come from such a run.** Passing `--vt-us-pct` to skip
 the network stamps the provenance line "manually specified via --vt-us-pct"
@@ -686,8 +822,7 @@ there, not a qualification bolted onto a paragraph above.
 **The Disclaimer section is `report.DISCLAIMER`'s two clauses plus a pointer to
 Limitations, and nothing else.** The clauses cut from the report — advisory
 relationship, order placement, trademark use — are not restated here either; see the
-disclaimer entry under "Wording the output has to keep" for why. Non-affiliation lives
-in `--version` alone.
+disclaimer entry under "Wording the output has to keep" for why.
 
 **Every name the README uses for a user-visible concept is the program's own name for
 it.** The two bands, the 5/25 rule, the order/trade split, and the ban on
@@ -714,6 +849,13 @@ threading one more answer into every scripted list — the band's two answers si
 between the VT allocation and the first "Add an account?", and existing flows pass
 `"0"` for both so they keep testing exact-target behavior.
 
+Two shapes to know when writing one. A stock/bond target is `"80", "y"` — the stock
+share and then the confirmation of the derived bond share — and a target-date
+allocation is `"60", "20", "y"` for the same reason. An account holding individual
+funds is a name and a value per asset class with no yes/no between them, in the order
+`_INDIVIDUAL_SLOT_PROMPTS` lists; the update path asks the same questions with the
+saved ticker and value as defaults, so `""` twice keeps a holding exactly as it was.
+
 `compute_trades`'s `band_pct` defaults to `Decimal(0)`, which is the exact target and
 therefore the pre-band behavior — solver tests that aren't about the band say nothing
 about it and keep asserting the same numbers. `relative_band_pct` defaults to `None`
@@ -725,10 +867,18 @@ runnable offline — CI depends on it.
 
 ## Gotchas
 
-`pyproject.toml` configures no ruff `select`, so the active rule set is whatever the
-resolved ruff version enables by default, and `dev` pins only `ruff>=0.6`. With 0.16.3
-that default includes isort (`I001`) and flake8-simplify (`SIM117`) — import order
-*is* enforced, and a newer or older ruff can change what CI flags.
+`pyproject.toml` pins the ruff rule set explicitly: `[tool.ruff.lint] select = ["E",
+"F", "I", "UP", "B", "SIM"]`. It used to select nothing, which left the active set as
+whatever the resolved ruff version enabled by default — so isort (`I001`) and
+flake8-simplify (`SIM117`) were being enforced without anyone choosing them, and a
+`ruff>=0.6` floor meant an upgrade could change what CI accepts in either direction.
+Naming them makes the lint reproducible.
+
+`E` is the half that matters day to day: `E501` is *not* in ruff's default set, so
+`line-length = 100` was advisory and about thirty lines had quietly passed it. It is
+enforced now. `B905` is the other one worth knowing — every `zip()` over two lists
+that are the same length by construction says `strict=True`, so a future change that
+breaks that assumption raises instead of silently truncating.
 
 Version lives in `three_fund_rebalance/__init__.py`; `pyproject.toml` derives it via
 `dynamic = ["version"]`. Bump it in one place.

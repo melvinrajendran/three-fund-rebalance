@@ -6,7 +6,24 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from three_fund_rebalance.models import PERCENT_SUM_TOLERANCE, TargetAllocation
+from three_fund_rebalance.models import PERCENT_SUM_TOLERANCE, FundType, TargetAllocation
+
+#: The key each asset class is known by in the dicts of dollar amounts and
+#: percentages that pass between allocation, the solver and the report.
+#:
+#: Deliberately *not* `FundType.value`. Those are the storage spellings that
+#: go into config.json verbatim -- and there bonds are "us_bond", where every
+#: in-memory dict here says "bond". Two of the three coincide, which is
+#: precisely why this belongs in one place: a reader who notices the pattern
+#: on the first two and infers it for the third is wrong, and re-typing the
+#: mapping in each module that needs it is three chances to make that mistake
+#: permanent. `rebalance` and `report` both import this rather than declaring
+#: their own.
+ASSET_CLASS_KEYS: dict[FundType, str] = {
+    FundType.US_STOCK: "us_stock",
+    FundType.INTERNATIONAL_STOCK: "international_stock",
+    FundType.US_BOND: "bond",
+}
 
 
 def compute_target_allocation(
@@ -38,9 +55,9 @@ def target_percentages(target: TargetAllocation) -> dict[str, Decimal]:
     """A TargetAllocation as a plain mapping, keyed by the names the rest of
     the program uses for the three asset classes."""
     return {
-        "us_stock": target.us_stock_pct,
-        "international_stock": target.international_stock_pct,
-        "bond": target.bond_pct,
+        ASSET_CLASS_KEYS[FundType.US_STOCK]: target.us_stock_pct,
+        ASSET_CLASS_KEYS[FundType.INTERNATIONAL_STOCK]: target.international_stock_pct,
+        ASSET_CLASS_KEYS[FundType.US_BOND]: target.bond_pct,
     }
 
 

@@ -15,12 +15,12 @@ from three_fund_rebalance.models import (
     Account,
     FundType,
     Holding,
+    RebalanceResult,
     TargetAllocation,
     TargetDateAllocation,
     TaxTreatment,
     Trade,
 )
-from three_fund_rebalance.rebalance import RebalanceResult
 from three_fund_rebalance.report import (
     DISCLAIMER,
     RebalanceInputs,
@@ -104,7 +104,12 @@ class TestSummarizeAllocation:
 
     def test_empty_portfolio_does_not_divide_by_zero(self):
         summary = summarize_allocation(
-            [], TargetAllocation(us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20))
+            [],
+            TargetAllocation(
+                us_stock_pct=Decimal(60),
+                international_stock_pct=Decimal(20),
+                bond_pct=Decimal(20),
+            ),
         )
         assert summary.total_value == Decimal(0)
         assert all(c.current_pct == Decimal(0) for c in summary.categories)
@@ -188,7 +193,9 @@ class TestFormatReport:
 
     def test_warnings_are_included(self):
         account, target = self.make_account_and_target()
-        result = RebalanceResult(trades=[], warnings=["Something to flag."], taxable_bond_dollars=Decimal(0))
+        result = RebalanceResult(
+            trades=[], warnings=["Something to flag."], taxable_bond_dollars=Decimal(0)
+        )
         text = format_report(inputs([account], target), result)
         assert "Warning: Something to flag." in text
 
@@ -254,7 +261,9 @@ class TestReportRecap:
                 name="Brokerage",
                 tax_treatment=TaxTreatment.TAXABLE,
                 holdings=[
-                    Holding(fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(3500)),
+                    Holding(
+                        fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(3500)
+                    ),
                 ],
             ),
         ]
@@ -338,7 +347,8 @@ class TestReportRecap:
         assert "outside your band of" not in text
 
     def test_no_trades_message_names_the_band(self):
-        assert "within your band of plus or minus 5.0 percentage points" in " ".join(self._report().split())
+        rendered = " ".join(self._report().split())
+        assert "within your band of plus or minus 5.0 percentage points" in rendered
 
     def test_every_line_fits_the_page_width(self):
         """Four different widths at once was the thing that made this output
@@ -609,8 +619,9 @@ class TestRequiredWording:
 
     def test_an_asset_class_is_never_shortened_to_a_class(self):
         """Bare "class" in a retail investing context reads as *share*
-        class -- Admiral against Investor, Class A against Class C -- and the
-        wash-sale warning uses it in exactly that sense a few lines away."""
+        class -- Admiral against Investor, Class A against Class C. The
+        README's wash-sale limitation uses it in exactly that sense, so a
+        warning that lands beside it must not blur the two."""
         result = RebalanceResult(
             trades=[trade("Roth", FundType.US_STOCK, "VTI", "sell", "100.00")],
             warnings=["two share classes of one index (VTI and VTSAX) slip past it"],
@@ -880,7 +891,9 @@ class TestRelativeBandInTheReport:
                 tax_treatment=TaxTreatment.TAX_FREE,
                 holdings=[
                     Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(5880)),
-                    Holding(fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(4000)),
+                    Holding(
+                        fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(4000)
+                    ),
                     Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(120)),
                 ],
             ),
@@ -938,7 +951,9 @@ class TestRelativeBandInTheReport:
                 tax_treatment=TaxTreatment.TAX_FREE,
                 holdings=[
                     Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(5880)),
-                    Holding(fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(3620)),
+                    Holding(
+                        fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(3620)
+                    ),
                     Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(500)),
                 ],
             ),
