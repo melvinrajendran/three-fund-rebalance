@@ -155,9 +155,14 @@ _TARGET_KEYS = ASSET_CLASS_KEYS
 
 
 class RebalanceError(Exception):
-    """Raised when no feasible rebalance exists for the given accounts and
-    target -- e.g. the target requires more bond capacity than any
-    combination of declared holdings can provide."""
+    """Raised when the accounts cannot be solved at all -- an account with
+    money and no fund declared to invest it in, duplicate account nicknames,
+    or a mix of holdings no arrangement can reconcile with the resolved
+    allocation.
+
+    Not raised for a target the funds cannot reach: that is approximated as
+    closely as the accounts allow and reported through `_capacity_warnings`.
+    """
 
 
 @dataclass(frozen=True)
@@ -308,15 +313,6 @@ def _wash_sale_variables(accounts: list[Account], slots: list[_Slot]) -> list[_S
     ]
 
 
-def _band_note(target: Decimal, edge: Decimal) -> str:
-    """Name the band edge in an infeasibility message, but only when the band
-    is what makes the number binding -- with no band the edge *is* the
-    target, and printing the same figure twice reads like a mistake."""
-    if edge == target:
-        return ""
-    return f" (${edge:,.2f} at the edge of your rebalancing band)"
-
-
 def _asset_class_reach(
     accounts: list[Account],
     slots: list[_Slot],
@@ -349,48 +345,102 @@ def _asset_class_reach(
     return reach
 
 
-def _check_capacity_feasible(
-    dollar_targets: dict[str, Decimal],
+def _reachable_bounds(
     dollar_bounds: dict[str, tuple[Decimal, Decimal]],
     reach: dict[FundType, tuple[float, float]],
-) -> None:
-    """Fail fast with a specific, actionable message when the target simply
-    cannot be reached -- rather than surfacing scipy's generic 'infeasible'.
+) -> dict[str, tuple[Decimal, Decimal]]:
+    """The band as the *trigger* can actually use it: the user's own band,
+    widened to the nearest reachable point for any class whose band the
+    accounts cannot reach at all.
 
-    What has to be reachable is the nearest edge of the band, not the target
-    itself: a band the portfolio can satisfy is satisfiable even when the
-    exact target is not, which is one of the things a band is for.
+    A class pinned outside its band by what the accounts hold -- a
+    target-date fund's bond sleeve against a 0% bond target, say -- is
+    outside it forever, and a band that can never be satisfied is a band that
+    never says "leave it alone". Every later run would then drive all three
+    classes back to exact target and trade on any drift at all, which is the
+    opposite of what a band is for. Widening to the reachable edge restores
+    the quiet: the run that gets the class as close as it can go is the last
+    run that trades.
+
+    It cannot wave through a portfolio that could still do better. `reach` is
+    a relaxation, so its floor is a valid lower bound on every achievable
+    total: the widened edge sits at or below the true one, and the only
+    current value inside the widened region is one already sitting on that
+    bound. Where the band is reachable this is the band, unchanged.
     """
-    # Every ceiling before any floor. One account holding one fund breaches
-    # both at once -- "nothing you hold can be bonds" points at the missing
-    # piece, while "you are stuck holding this much U.S. stock" describes the
-    # same problem from the side the user can do least about.
+    widened = {}
     for fund_type in _TARGET_FUND_TYPES:
-        ceiling = reach[fund_type][1]
-        target = dollar_targets[_TARGET_KEYS[fund_type]]
-        lowest_allowed = dollar_bounds[_TARGET_KEYS[fund_type]][0]
-        if float(lowest_allowed) > ceiling + 0.01:
-            raise RebalanceError(
-                f"Target {ASSET_CLASS_LABELS[fund_type]} allocation is "
-                f"${target:,.2f}{_band_note(target, lowest_allowed)}, but no combination of "
-                f"the funds you hold can reach more than ${ceiling:,.2f} -- an account "
-                "holding a single fund has to put its whole value into it, and a "
-                "target-date fund's mix is fixed. Hold individual funds in a larger share "
-                "of your portfolio to make room."
-            )
+        key = _TARGET_KEYS[fund_type]
+        low, high = dollar_bounds[key]
+        floor, ceiling = reach[fund_type]
+        if float(high) < floor:
+            high = _to_decimal(floor)
+        elif float(low) > ceiling:
+            low = _to_decimal(ceiling)
+        widened[key] = (low, high)
+    return widened
 
-    for fund_type in _TARGET_FUND_TYPES:
-        floor = reach[fund_type][0]
-        target = dollar_targets[_TARGET_KEYS[fund_type]]
-        highest_allowed = dollar_bounds[_TARGET_KEYS[fund_type]][1]
-        if float(highest_allowed) < floor - 0.01:
-            raise RebalanceError(
-                f"Target {ASSET_CLASS_LABELS[fund_type]} allocation is ${target:,.2f}"
-                f"{_band_note(target, highest_allowed)}, but your accounts hold at least "
-                f"${floor:,.2f} of it and cannot hold less -- an account holding a single "
-                "fund has to put its whole value into that fund. Raise this target, or hold "
-                "that fund in a smaller share of your portfolio."
+
+def _capacity_warnings(
+    band_bounds: dict[str, tuple[Decimal, Decimal]],
+    reachable_bounds: dict[str, tuple[Decimal, Decimal]],
+    dollar_targets: dict[str, Decimal],
+    total_value: Decimal,
+) -> list[str]:
+    """Say so when the funds the user holds cannot reach a target, rather
+    than letting the plan quietly land somewhere else.
+
+    The test is `_reachable_bounds` having had to widen that class: the band
+    and what the accounts can hold do not overlap at all, so the class is
+    outside its band whatever else the portfolio does. Nothing weaker will
+    do. A class can also miss its band because the *other two* pinned the
+    dollars it needed, and the closest allocation overall is then a matter of
+    which class gives way -- true of the three together, but not a fact about
+    this one, which on its own could have reached its target. The comparison
+    table marks that class as outside its band and says no more; inventing a
+    reason for it here would be inventing a false one.
+
+    Every ceiling before any floor, as the fail-fast check this replaced
+    ordered them. One account holding one fund breaches both at once, and
+    "nothing you hold can be bonds" points at the missing piece, while "you
+    are stuck holding this much U.S. stock" describes the same problem from
+    the side the user can do least about.
+    """
+    warnings = []
+    for above in (False, True):
+        for fund_type in _TARGET_FUND_TYPES:
+            key = _TARGET_KEYS[fund_type]
+            # Decimal, and rounded to six places by `_to_decimal` on the way
+            # out of `_reachable_bounds` -- which is what keeps this test off
+            # float noise. `reach` is computed in floats, so a class sitting
+            # exactly on a reachable edge (a bond target set to a target-date
+            # fund's own sleeve, with no band) misses it by a billionth of a
+            # dollar and widens the bound by that much. Six places absorb it;
+            # comparing the floats would report a reachable target as out of
+            # reach.
+            edge = reachable_bounds[key][1 if above else 0]
+            if edge == band_bounds[key][1 if above else 0]:
+                continue  # this class can reach its band; nothing to report
+            label, target = ASSET_CLASS_LABELS[fund_type], dollar_targets[key]
+            share = edge / total_value * Decimal(100)
+            warnings.append(
+                f"Your {label} target of ${target:,.2f} is "
+                + (
+                    f"less than your accounts can hold: they hold at least ${edge:,.2f}, or "
+                    f"{share:.1f}% of your portfolio, and cannot hold less"
+                    if above
+                    else f"more than your accounts can hold: no combination of the funds you "
+                    f"hold reaches more than ${edge:,.2f}, or {share:.1f}% of your portfolio"
+                )
+                + " -- an account holding a single fund has to put its whole value into that "
+                "fund, and a target-date fund's mix is fixed. "
+                + (
+                    "Raise this target, or hold that fund in a smaller share of your portfolio."
+                    if above
+                    else "Hold individual funds in a larger share of your portfolio to make room."
+                )
             )
+    return warnings
 
 
 def _current_asset_class_dollars(accounts: list[Account]) -> dict[str, Decimal]:
@@ -477,7 +527,7 @@ def _abs_value_rows(
 def _place_cash(
     current: dict[str, Decimal],
     dollar_targets: dict[str, Decimal],
-    dollar_bounds: dict[str, tuple[Decimal, Decimal]],
+    band_bounds: dict[str, tuple[Decimal, Decimal]],
     reach: dict[FundType, tuple[float, float]],
     total_value: Decimal,
 ) -> dict[str, Decimal] | None:
@@ -516,7 +566,7 @@ def _place_cash(
 
     A_ub, b_ub = [], []
     for index, key in enumerate(keys):
-        low, high = dollar_bounds[key]
+        low, high = band_bounds[key]
         # The band violation is not an absolute value around one anchor but a
         # gap outside a range: v_i >= low - p_i and v_i >= p_i - high. The two
         # cannot both bind, so a single variable measures the violation in
@@ -559,7 +609,7 @@ def _place_cash(
 def _resolve_allocation(
     current: dict[str, Decimal],
     dollar_targets: dict[str, Decimal],
-    dollar_bounds: dict[str, tuple[Decimal, Decimal]],
+    band_bounds: dict[str, tuple[Decimal, Decimal]],
     reach: dict[FundType, tuple[float, float]],
     total_value: Decimal,
 ) -> dict[str, Decimal]:
@@ -598,6 +648,16 @@ def _resolve_allocation(
     far from target as every other. Staying near where the portfolio already
     is settles that without trading for nothing.
 
+    "As close as the accounts allow" is the whole answer in that case: an
+    unreachable target is approximated, never refused. `band_bounds` is only
+    ever read above, by the trigger -- past it the bounds are `reach` alone.
+    The band used to be the LP's bounds as well, which made it the arbiter of
+    feasibility: a target the funds could not reach was an error unless the
+    band happened to be wide enough to cover the gap, so widening a band
+    silently converted a refusal into a plan. `compute_trades` passes the
+    band `_reachable_bounds` has widened, so a class the accounts pin outside
+    its band still settles rather than re-triggering forever.
+
     Running this whole stage before the location phases is not an
     optimization, it is what keeps the band honest. Those phases are *stated*
     as "minimize this asset class in that kind of account", which only means
@@ -615,7 +675,7 @@ def _resolve_allocation(
     # The trigger, in Decimal and before any solve: every class inside its
     # band, and nothing uninvested. Both halves matter -- cash is always put
     # to work, so its presence alone is enough to reopen the question.
-    # `dollar_bounds` is the band already clamped to [0, total_value], so a
+    # `band_bounds` is the band already clamped to [0, total_value], so a
     # band wide enough to cover everything answers "inside" for everything,
     # which is what a band that wide means.
     # To the cent, because that is the grid money is entered and traded on.
@@ -626,7 +686,7 @@ def _resolve_allocation(
     # into _place_cash for no reason.
     uninvested = to_cents(total_value - sum(current.values(), Decimal(0)))
     if uninvested <= 0:
-        if all(dollar_bounds[key][0] <= current[key] <= dollar_bounds[key][1] for key in keys):
+        if all(band_bounds[key][0] <= current[key] <= band_bounds[key][1] for key in keys):
             # Say it exactly, with the numbers the portfolio already holds,
             # rather than handing an LP a solver's-worth of slack to spend
             # drifting a fraction of a cent. The location phases still run:
@@ -635,24 +695,28 @@ def _resolve_allocation(
     else:
         # Cash first, then the trigger -- the band is asked about the
         # portfolio the cash leaves behind, not the one holding it. Testing
-        # the cash itself instead would mean 24 cents swept up from a
+        # the cash itself instead would mean a few cents swept up from a
         # dividend rebalanced an entire portfolio that was comfortably
         # inside its band, which is the opposite of what a band is for.
-        after_cash = _place_cash(current, dollar_targets, dollar_bounds, reach, total_value)
+        after_cash = _place_cash(current, dollar_targets, band_bounds, reach, total_value)
         if after_cash is not None:
             return _reconcile_to_total(after_cash, total_value)
 
     # p_0..p_2 are the class totals; the rest track distance from current and
     # from target, by the same absolute-value linearization used elsewhere.
-    bounds = []
-    for fund_type in _TARGET_FUND_TYPES:
-        low, high = dollar_bounds[_TARGET_KEYS[fund_type]]
-        floor, ceiling = reach[fund_type]
-        lower, upper = max(float(low), floor), min(float(high), ceiling)
-        # _check_capacity_feasible has already rejected a genuine gap between
-        # the band and what the accounts can hold; it tolerates a cent of
-        # float slop, so only that much can survive to invert these.
-        bounds.append((min(lower, upper), upper))
+    #
+    # The bounds are what the accounts can hold, and nothing else: past the
+    # trigger the band has had its say, and the objective below aims at the
+    # target the band brackets anyway. Constraining these to the band as well
+    # is what used to turn a target the accounts cannot quite reach into a
+    # refusal to plan at all.
+    #
+    # This box always meets the equality below, so there is no infeasible
+    # case here to reject: every slot's three coefficients sum to 1, so each
+    # account's three smallest coefficients sum to at most 1 and its three
+    # largest to at least 1 -- which puts the sum of the floors at or below
+    # the portfolio and the sum of the ceilings at or above it.
+    bounds = [reach[fund_type] for fund_type in _TARGET_FUND_TYPES]
     bounds += [(0.0, None)] * 6
 
     A_eq = [_allocation_row(*((_CLASS_TOTAL, i, 1.0) for i in range(3)))]
@@ -929,12 +993,22 @@ def compute_trades(
 
     slots_by_account = _slot_indices_by_account(slots)
     reach = _asset_class_reach(accounts, slots, slots_by_account)
-    _check_capacity_feasible(dollar_targets, dollar_bounds, reach)
 
     # What each asset class should be worth is settled here, once, before any
     # objective about *where* to hold it gets a say -- see _resolve_allocation.
+    # The trigger reads the band widened to what the accounts can reach; the
+    # warnings below read the band as the user set it, which is the one that
+    # says whether the target was met.
+    reachable_bounds = _reachable_bounds(dollar_bounds, reach)
     resolved = _resolve_allocation(
-        _current_asset_class_dollars(accounts), dollar_targets, dollar_bounds, reach, total_value
+        _current_asset_class_dollars(accounts),
+        dollar_targets,
+        reachable_bounds,
+        reach,
+        total_value,
+    )
+    capacity_warnings = _capacity_warnings(
+        dollar_bounds, reachable_bounds, dollar_targets, total_value
     )
 
     # --- variable layout -------------------------------------------------
@@ -1077,7 +1151,9 @@ def compute_trades(
         taxable_bond_dollars += new_value * slot.holding.fraction_of(FundType.US_BOND)
     taxable_bond_dollars = to_cents(taxable_bond_dollars)
 
-    warnings = []
+    # Capacity first: it is about the target itself, where the two below are
+    # about the orders that chase it.
+    warnings = list(capacity_warnings)
     if taxable_bond_dollars > 0:
         warnings.append(
             f"${taxable_bond_dollars:,} in bonds will stay in taxable accounts -- either "

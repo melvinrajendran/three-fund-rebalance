@@ -2,13 +2,14 @@ from decimal import Decimal
 
 import pytest
 
-from three_fund_rebalance import __version__
+from three_fund_rebalance import __version__, cli
 from three_fund_rebalance.cli import parse_args, run
 from three_fund_rebalance.config import VT_FUND_PAGE_URL
 from three_fund_rebalance.formatting import prose_width
 from three_fund_rebalance.models import FundType
 from three_fund_rebalance.persistence import load_config
 from three_fund_rebalance.prompts import Prompter
+from three_fund_rebalance.rebalance import RebalanceError
 from three_fund_rebalance.report import DISCLAIMER
 
 
@@ -211,10 +212,12 @@ class TestEndToEndRun:
         assert exit_code == 0
         assert "nothing to rebalance" in prompter.full_output
 
-    def test_infeasible_target_reports_error_and_exits_nonzero(self, tmp_path):
+    def test_a_target_the_accounts_cannot_reach_is_reported_and_still_planned(self, tmp_path):
         """A target-date account is the only thing that can still pin an
         asset class out of reach: an account holding individual funds
-        declares all three, so it can always be traded to any mix."""
+        declares all three, so it can always be traded to any mix. This one
+        holds no bonds at all against a 50% bond target, which is not an
+        error -- the portfolio goes as close as it can and says why."""
         config_path = tmp_path / "config.json"
         responses = [
             "50", "y",  # a 50% bond target
@@ -226,14 +229,38 @@ class TestEndToEndRun:
             "All-Stock 2065", "10000",
             "100", "0", "y",  # ...that holds no bonds at all
             "0",
-            "n",
+            "n",  # no more accounts
+            "n",  # ...and don't save
         ]
         prompter = ScriptedPrompter(responses)
         exit_code = run(
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
         )
+        output = " ".join(prompter.full_output.split())
+        assert exit_code == 0
+        assert "Could not compute a rebalance" not in output
+        assert "bond target of $5,000.00 is more than your accounts can hold" in output
+        assert "as close to your target allocation as the funds you hold allow" in output
+
+    def test_a_rebalance_error_is_reported_and_exits_nonzero(self, monkeypatch, tmp_path):
+        """The flow itself can no longer produce one -- every account
+        declares a tradeable slot and nicknames are already unique -- but
+        `compute_trades` still raises for a portfolio no arrangement of the
+        funds can satisfy, and that has to reach the user as words."""
+        def _raise(*args, **kwargs):
+            raise RebalanceError("nothing works here")
+
+        monkeypatch.setattr(cli, "compute_trades", _raise)
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", "1", "Roth", "1", "VTI", "10000", "VXUS", "0", "BND", "0", "0",
+            "n",
+        ])
+        exit_code = run(
+            ["--config", str(tmp_path / "config.json"), "--vt-us-pct", "100"], prompter=prompter
+        )
         assert exit_code == 1
-        assert "Could not compute a rebalance" in prompter.full_output
+        assert "Could not compute a rebalance: nothing works here" in prompter.full_output
 
     def test_corrupt_config_file_falls_back_to_blank_with_warning(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -317,7 +344,7 @@ class TestLongMessagesWrap:
         assert "could not read your saved portfolio" in prompter.full_output
         assert self._unwrapped(prompter) == []
 
-    def test_an_infeasible_target_error_wraps(self, tmp_path):
+    def test_the_unreachable_target_warning_wraps(self, tmp_path):
         prompter = ScriptedPrompter([
             "50", "y",  # a bond target the one fund held cannot reach
             "0", "0",
@@ -325,13 +352,13 @@ class TestLongMessagesWrap:
             "All-Stock 2065", "10000",
             "100", "0", "y",
             "0",
-            "n",
+            "n", "n",
         ])
         exit_code = run(
             ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "100"], prompter=prompter
         )
-        assert exit_code == 1
-        assert "Could not compute a rebalance" in prompter.full_output
+        assert exit_code == 0
+        assert "more than your accounts can hold" in " ".join(prompter.full_output.split())
         assert self._unwrapped(prompter) == []
 
     def test_the_manual_vt_prompt_wraps_without_breaking_the_url(self, tmp_path):

@@ -155,19 +155,33 @@ class TestValidation:
         with pytest.raises(RebalanceError, match="no fund holdings declared"):
             compute_trades(accounts, target(100, 0, 0))
 
-    def test_infeasible_bond_target_raises_clear_error(self):
-        # No account declares a bond-capable slot anywhere.
+
+class TestUnreachableTargets:
+    """A target the funds cannot reach is approximated and disclosed, never
+    refused: the portfolio goes as close as the accounts allow and the
+    warning says what stopped it. Only a target-date fund, or a partial set
+    of slots like the ones here, can pin a class -- an account holding
+    individual funds declares all three.
+    """
+
+    def test_a_class_no_account_can_hold_is_warned_about_not_rejected(self):
+        # No account declares a bond-capable slot anywhere, so half this
+        # portfolio's target has nowhere to go.
         accounts = [
             account(
                 "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [holding(FundType.US_STOCK, "VTI", 10_000)],
             )
         ]
-        with pytest.raises(RebalanceError, match="bond"):
-            compute_trades(accounts, target(50, 0, 50))
+        result = compute_trades(accounts, target(50, 0, 50))
+        assert result.trades == [], "there is nothing to trade it into"
+        assert any(
+            "bond target of $5,000.00 is more than your accounts can hold" in warning
+            and "reaches more than $0.00, or 0.0% of your portfolio" in warning
+            for warning in result.warnings
+        ), result.warnings
 
-
-    def test_target_below_what_a_single_fund_account_forces_raises_clear_error(self):
+    def test_a_class_the_accounts_cannot_hold_less_of_is_warned_about(self):
         """A pinned account sets a floor as well as a ceiling: this fund is
         20% bonds and the account holds nothing else, so the portfolio cannot
         hold less than $2,000 of bonds however the rest is arranged."""
@@ -191,8 +205,80 @@ class TestValidation:
                 ],
             ),
         ]
-        with pytest.raises(RebalanceError, match="hold at least"):
-            compute_trades(accounts, target(70, 30, 0))
+        result = compute_trades(accounts, target(70, 30, 0))
+        assert any(
+            "bond target of $0.00 is less than your accounts can hold" in warning
+            and "they hold at least $2,000.00, or 10.0% of your portfolio" in warning
+            for warning in result.warnings
+        ), result.warnings
+
+    def test_the_rest_of_the_portfolio_is_still_rebalanced_around_it(self):
+        """The point of approximating rather than refusing: the two classes
+        that *can* be reached still are. The target-date account pins $2,000
+        of bonds against a 0% bond target, and U.S. stock still lands exactly
+        on its $10,000 target -- international absorbs the whole shortfall,
+        because it is the only class with anywhere left to give."""
+        target_date_alloc = TargetDateAllocation(
+            us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
+        )
+        accounts = [
+            account(
+                "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
+                [
+                    holding(
+                        FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc
+                    )
+                ],
+            ),
+            account(
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                [
+                    holding(FundType.US_STOCK, "VTI", 10_000),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                ],
+            ),
+        ]
+        trades = trades_by_key(compute_trades(accounts, target(50, 50, 0)))
+        assert trades[("Brokerage", "VTI")] == ("sell", Decimal("6000.00"))
+        assert trades[("Brokerage", "VXUS")] == ("buy", Decimal("6000.00"))
+
+    def test_a_target_sitting_exactly_on_a_reachable_edge_is_not_reported(self):
+        """`_asset_class_reach` works in floats, so a class pinned exactly on
+        its target -- this bond target is the target-date fund's own sleeve,
+        with no band at all -- can miss the edge by a billionth of a dollar.
+        Reporting that as a target out of reach would be reporting solver
+        noise."""
+        target_date_alloc = TargetDateAllocation(
+            us_stock_pct=Decimal("34.98"),
+            international_stock_pct=Decimal("32.73"),
+            bond_pct=Decimal("32.29"),
+        )
+        accounts = [
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(
+                    FundType.TARGET_DATE, "Target 2065", "958489.36", allocation=target_date_alloc
+                ),
+            ]),
+        ]
+        # The figures are chosen: the float floor lands 6e-11 above the
+        # Decimal target, which is exactly the kind of gap _capacity_warnings
+        # must not read as a target out of reach.
+        result = compute_trades(accounts, target("34.98", "32.73", "32.29"))
+        assert result.trades == []
+        assert result.warnings == []
+
+    def test_a_target_the_accounts_can_reach_warns_about_nothing(self):
+        accounts = [
+            account(
+                "Roth IRA", "Roth", TaxTreatment.TAX_FREE,
+                [
+                    holding(FundType.US_STOCK, "VTI", 10_000),
+                    holding(FundType.US_BOND, "BND", 0),
+                ],
+            )
+        ]
+        result = compute_trades(accounts, target(80, 0, 20))
+        assert result.warnings == []
 
 
 class TestBondsPreferTaxAdvantaged:
@@ -815,11 +901,13 @@ class TestDeclaredCapacity:
 
     def test_without_that_slot_the_same_target_is_out_of_reach(self):
         """The pair that earns its keep: drop the empty declaration and the
-        portfolio cannot be solved at all. Answering "no" to a fund not yet
-        bought used to do exactly this."""
+        bond target has nowhere to go, so the portfolio stays 100% stock and
+        is told why. Answering "no" to a fund not yet bought used to do
+        exactly this."""
         accounts = self._roth([holding(FundType.US_STOCK, "VTI", 10_000)])
-        with pytest.raises(RebalanceError, match="bond"):
-            compute_trades(accounts, target(80, 0, 20))
+        result = compute_trades(accounts, target(80, 0, 20))
+        assert result.trades == []
+        assert any("bond target" in warning for warning in result.warnings), result.warnings
 
 
 class TestRebalancingBand:
@@ -946,11 +1034,13 @@ class TestRebalancingBand:
         goal = target("58.8", "36.2", 5)
         assert compute_trades(accounts, goal, Decimal(5), Decimal(25)).trades == []
 
-    def test_a_band_can_make_an_otherwise_unreachable_target_reachable(self):
+    def test_the_band_does_not_decide_whether_a_target_can_be_solved(self):
         """An account holding a single fund pins that fund's share of the
         portfolio: $60,000 of a $100,000 portfolio is 60% U.S. stock and
-        cannot be less, so a 50% target is unreachable exactly -- but a
-        10-point band reaches it."""
+        cannot be less, so a 50% target is unreachable exactly. The band has
+        no say in that. It used to: the same portfolio was an error at a band
+        of 0 and a plan at a band of 10, which made widening a band a way to
+        talk the solver round rather than a statement of policy."""
         accounts = [
             account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
                 holding(FundType.US_STOCK, "VTI", 60_000),
@@ -960,19 +1050,47 @@ class TestRebalancingBand:
                 holding(FundType.US_BOND, "BND", 20_000),
             ]),
         ]
-        with pytest.raises(RebalanceError, match="cannot hold less"):
-            compute_trades(accounts, target(50, 25, 25), Decimal(0))
-        # No exception is the assertion: the band brings the floor into reach.
-        compute_trades(accounts, target(50, 25, 25), Decimal(10))
+        exact = compute_trades(accounts, target(50, 25, 25), Decimal(0))
+        banded = compute_trades(accounts, target(50, 25, 25), Decimal(10))
+        assert exact.trades == banded.trades == []
+        assert any("U.S. stock target" in warning for warning in exact.warnings), exact.warnings
 
-    def test_the_band_edge_is_named_when_it_is_what_makes_a_target_unreachable(self):
+    def test_a_class_pinned_outside_its_band_stops_re_triggering_once_settled(self):
+        """A band that can never be satisfied is a band that never says
+        "leave it alone", which would drive the whole portfolio back to exact
+        target on every run and trade on any drift at all. The trigger reads
+        the band widened to what the accounts can hold, so the run that gets
+        a pinned class as close as it can go is the last run that trades."""
+        target_date_alloc = TargetDateAllocation(
+            us_stock_pct=Decimal(80), international_stock_pct=Decimal(0), bond_pct=Decimal(20)
+        )
+        # The 401(k) pins $2,000 of bonds against a 0% bond target; the Roth
+        # holds $1,000 more, and those are the only ones that can be sold.
         accounts = [
-            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
-                holding(FundType.US_STOCK, "VTI", 100_000),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "VTI", 9_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.US_BOND, "BND", 1_000),
             ]),
         ]
-        with pytest.raises(RebalanceError, match="edge of your rebalancing band"):
-            compute_trades(accounts, target(50, 0, 50), Decimal(10))
+        first = trades_by_key(compute_trades(accounts, target(60, 40, 0), Decimal(5), Decimal(25)))
+        assert first[("Roth", "BND")] == ("sell", Decimal("1000.00"))
+        assert first[("Roth", "VTI")] == ("sell", Decimal("5000.00"))
+        assert first[("Roth", "VXUS")] == ("buy", Decimal("6000.00"))
+
+        # Exactly where those orders leave it.
+        settled = [
+            accounts[0],
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "VTI", 4_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 6_000),
+                holding(FundType.US_BOND, "BND", 0),
+            ]),
+        ]
+        assert compute_trades(settled, target(60, 40, 0), Decimal(5), Decimal(25)).trades == []
 
 
 class TestCentResidualDistribution:
@@ -1018,25 +1136,25 @@ class TestAllocationIsSettledBeforeLocation:
         # room to take it -- so phase 5 has no legal way to relocate, and
         # phase 4 has nowhere to move the Roth's bonds to.
         target_date = TargetDateAllocation(
-            us_stock_pct=Decimal("64.1"),
-            international_stock_pct=Decimal("34.34"),
-            bond_pct=Decimal("1.56"),
+            us_stock_pct=Decimal("63.2"),
+            international_stock_pct=Decimal("34.9"),
+            bond_pct=Decimal("1.9"),
         )
         return [
             account("Traditional 401(k)", "Trad 401k", TaxTreatment.TAX_DEFERRED, [
-                holding(FundType.TARGET_DATE, "Target 2070", "45850.88", target_date),
+                holding(FundType.TARGET_DATE, "Target 2065", "48086.90", target_date),
             ]),
             account("Roth 401(k)", "Roth 401k", TaxTreatment.TAX_FREE, [
-                holding(FundType.TARGET_DATE, "Target 2070", "10966.76", target_date),
+                holding(FundType.TARGET_DATE, "Target 2065", "16717.72", target_date),
             ]),
             account("Roth IRA", "Roth IRA", TaxTreatment.TAX_FREE, [
-                holding(FundType.US_STOCK, "VTSAX", "22549.52"),
-                holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "15491.08"),
-                holding(FundType.US_BOND, "VBTLX", "400.67"),
+                holding(FundType.US_STOCK, "VTSAX", "19381.57"),
+                holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "11298.33"),
+                holding(FundType.US_BOND, "VBTLX", "711.52"),
             ]),
             account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
-                holding(FundType.US_STOCK, "VTI", "6663.90"),
-                holding(FundType.INTERNATIONAL_STOCK, "VXUS", "4895.78"),
+                holding(FundType.US_STOCK, "VTI", "5986.78"),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", "4682.90"),
             ]),
         ]
 
@@ -1227,62 +1345,63 @@ class TestClassTotalsSumToThePortfolio:
     """
 
     TARGET_DATE_ALLOCATION = TargetDateAllocation(
-        us_stock_pct=Decimal("64.1"),
-        international_stock_pct=Decimal("34.34"),
-        bond_pct=Decimal("1.56"),
+        us_stock_pct=Decimal("63.2"),
+        international_stock_pct=Decimal("34.9"),
+        bond_pct=Decimal("1.9"),
     )
 
     def test_class_totals_that_do_not_round_to_the_portfolio_total_still_solve(self):
-        """Real portfolio, reported from use. At a 58.805/36.195/5 target on
-        $107,256.37 the U.S. and international totals each round down half a
-        micro-dollar at six decimal places, leaving the three summing to a
-        millionth of a dollar short of the portfolio -- far above the
-        solver's feasibility tolerance, so it rejected the whole thing."""
+        """At a 58.805/36.195/5 target on $98,464.07 the three class totals
+        round at six decimal places to a millionth of a dollar away from the
+        portfolio -- far above the solver's feasibility tolerance, so it
+        rejected the whole thing. The figures are chosen for that: an
+        ordinary-looking portfolio, and about one in seven of them lands
+        here."""
         accounts = [
             account(
                 "Traditional 401(k)",
-                "JPMC Traditional 401(k)",
+                "Employer 401(k)",
                 TaxTreatment.TAX_DEFERRED,
                 [
                     holding(
                         FundType.TARGET_DATE,
-                        "Target Date 2070 Fund",
-                        "45980.44",
+                        "Target Date 2065 Fund",
+                        "31908.17",
                         self.TARGET_DATE_ALLOCATION,
                     )
                 ],
             ),
             account(
                 "Roth 401(k)",
-                "JPMC Roth 401(k)",
+                "Employer Roth 401(k)",
                 TaxTreatment.TAX_FREE,
                 [
                     holding(
                         FundType.TARGET_DATE,
-                        "Target Date 2070 Fund",
-                        "10997.75",
+                        "Target Date 2065 Fund",
+                        "17288.58",
                         self.TARGET_DATE_ALLOCATION,
                     )
                 ],
             ),
             account(
                 "Roth IRA",
-                "Vanguard Roth IRA",
+                "Roth IRA",
                 TaxTreatment.TAX_FREE,
                 [
-                    holding(FundType.US_STOCK, "VTSAX", "22515.98"),
-                    holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "15744.14"),
-                    holding(FundType.US_BOND, "VBTLX", "400.28"),
+                    holding(FundType.US_STOCK, "VTSAX", "19066.07"),
+                    holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "16871.98"),
+                    holding(FundType.US_BOND, "VBTLX", "852.43"),
                 ],
             ),
             account(
                 "Brokerage",
-                "Vanguard Individual Brokerage Account",
+                "Brokerage",
                 TaxTreatment.TAXABLE,
                 [
-                    holding(FundType.US_STOCK, "VTI", "6649.83"),
-                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", "4967.71"),
-                    holding(FundType.CASH, "Cash", "0.24"),
+                    holding(FundType.US_STOCK, "VTI", "7840.20"),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", "4636.46"),
+                    holding(FundType.CASH, "Cash", "0.18"),
                 ],
             ),
         ]
@@ -1292,13 +1411,13 @@ class TestClassTotalsSumToThePortfolio:
             band_pct=Decimal(5),
             relative_band_pct=Decimal(25),
         )
-        # Bonds sit at 1.2% against a 5% target, so the band is tripped and
+        # Bonds sit at 1.8% against a 5% target, so the band is tripped and
         # the correction is real -- and it happens entirely inside the Roth
         # IRA, the only account with room to move.
         assert trades_by_key(result) == {
-            ("Vanguard Roth IRA", "VTIAX"): ("sell", Decimal("1456.96")),
-            ("Vanguard Roth IRA", "VTSAX"): ("sell", Decimal("2616.72")),
-            ("Vanguard Roth IRA", "VBTLX"): ("buy", Decimal("4073.68")),
+            ("Roth IRA", "VTIAX"): ("sell", Decimal("3039.22")),
+            ("Roth IRA", "VTSAX"): ("sell", Decimal("96.82")),
+            ("Roth IRA", "VBTLX"): ("buy", Decimal("3136.04")),
         }
 
     @pytest.mark.parametrize(
@@ -1323,16 +1442,16 @@ class TestClassTotalsSumToThePortfolio:
                 "Traditional 401(k)",
                 "401k",
                 TaxTreatment.TAX_DEFERRED,
-                [holding(FundType.TARGET_DATE, "TDF", "45980.44", allocation)],
+                [holding(FundType.TARGET_DATE, "TDF", "31908.17", allocation)],
             ),
             account(
                 "Roth IRA",
                 "Roth",
                 TaxTreatment.TAX_FREE,
                 [
-                    holding(FundType.US_STOCK, "VTSAX", "22515.98"),
-                    holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "15744.14"),
-                    holding(FundType.US_BOND, "VBTLX", "5000.28"),
+                    holding(FundType.US_STOCK, "VTSAX", "19066.07"),
+                    holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "16871.98"),
+                    holding(FundType.US_BOND, "VBTLX", "5852.43"),
                 ],
             ),
         ]
@@ -1349,14 +1468,14 @@ class TestClassTotalsSumToThePortfolio:
         [
             # In band and fully invested; cash enough to settle the band;
             # cash that cannot; and a plain rebalance. One per exit path.
-            {"us_stock": "63072.11", "international_stock": "38821.44", "bond": "5362.82"},
-            {"us_stock": "63000.00", "international_stock": "38800.00", "bond": "5000.00"},
-            {"us_stock": "70000.00", "international_stock": "30000.00", "bond": "5000.00"},
-            {"us_stock": "80000.00", "international_stock": "22256.37", "bond": "5000.00"},
+            {"us_stock": "58000.00", "international_stock": "35540.87", "bond": "4923.20"},
+            {"us_stock": "57000.00", "international_stock": "35000.00", "bond": "4900.00"},
+            {"us_stock": "70000.00", "international_stock": "25000.00", "bond": "3000.00"},
+            {"us_stock": "75000.00", "international_stock": "18540.87", "bond": "4923.20"},
         ],
     )
     def test_the_resolved_class_totals_sum_to_the_portfolio_total_exactly(self, current):
-        total_value = Decimal("107256.37")
+        total_value = Decimal("98464.07")
         target_allocation = target("58.805", "36.195", 5)
         resolved = _resolve_allocation(
             {key: Decimal(value) for key, value in current.items()},
@@ -1385,7 +1504,7 @@ class TestClassTotalsSumToThePortfolio:
                     holding(
                         FundType.TARGET_DATE,
                         "TDF",
-                        "4598044000",
+                        "4695425564",
                         self.TARGET_DATE_ALLOCATION,
                     )
                 ],
@@ -1395,9 +1514,9 @@ class TestClassTotalsSumToThePortfolio:
                 "Roth",
                 TaxTreatment.TAX_FREE,
                 [
-                    holding(FundType.US_STOCK, "VTSAX", "2251598000"),
-                    holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "1574414000"),
-                    holding(FundType.US_BOND, "VBTLX", "500028000"),
+                    holding(FundType.US_STOCK, "VTSAX", "1961973069"),
+                    holding(FundType.INTERNATIONAL_STOCK, "VTIAX", "1723938499"),
+                    holding(FundType.US_BOND, "VBTLX", "649467786"),
                 ],
             ),
         ]

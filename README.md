@@ -202,6 +202,11 @@ gains or losses this tool never sees.
 A plan with a restricted fund lineup -- a 401(k) with no international option,
 say -- may be given an order it cannot fill.
 
+**A target your funds cannot reach is approximated, not refused.** A
+target-date fund holds a fixed mix, so its bond sleeve still counts against a
+0% bond target and no order can sell it on its own. The plan gets as close as
+your accounts allow, and says which asset class fell short and by how much.
+
 **No costs.** Amounts exclude commissions, fees, bid-ask spreads and
 short-term redemption fees, and it does not know your broker's fund minimums
 or trading restrictions. Prices move between the values you type and the
