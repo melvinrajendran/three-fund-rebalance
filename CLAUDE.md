@@ -33,8 +33,8 @@ python -m three_fund_rebalance.cli --offline --vt-us-pct 62 --fresh --no-save --
 ```
 
 Always invoke it as a module, never through the `three-fund-rebalance` console
-script: that runs the working copy regardless of what else is on PATH, so a pipx
-or uv install of the same name can never be what you actually tested.
+script: that runs the working copy regardless of what else is on PATH, so a uv
+or pip install of the published package can never be what you actually tested.
 
 To see rendered output non-interactively, drive `run()` with a scripted prompter
 rather than piping stdin — see "Testing conventions" below. Piping to stdin is
@@ -832,9 +832,37 @@ them at once.
 
 Mechanically: prose wraps at 78 columns, hard; `--` for a dash, never an em dash, so
 the source matches what the CLI prints; asterisk emphasis for the band names on first
-use. Only an unbreakable line may run past 78: one inside a fence (a `pipx install`
-URL), or a row of the options table under Running, which cannot be wrapped without
-breaking the table.
+use. Only an unbreakable line may run past 78: a row of the options table under
+Running, which cannot be wrapped without breaking the table. Nothing inside a fence
+does any more -- the install commands are all short since they name a PyPI package
+rather than a git URL.
+
+## Releasing
+
+The package is on PyPI as `three-fund-rebalance`, and the README's install
+instructions name it rather than a git URL. A release is a tag:
+
+```bash
+# bump __version__ in three_fund_rebalance/__init__.py, commit it, then
+git tag v0.5.0 && git push origin v0.5.0
+```
+
+`.github/workflows/publish.yml` fires on `v*`, builds an sdist and a wheel, and
+uploads them through **PyPI Trusted Publishing** — PyPI mints a short-lived token
+from the workflow's OIDC identity, so there is no API token in the repo or in
+GitHub secrets. What makes that work lives outside the repo and is invisible from
+inside it: a publisher registered on PyPI for owner `melvinrajendran`, repository
+`three-fund-rebalance`, workflow `publish.yml`, environment `pypi`, plus a GitHub
+environment of that same name. All four have to match or the upload is rejected.
+
+The workflow's first step asserts the tag equals `__version__`, because the version
+otherwise lives in exactly one place (`__init__.py`, read by `pyproject.toml`'s
+`dynamic = ["version"]`) and the tag is a second place to get it wrong — a mismatch
+would publish a version nobody can `git checkout`.
+
+**A version, once uploaded, can never be replaced or reused**, even after a delete.
+A botched release is fixed by bumping to the next version and tagging again, never
+by re-cutting the same one.
 
 ## Testing conventions
 
