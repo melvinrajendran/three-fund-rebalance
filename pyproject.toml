@@ -77,3 +77,19 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# The suite mocks every network call, so it runs offline and CI depends on
+# that. tests/test_network_sources.py is the deliberate exception: it checks
+# the one thing mocks cannot, that the URLs the fetch chain is pointed at are
+# still URLs that answer. Those tests cannot be part of the default run --
+# they would fail on a plane and flake in CI -- so they carry the `network`
+# mark and are deselected here. Run them on purpose:
+#
+#     pytest -m network
+#
+# A -m on the command line overrides this one, because addopts are prepended
+# to the argument list rather than merged with it.
+addopts = "-m 'not network'"
+markers = [
+    "network: hits a live Vanguard source; deselected by default (run: pytest -m network)",
+]

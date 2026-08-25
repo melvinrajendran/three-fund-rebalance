@@ -33,7 +33,13 @@ def fake_get(payload=None, *, content=None, status_error=None, json_error=False)
 
         def json(self):
             if json_error:
-                raise ValueError("Expecting value: line 1 column 1 (char 0)")
+                # What Response.json() really raises on a non-JSON body. It
+                # subclasses both RequestException and ValueError, which is
+                # the whole point of the test below -- a bare ValueError
+                # here would let a mis-ordered except clause pass.
+                raise requests.exceptions.JSONDecodeError(
+                    "Expecting value", "<!doctype html>", 0
+                )
             return payload
 
     return lambda *a, **k: FakeResponse()
@@ -159,6 +165,53 @@ class TestExtractFromDiversification:
         with pytest.raises(VTFetchError, match="out of range"):
             _extract_us_pct_from_diversification(payload)
 
+    @pytest.mark.parametrize(
+        "label, payload",
+        [
+            (
+                "a name that is not a string",
+                {"country": {"currentAsOfDate": "", "item": [{"name": None}]}},
+            ),
+            (
+                "a country breakdown that is not a list",
+                {"country": {"currentAsOfDate": "", "item": 7}},
+            ),
+            (
+                "a NaN percentage",
+                # json.loads accepts a bare NaN literal, so this really can
+                # arrive over the wire. Decimal("NaN") then constructs fine
+                # and *signals* on comparison rather than comparing False.
+                json.loads(
+                    '{"country": {"currentAsOfDate": "",'
+                    ' "item": [{"name": "United States", "currYrPct": NaN}]}}'
+                ),
+            ),
+        ],
+    )
+    def test_malformed_payloads_raise_vt_fetch_error(self, label, payload):
+        # Nothing but VTFetchError may escape: fetch_vt_us_pct and
+        # resolve_vt_allocation catch that and nothing else, so any other
+        # exception crashes the whole run over an upstream response the user
+        # has no control over. Each of these three used to.
+        with pytest.raises(VTFetchError):
+            _extract_us_pct_from_diversification(payload)
+
+    def test_a_junk_entry_does_not_hide_a_later_united_states_entry(self):
+        # A malformed name is a reason to skip that entry, not to give up:
+        # the one we want may still be further down the list.
+        payload = {
+            "country": {
+                "currentAsOfDate": "",
+                "item": [
+                    {"name": None, "currYrPct": "1.0"},
+                    "not even an object",
+                    {"name": "United States   ", "currYrPct": "62.0"},
+                ],
+            }
+        }
+        us_pct, _ = _extract_us_pct_from_diversification(payload)
+        assert us_pct == Decimal("62.0")
+
     def test_malformed_as_of_falls_back_to_raw_string(self):
         payload = {
             "country": {
@@ -191,6 +244,18 @@ class TestFetchFromApi:
         monkeypatch.setattr(vt_allocation.requests, "get", fake_get(json_error=True))
         with pytest.raises(VTFetchError, match="not valid JSON"):
             fetch_from_api()
+
+    def test_a_non_json_body_is_not_reported_as_a_download_failure(self, monkeypatch):
+        # requests' JSONDecodeError subclasses RequestException as well as
+        # ValueError, so an except clause ordered after RequestException
+        # never fires and a 200 carrying HTML is misreported as a network
+        # failure. That is not cosmetic: it is what disguised a URL with no
+        # API behind it as an intermittent outage. The download succeeded --
+        # the message has to say the body was the problem.
+        monkeypatch.setattr(vt_allocation.requests, "get", fake_get(json_error=True))
+        with pytest.raises(VTFetchError) as excinfo:
+            fetch_from_api()
+        assert "Failed to download" not in str(excinfo.value)
 
 
 class TestFetchChain:
