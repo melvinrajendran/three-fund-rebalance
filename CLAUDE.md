@@ -13,6 +13,7 @@ pytest                                   # full suite (fast: ~0.4s, no network)
 pytest tests/test_rebalance.py           # one file
 pytest tests/test_cli.py::TestArgParsing::test_version_flag_prints_version_and_exits_cleanly
 pytest -k "target_date and not persistence"   # by expression
+pytest -m network                        # opt-in: hits the live VT sources
 pytest --cov=three_fund_rebalance --cov-report=term-missing
 
 ruff check three_fund_rebalance tests    # lint (CI runs exactly this)
@@ -515,6 +516,41 @@ ever a *suggested default* in the manual prompt.
 The fund page's HTML is deliberately not scraped — client-side rendered behind bot
 protection. Don't "improve" this by adding a scraper.
 
+**A dead source in this chain is silent, and one was.** The JSON endpoint's URL sat
+under `/investment-products/etfs/profile/`, where the SPA router answers *every* path —
+real or invented — with `200` and the HTML app shell. So the primary source failed on
+every run for every user, the chain quietly served the quarterly PDF, and the two claims
+that make the chain worth having ("monthly", "two independent sources") were both false
+while the tests stayed green. The URL is now `vmf/api/{ticker}/diversification`, which
+is what the page's own bundle calls. Two things follow. **A URL here is verified against
+a live response body, never a status code** — `curl -sI` cannot tell an endpoint from
+the router's catch-all. And **the whole suite mocks the network by design**, so nothing
+in CI can ever notice this. `tests/test_network_sources.py` is the cover for that blind
+spot -- `pytest -m network`, deselected by default -- and it is a manual act, run before
+a release or when the chain misbehaves. Five of its seven tests fail against the dead
+URL, including the one that asserts the chain reaches the *primary* source rather than
+merely returning something.
+
+**Order `requests.exceptions.JSONDecodeError` before `requests.RequestException`.** It
+subclasses *both* that and `ValueError`, so a decode clause placed after the network
+clause never fires, and a 200 carrying HTML gets reported as "Failed to download" — a
+parse failure described as an outage, which is most of why the above went unnoticed for
+as long as it did. `test_a_non_json_body_is_not_reported_as_a_download_failure` pins it,
+and the fake response in `tests/test_vt_allocation.py` raises requests' real subclass
+rather than a bare `ValueError` — with a bare one, the mis-ordered version passes.
+
+**`_extract_us_pct_from_diversification` is total: only `VTFetchError` leaves it.**
+`fetch_vt_us_pct` and `resolve_vt_allocation` catch that and nothing else, and `cli.run`
+has no broad handler, so anything else escaping crashes the run over an upstream
+response the user cannot influence — the same standard `persistence.config_from_dict`
+holds itself to, and it is structured the same way: named errors from
+`_parse_diversification`, then a catch-all that re-raises `VTFetchError` untouched. Three
+shapes used to escape — a non-string `name`, a non-list `item`, and a NaN percentage.
+The NaN is the one to remember: `json.loads` accepts a bare `NaN` literal, `Decimal` then
+builds a NaN happily, and comparing it *signals* `InvalidOperation` instead of returning
+`False`, so the range check itself was the thing that raised. Hence the `is_finite()`
+test in front of it.
+
 **The two URLs are for two different readers, and are not interchangeable.**
 `VT_FACT_SHEET_URL` is the PDF the *fetch chain* falls back to: a static file on a
 separate host, which is what makes it a good second source and a poor thing to hand a
@@ -889,9 +925,27 @@ The package is on PyPI as `three-fund-rebalance`, and the README's install
 instructions name it rather than a git URL. A release is a tag:
 
 ```bash
+pytest -m network   # the live sources, which CI never checks -- see below
 # bump __version__ in three_fund_rebalance/__init__.py, commit it, then
 git tag v0.5.0 && git push origin v0.5.0
 ```
+
+**`pytest -m network` is a release step, and this is the moment it exists for.**
+The default suite mocks every network call, so a rotted VT source is invisible to
+CI and to every contributor until a user runs the CLI and quietly gets the
+fallback. Cutting a release is the one scheduled moment when someone is paying
+attention, so it is where the check belongs. A failure here is not automatically
+a bug in this repo — Vanguard may just be down — but it must be understood
+before tagging, not after: the alternative is shipping a version whose primary
+source does not exist, which is exactly what 0.1 through 0.5 did.
+
+It is deliberately **not** a step in `publish.yml`. Two reasons, and the second
+is the one that decides it. A third-party outage would block a release for a
+reason that has nothing to do with the release. And the tests would run from a
+GitHub runner's datacenter IP, which is precisely the kind of client the
+interactive site's bot protection treats differently from a laptop — so a
+failure there would be ambiguous in the one place ambiguity is most expensive.
+Run it locally, where a failure means what it says.
 
 `.github/workflows/publish.yml` fires on `v*`, builds an sdist and a wheel, and
 uploads them through **PyPI Trusted Publishing** — PyPI mints a short-lived token
@@ -938,6 +992,17 @@ target by a different route, and silently.
 
 Every network call is monkeypatched, including failure paths. The suite must stay
 runnable offline — CI depends on it.
+
+`tests/test_network_sources.py` is the one deliberate exception, and it proves the rule
+rather than bending it: mocks cannot tell you a URL has stopped being a URL, which is how
+the VT endpoint stayed dead through several releases with every test green. Those tests
+carry `pytest.mark.network`, `addopts` in `pyproject.toml` deselects them, and CI runs
+bare `pytest` so it never sees them. Keep it that way — a live source in the default run
+would fail on a plane and flake in CI. What belongs there is only what a mock cannot
+answer: that each source still responds, that the live payload still has the shape the
+saved fixtures are written against, and that the two sources still agree to within a few
+points. Assertions are deliberately loose, because a failure should mean rot rather than
+a market that moved.
 
 ## Gotchas
 

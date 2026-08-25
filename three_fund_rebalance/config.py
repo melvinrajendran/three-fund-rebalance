@@ -64,9 +64,17 @@ DEFAULT_REBALANCE_RELATIVE_BAND_PCT = Decimal(25)
 # diversification table. It is refreshed monthly, so it leads the quarterly
 # fact sheet by up to three months (e.g. 62.0% as of 2026-07-31 versus 61.9%
 # as of 2026-06-30).
-VT_DIVERSIFICATION_API_URL = (
-    "https://investor.vanguard.com/investment-products/etfs/profile/api/vt/diversification"
-)
+#
+# The path is the one the profile page's own Angular bundle calls --
+# `vmf/api/${ticker}/diversification`, site-relative. It is emphatically not
+# under `/investment-products/etfs/profile/`: every path below that prefix is
+# the SPA router's catch-all, which answers *200 with the HTML app shell* for
+# anything at all, real endpoint or not. This URL was wrong in exactly that
+# way once, and the failure is silent by construction -- a 200 whose body
+# fails to decode as JSON, which the fetch chain reports as a source outage
+# and walks past. Verify a change here against a live response, not a status
+# code: `curl -sI` cannot tell the two apart.
+VT_DIVERSIFICATION_API_URL = "https://investor.vanguard.com/vmf/api/vt/diversification"
 
 # Fallback source: Vanguard's quarterly fact sheet PDF for VT (fund ID 3141),
 # a static file on a docs subdomain that sits outside the interactive site's
