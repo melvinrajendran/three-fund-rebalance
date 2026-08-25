@@ -246,6 +246,7 @@ pip install -e ".[dev]"
 
 python -m three_fund_rebalance.cli   # run your working copy
 pytest                               # test
+pytest -m network                    # plus the live VT sources
 ruff check three_fund_rebalance tests
 ```
 

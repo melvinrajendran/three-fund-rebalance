@@ -33,9 +33,11 @@ from decimal import Decimal, InvalidOperation
 import requests
 from pypdf import PdfReader
 
+from three_fund_rebalance import __version__
 from three_fund_rebalance.config import VT_DIVERSIFICATION_API_URL, VT_FACT_SHEET_URL
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
+_USER_AGENT = f"three-fund-rebalance/{__version__}"
 
 # Non-greedy, bounded lookahead: anchor on the table heading, then take the
 # first "United States <num>%" that follows within a reasonable distance.
@@ -103,7 +105,26 @@ def _format_as_of(raw: str) -> str:
 
 def _extract_us_pct_from_diversification(payload: dict) -> tuple[Decimal, str]:
     """Pure parsing step for the diversification API payload, split out from
-    the network call so it can be unit tested against a saved response."""
+    the network call so it can be unit tested against a saved response.
+
+    Total by construction: every way the payload can be malformed leaves
+    here as a VTFetchError. fetch_vt_us_pct and resolve_vt_allocation catch
+    that and nothing else, so anything else escaping this function takes the
+    whole run down over an upstream response the user cannot influence --
+    the same standard persistence.config_from_dict holds itself to for a
+    hand-editable config file.
+    """
+    try:
+        return _parse_diversification(payload)
+    except VTFetchError:
+        # Already names what was wrong with the payload -- don't bury that
+        # under the generic message below.
+        raise
+    except Exception as exc:
+        raise VTFetchError(f"Could not read the VT diversification response: {exc}") from exc
+
+
+def _parse_diversification(payload: dict) -> tuple[Decimal, str]:
     try:
         country = payload["country"]
         items = country["item"]
@@ -113,8 +134,21 @@ def _extract_us_pct_from_diversification(payload: dict) -> tuple[Decimal, str]:
             "-- the API shape may have changed."
         ) from exc
 
+    if not isinstance(items, list):
+        raise VTFetchError(
+            "VT diversification response's country breakdown was not a list "
+            "-- the API shape may have changed."
+        )
+
     for item in items:
-        if not isinstance(item, dict) or item.get("name", "").strip() != "United States":
+        if not isinstance(item, dict):
+            continue
+        # The live payload pads every name to a fixed width ("United States
+        # ...."), hence the strip. A name that isn't a string at all is a
+        # junk entry to skip, not grounds to fail: the entry we want may
+        # still be further down the list.
+        name = item.get("name")
+        if not isinstance(name, str) or name.strip() != "United States":
             continue
         raw_pct = item.get("currYrPct")
         if raw_pct in (None, ""):
@@ -123,7 +157,11 @@ def _extract_us_pct_from_diversification(payload: dict) -> tuple[Decimal, str]:
             us_pct = Decimal(str(raw_pct))
         except InvalidOperation as exc:
             raise VTFetchError(f"Could not parse US allocation percentage: {raw_pct!r}") from exc
-        if not (Decimal(0) < us_pct <= Decimal(100)):
+        # is_finite() first, and not merely for tidiness: json.loads accepts a
+        # bare NaN literal, Decimal("NaN") constructs happily, and comparing
+        # it *signals* InvalidOperation rather than returning False -- so the
+        # range check below is what would raise, uncaught, on a NaN.
+        if not us_pct.is_finite() or not (Decimal(0) < us_pct <= Decimal(100)):
             raise VTFetchError(f"Parsed US allocation percentage is out of range: {us_pct}")
         return us_pct, _format_as_of(country.get("currentAsOfDate", ""))
 
@@ -139,15 +177,28 @@ def fetch_from_api(
         response = requests.get(
             url,
             timeout=timeout,
-            headers={"User-Agent": "three-fund-rebalance/0.1", "Accept": "application/json"},
+            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
         )
         response.raise_for_status()
         payload = response.json()
+    except requests.exceptions.JSONDecodeError as exc:
+        # A 200 whose body isn't JSON: the HTML app shell, served either by
+        # bot protection or by the SPA router answering a path that has no
+        # API behind it (see VT_DIVERSIFICATION_API_URL). The download
+        # succeeded, so say so -- this is a parse failure, not an outage.
+        #
+        # This clause MUST precede RequestException. requests' own
+        # JSONDecodeError subclasses *both* it and ValueError, so ordered
+        # after, it never fires and every decode failure is misreported as
+        # "Failed to download" -- which is precisely how a URL that had
+        # stopped being an endpoint at all read as an intermittent network
+        # problem for as long as it did.
+        raise VTFetchError(f"VT diversification response was not valid JSON: {exc}") from exc
     except requests.RequestException as exc:
         raise VTFetchError(f"Failed to download VT diversification data from {url}: {exc}") from exc
     except ValueError as exc:
-        # Bot-protection responses come back as the HTML app shell, which
-        # fails to decode as JSON -- surface that as a normal fetch failure.
+        # Belt and braces: Response.json() raises requests' own subclass on
+        # every supported version, but a plain ValueError must not escape.
         raise VTFetchError(f"VT diversification response was not valid JSON: {exc}") from exc
 
     us_pct, as_of = _extract_us_pct_from_diversification(payload)
@@ -162,7 +213,7 @@ def fetch_from_fact_sheet(
     returns a partial/guessed result."""
     try:
         response = requests.get(
-            url, timeout=timeout, headers={"User-Agent": "three-fund-rebalance/0.1"}
+            url, timeout=timeout, headers={"User-Agent": _USER_AGENT}
         )
         response.raise_for_status()
     except requests.RequestException as exc:
