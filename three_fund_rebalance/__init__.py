@@ -1,4 +1,4 @@
 """three_fund_rebalance: compute trades to rebalance a three-fund portfolio
 across multiple accounts (tax-advantaged and taxable)."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

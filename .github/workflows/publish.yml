@@ -1,0 +1,34 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    # Trusted Publishing: PyPI mints a short-lived token from this workflow's
+    # OIDC identity, so there is no API token stored anywhere. The environment
+    # name is part of what PyPI matches on.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The version lives in exactly one place; a tag is a second place to get
+      # it wrong. Fail here rather than publish a version nobody can check out.
+      - name: Check the tag matches __version__
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(python -c "import three_fund_rebalance as m; print(m.__version__)")
+          if [ "$tag" != "$version" ]; then
+            echo "tag $tag does not match __version__ $version"
+            exit 1
+          fi
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -96,28 +96,31 @@ Consult a professional about your situation.
 
 ## Install
 
-Requires Python 3.10+. Install with [pipx](https://pipx.pypa.io/), which puts
-the CLI on your PATH in its own isolated environment:
+Requires [uv](https://docs.astral.sh/uv/), which puts the CLI on your PATH in
+its own isolated environment and fetches a suitable Python if your system one
+is older than 3.10:
 
 ```bash
-pipx install git+https://github.com/melvinrajendran/three-fund-rebalance
+uv tool install three-fund-rebalance
 ```
 
-No pipx? `brew install pipx && pipx ensurepath` on macOS, or `python3 -m pip
-install --user pipx && python3 -m pipx ensurepath` elsewhere.
-[uv](https://docs.astral.sh/uv/) does the same job and will fetch a suitable
-Python if your system one is too old:
+To update, and to remove it again:
 
 ```bash
-uv tool install git+https://github.com/melvinrajendran/three-fund-rebalance
+uv tool upgrade three-fund-rebalance
+uv tool uninstall three-fund-rebalance
 ```
 
-To update, reinstall with `--force`. The version doesn't change on every
-commit, so plain `pipx upgrade` sees the installed copy as current and skips
-the refetch:
+Or run it once without installing anything:
 
 ```bash
-pipx install --force git+https://github.com/melvinrajendran/three-fund-rebalance
+uvx three-fund-rebalance
+```
+
+No uv? `brew install uv` on macOS, or elsewhere:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 Your saved portfolio lives outside the installation at
