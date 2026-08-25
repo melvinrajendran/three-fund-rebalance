@@ -2,14 +2,42 @@
 name = "three-fund-rebalance"
 dynamic = ["version"]
 description = "Interactive CLI that computes trades to rebalance a three-fund portfolio across multiple accounts."
+readme = "README.md"
+authors = [{ name = "Melvin Rajendran", email = "melvin.rajendran@gmail.com" }]
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
+keywords = [
+    "portfolio",
+    "rebalancing",
+    "bogleheads",
+    "three-fund",
+    "investing",
+    "finance",
+]
+# No `License ::` classifier: `license` above is a PEP 639 expression, and
+# setuptools>=77 rejects a file that carries both.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
 dependencies = [
     "scipy>=1.11",
     "pypdf>=4.0",
     "requests>=2.31",
 ]
+
+[project.urls]
+Homepage = "https://github.com/melvinrajendran/three-fund-rebalance"
+Repository = "https://github.com/melvinrajendran/three-fund-rebalance"
+Issues = "https://github.com/melvinrajendran/three-fund-rebalance/issues"
 
 [project.scripts]
 three-fund-rebalance = "three_fund_rebalance.cli:main"
