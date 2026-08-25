@@ -172,10 +172,31 @@ class TestFormatReport:
         return account, target
 
     def test_no_trades_message(self):
-        account, target = self.make_account_and_target()
+        # On target to the dollar: the other line only appears when a class
+        # is outside its band, which with no band means off target at all.
+        _, target = self.make_account_and_target()
+        on_target = Account(
+            account_type="Roth IRA",
+            name="Roth",
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
+            holdings=[
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(500)),
+                Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(500)),
+            ],
+        )
         result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
-        text = format_report(inputs([account], target), result)
+        text = format_report(inputs([on_target], target), result)
         assert "already matches your target allocation" in text
+
+    def test_no_trades_message_when_a_class_cannot_reach_its_band(self):
+        """A portfolio with nothing to trade and a class still outside its
+        band is neither on target nor inside the band: what the accounts can
+        hold is what stopped it, and the report may not claim otherwise."""
+        account, target = self.make_account_and_target()  # all stock, half-bond target
+        result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
+        text = " ".join(format_report(inputs([account], target), result).split())
+        assert "as close to your target allocation as the funds you hold allow" in text
+        assert "already matches your target allocation" not in text
 
     def test_trades_grouped_under_account_header(self):
         account, target = self.make_account_and_target()
@@ -347,7 +368,25 @@ class TestReportRecap:
         assert "outside your band of" not in text
 
     def test_no_trades_message_names_the_band(self):
-        rendered = " ".join(self._report().split())
+        # Sitting on the target, so the band is what the line has to name.
+        in_band = [
+            Account(
+                account_type="Roth IRA",
+                name="My Roth",
+                tax_treatment=TaxTreatment.TAX_FREE,
+                holdings=[
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(5000)),
+                    Holding(
+                        fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(3000)
+                    ),
+                    Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(2000)),
+                ],
+            )
+        ]
+        result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
+        rendered = " ".join(
+            format_report(inputs(in_band, self._target(), "5"), result).split()
+        )
         assert "within your band of plus or minus 5.0 percentage points" in rendered
 
     def test_every_line_fits_the_page_width(self):
@@ -788,7 +827,7 @@ class TestFormatPercent:
 
     def test_keeps_significant_decimals(self):
         assert format_percent(Decimal("61.9")) == "61.9"
-        assert format_percent(Decimal("34.34")) == "34.34"
+        assert format_percent(Decimal("34.56")) == "34.56"
 
     def test_never_falls_back_to_exponent_notation(self):
         """Decimal("100").normalize() is 1E+2, which is not a percentage

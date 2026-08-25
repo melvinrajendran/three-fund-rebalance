@@ -520,7 +520,16 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
     lines.extend(_subheading("Orders to place"))
 
     if not result.trades:
-        if _band_is_on(inputs):
+        if not all(category.within_band for category in summary.categories):
+            # Nothing to trade and a class still outside its band: what the
+            # accounts can hold is what stopped it, so neither line below is
+            # true of this portfolio. The starred row above says which class,
+            # and a warning under the orders says why where it can.
+            lines.append(
+                wrap("Your portfolio is as close to your target allocation as the funds you "
+                     "hold allow -- no trades needed.")
+            )
+        elif _band_is_on(inputs):
             lines.append(
                 wrap(f"Every asset class is within {_describe_band_extent(inputs)} -- no trades "
                      "needed.")

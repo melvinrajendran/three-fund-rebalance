@@ -200,7 +200,7 @@ the per-account budget equality pins it outright.** No objective can reach insid
 That is what stops the solver from liquidating a taxable target-date fund to relocate
 the bond sleeve within it — which it used to do even for a portfolio already sitting
 on its target. It also means such an account sets a *floor* under every asset class,
-not just a ceiling, which is why `_check_capacity_feasible` checks both.
+not just a ceiling, which is why `_asset_class_reach` returns both.
 
 ### The solver (`rebalance.py`)
 
@@ -221,6 +221,19 @@ is under-determined: a class one point out of band can be brought back by sellin
 either of the other two at identical cost, so which one got sold came down to
 whichever vertex HiGHS happened to return.
 
+**The gate reads the band `_reachable_bounds` has widened**, not the band the user set.
+A class the accounts pin outside its band — a target-date fund's bond sleeve against a
+0% bond target — is outside it forever, and a band that can never be satisfied is a
+band that never says "leave it alone": every later run would drive all three classes
+back to exact target and trade on any drift at all, which is the opposite of what a
+band is for. Widening only ever happens where the band and the reach do not overlap,
+and it cannot wave through a portfolio that could still do better: `reach`'s floor is a
+valid lower bound on every achievable total, so the only current value inside the
+widened region is one already sitting on that bound. The run that gets a pinned class
+as close as it can go is the last run that trades. The *report* keeps reading the band
+as set — that is the user's policy, and the comparison table still marks the class
+outside it.
+
 **Cash is handled first, and the band is then asked about what it leaves behind** —
 not about the portfolio still holding it. That is `_place_cash`: a separate tiny LP
 constrained to `p >= current`, which is what "spend the cash and sell nothing" means,
@@ -236,9 +249,10 @@ target overall, while only one of those choices might get the laggard back insid
 band.
 
 **Testing the cash itself instead is a bug that shipped and was caught in real use.**
-Treating any uninvested balance as grounds to reopen the question meant 24 cents swept
-up from a dividend rebalanced a portfolio that was comfortably inside its band on all
-three classes — $4,053 of trades, taxable sales included, over a quarter.
+Treating any uninvested balance as grounds to reopen the question meant a few cents
+swept up from a dividend rebalanced a portfolio that was comfortably inside its band on
+all three classes — thousands of dollars of trades, taxable sales included, over a
+quarter of a percent of the portfolio.
 `test_cash_alone_does_not_trigger_a_rebalance` is the guard, and it is written on the
 deterministic path: the cash reaches the laggard through a free swap in a shelter, so
 the taxable account only ever buys.
@@ -251,14 +265,16 @@ share of the portfolio, and the closest reachable points are then a whole face r
 than a vertex. With U.S. stock pinned at 60% against a 50/25/25 target, every split of
 the remaining 40% is exactly as far from target as every other;
 `test_an_unreachable_target_settles_nearest_to_where_the_portfolio_sits` fails without
-(2), which is what earns it its keep.
+(2), which is what earns it its keep. Its bounds are `reach` and nothing else — the
+band has had its say at the gate, and constraining these to it as well is what used to
+turn a target the accounts cannot quite reach into a refusal to plan at all.
 
 **Skipping that stage and handing the band to the six phases below is a bug that was
 shipped once and caught in real use.** Given a portfolio inside its band but with
 international parked in a Roth and a taxable account too full to take any, phase 5
 could not relocate — so it satisfied itself by *selling* international and buying U.S.
 stock up to the band ceiling, while phase 4 liquidated a bond fund the portfolio was
-already 3.8 points underweight. Both objectives are stated as "minimize this asset
+already several points underweight. Both objectives are stated as "minimize this asset
 class in that kind of account", which only means "relocate it" while the class total
 is fixed. `TestAllocationIsSettledBeforeLocation` pins the whole shape.
 
@@ -358,33 +374,49 @@ surfaced as "sell $5,999.99" where the answer is $6,000.00. It is now a tenth of
 cent — clear of HiGHS's noise (verified from $100k to $8B) but below the cent grid
 every displayed amount rounds to, so it cannot produce a visible artifact.
 
-`_check_capacity_feasible` deliberately fails early with an actionable message rather
-than letting scipy surface a generic "infeasible". It bounds each asset class by the
-smallest and largest coefficient among an account's own slots, because the account
-must spend exactly its own total across them — so a single-fund account's floor and
-ceiling are the same number. All three ceilings are checked before any floor: one
-account holding one fund breaches both at once, and "nothing you hold can be bonds"
-points at the missing piece, while "you are stuck holding this much U.S. stock"
-describes the same problem from the side the user can do least about.
+**A target the accounts cannot reach is approximated and disclosed, never refused.**
+`_asset_class_reach` bounds each asset class by the smallest and largest coefficient
+among an account's own slots, because the account must spend exactly its own total
+across them — so a single-fund account's floor and ceiling are the same number. Those
+bounds are the allocation LP's bounds, and the objective aims at target from inside
+them; where the target is out of reach the answer is the nearest point, which is what
+`_resolve_allocation`'s second objective is for.
+
+There is no infeasible case there to reject. Every slot's three coefficients sum to 1,
+so each account's three smallest sum to at most 1 and its three largest to at least 1 —
+which puts the sum of the floors at or below the portfolio and the sum of the ceilings
+at or above it, and a box like that always meets the `sum = total_value` plane. (The
+main LP can still be infeasible: `reach` bounds each class on its own, so it is sound
+for rejecting the impossible, not for certifying the possible. That surfaces through
+`_solve`'s message.)
+
+**The band used to be those bounds as well, which made it the arbiter of feasibility.**
+`_check_capacity_feasible` raised when the band and the reach did not overlap, so an
+unreachable target was an error unless the band happened to be wide enough to cover the
+gap — widening a band silently converted a refusal into a plan, and a 0% bond target
+against a target-date fund's bond sleeve could not be planned at all, which is how it
+was found. Both it and `_band_note` are gone. The band is now the trigger and nothing
+else.
+
+`_capacity_warnings` says what the reach costs, and its test is `_reachable_bounds`
+having had to widen that class — the band and what the accounts can hold do not overlap
+at all, so the class is outside its band whatever else the portfolio does. Nothing
+weaker will do: a class can also miss its band because the *other two* pinned the
+dollars it needed, and which class gives way is then a property of the three together,
+not a fact about that one, which on its own could have reached its target. The report
+marks it outside its band and says no more, because the only available explanation
+would be a false one.
 
 Since an account holding individual funds declares all three, its coefficient for
 every class runs 0 to 1 — floor zero, ceiling its whole value — so **a target-date
-account is now the only thing that can breach either bound.** Both messages say so:
-"an account holding a single fund has to put its whole value into it, and a
-target-date fund's mix is fixed". The old ceiling message advised adding a matching
-fund to an account that holds individual funds, which is now something the user has
-already done by construction. Note the check itself is unchanged and still general —
-`compute_trades` is public and tests call it with partial slot sets — so the messages
-name the likely cause rather than asserting it.
-
-What has to be reachable is the nearest *band edge*, not the target — a band the
-portfolio can satisfy is satisfiable even when the exact target is not, which is one
-of the things a band is for. This is the band's **only** remaining role inside the LP:
-it is the feasibility envelope, not the destination, so a portfolio that trips the gate
-aims at target and is stopped short only by what the accounts can actually hold.
-`_band_note` names that edge in the message only when the band is what makes the number
-binding; with no band the edge is the target, and printing the same figure twice reads
-like a bug.
+account is now the only thing that can pin one.** Both messages say so: "an account
+holding a single fund has to put its whole value into that fund, and a target-date
+fund's mix is fixed". Ceilings are reported before floors: one account holding one fund
+breaches both at once, and "nothing you hold can be bonds" points at the missing piece,
+while "you are stuck holding this much U.S. stock" describes the same problem from the
+side the user can do least about. Note the bound itself is general — `compute_trades` is
+public and tests call it with partial slot sets — so the messages name the likely cause
+rather than asserting it.
 
 Trades below `MIN_TRADE_DOLLARS` are dropped as impractical.
 
@@ -399,9 +431,9 @@ one of them is a change to all five places.
 
 Neither alone works for all three classes. Five points is a quarter of a 20% bond
 sleeve and far too loose for a 5% one — five points below a 5% target is *zero bonds*,
-which is how a portfolio holding 1.2% against a 5% target was reported as in-band and
-left alone. Twenty-five percent of a 58.8% U.S. target is 14.7 points, far too loose
-for the class that dominates the portfolio. Taking the lesser gives small targets the
+which is how a portfolio holding barely a percent against a 5% target was reported as
+in-band and left alone. Twenty-five percent of a 58.8% U.S. target is 14.7 points, far
+too loose for the class that dominates the portfolio. Taking the lesser gives small targets the
 relative rule and large ones the absolute cap. The two cross at a 20% target, where
 both come to 5 points — which is why the convention is usually stated as "5 points at
 20% and above, 25% relative below": one rule, described twice.
@@ -464,6 +496,14 @@ for it. `report._describe_band` writes the three ranges out; `_describe_band_ext
 is the one place that decides between "your band of plus or minus X percentage points"
 (absolute only) and "its rebalancing band" (both rules), and the comparison table's
 footnote and the no-trades line both go through it.
+
+**The no-trades line has to survive being read against the starred rows above it.**
+Nothing to trade and a class still outside its band is neither "already matches your
+target allocation" nor "every asset class is within its band" — it is what the accounts
+can hold that stopped it, so a third line says so. It reads `within_band` off
+`summary.categories` rather than anything the solver reports: the summary describes the
+current holdings, which with no trades are also the final ones, so it is right by
+construction even where `_capacity_warnings` has nothing it can truthfully say.
 
 ### VT allocation (`vt_allocation.py`)
 
@@ -638,6 +678,12 @@ loses them is a regression:
   exactly are explained rather than looking like an arithmetic error. The count is
   spelled out through nine (`report._count`): the sentence opens on it, and "1 order
   smaller than $1.00 was left out" reads as a fragment rather than a sentence.
+- **A target the funds cannot reach is disclosed, not silently approximated.** The plan
+  goes as close as the accounts allow and `_capacity_warnings` says which class, what it
+  can reach, in dollars and as a share of the portfolio, and what the user could change.
+  It states the reachable bound rather than where the plan happened to land, so the
+  claim is true of the accounts and not merely of this solve — which is also why it
+  fires only where that bound is provably the obstacle; see the solver section.
 
 **Indentation is carried by `Prompter.indented()` and `INDENT_UNIT`, never spelled
 into a prompt string.** `_prompt_target_date_allocation` and `_prompt_new_holding` are
