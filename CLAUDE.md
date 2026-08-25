@@ -925,9 +925,27 @@ The package is on PyPI as `three-fund-rebalance`, and the README's install
 instructions name it rather than a git URL. A release is a tag:
 
 ```bash
+pytest -m network   # the live sources, which CI never checks -- see below
 # bump __version__ in three_fund_rebalance/__init__.py, commit it, then
 git tag v0.5.0 && git push origin v0.5.0
 ```
+
+**`pytest -m network` is a release step, and this is the moment it exists for.**
+The default suite mocks every network call, so a rotted VT source is invisible to
+CI and to every contributor until a user runs the CLI and quietly gets the
+fallback. Cutting a release is the one scheduled moment when someone is paying
+attention, so it is where the check belongs. A failure here is not automatically
+a bug in this repo — Vanguard may just be down — but it must be understood
+before tagging, not after: the alternative is shipping a version whose primary
+source does not exist, which is exactly what 0.1 through 0.5 did.
+
+It is deliberately **not** a step in `publish.yml`. Two reasons, and the second
+is the one that decides it. A third-party outage would block a release for a
+reason that has nothing to do with the release. And the tests would run from a
+GitHub runner's datacenter IP, which is precisely the kind of client the
+interactive site's bot protection treats differently from a laptop — so a
+failure there would be ambiguous in the one place ambiguity is most expensive.
+Run it locally, where a failure means what it says.
 
 `.github/workflows/publish.yml` fires on `v*`, builds an sdist and a wheel, and
 uploads them through **PyPI Trusted Publishing** — PyPI mints a short-lived token
