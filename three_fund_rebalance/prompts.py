@@ -345,10 +345,10 @@ def prompt_stock_bond_allocation(
 #: question below is left to name only its own unit.
 #:
 #: The vocabulary is the one the Bogleheads wiki and Larry Swedroe use, since
-#: that is where a reader who wants to check the defaults will end up:
+#: that is where a reader who wants to check what to answer will end up:
 #: "rebalancing band", "asset class", an asset class that "drifts from" its
 #: target. See config.DEFAULT_REBALANCE_BAND_PCT for the wiki link and for
-#: the 5/25 rule the defaults come from.
+#: the 5/25 rule, which this program records but never suggests.
 #:
 #: One sentence. Earlier drafts also named the rule, said what the relative
 #: band is for, and noted that zero turns the band off -- all true, and all
@@ -398,9 +398,10 @@ def prompt_relative_rebalance_band(
     figure is universal: 5 and 25 are a convention, not a recommendation this
     program is in a position to make.
 
-    The constants remain in `config.py` as the documented convention, and the
-    README still names the 5/25 rule -- what is gone is the program answering
-    the question on the user's behalf.
+    The constants remain in `config.py` as the documented convention -- what
+    is gone is the program answering the question on the user's behalf. The
+    README does not name the rule either: a specific pair of numbers offered
+    to a reader as the convention is the same suggestion by another route.
     """
     return prompt_percent(
         prompter,
