@@ -1,8 +1,15 @@
+from decimal import Decimal
+
 from three_fund_rebalance.formatting import (
+    describe_as_of,
     format_account_heading,
+    format_date,
+    format_percent_prose,
+    format_percents,
     format_result_header,
     format_section_header,
     format_subheading,
+    percent_places,
 )
 
 
@@ -68,3 +75,51 @@ class TestResultHeader:
         result_rule = format_result_header("Your rebalancing plan").split("\n")[0]
         step_rule = format_section_header(1, 3, "Target asset allocation").split("\n")[0]
         assert len(result_rule) == len(step_rule)
+
+
+class TestPercentPrecision:
+    def test_a_single_percentage_is_written_as_short_as_it_goes(self):
+        assert format_percent_prose(Decimal(20)) == "20"
+        assert format_percent_prose(Decimal("20.0")) == "20"
+        assert format_percent_prose(Decimal("62.5")) == "62.5"
+
+    def test_a_column_is_written_at_the_precision_its_widest_value_needs(self):
+        """The figures are read down the page, so they line up on the decimal
+        point rather than each being as short as it could be alone."""
+        assert format_percents([Decimal("62.5"), Decimal(38), Decimal(0)]) == [
+            "62.5",
+            "38.0",
+            "0.0",
+        ]
+
+    def test_a_column_of_whole_numbers_carries_no_decimal_point(self):
+        assert format_percents([Decimal(50), Decimal("30.0"), Decimal(20)]) == ["50", "30", "20"]
+
+    def test_a_drift_keeps_its_sign_so_the_direction_reads(self):
+        assert format_percents([Decimal("23.7"), Decimal(-10)], signed=True) == ["+23.7", "-10.0"]
+
+    def test_the_figure_behind_a_percentage_is_rounded_before_it_is_measured(self):
+        """These come out of non-terminating divisions, so the precision is
+        decided on what will be printed rather than on what was computed."""
+        third = Decimal(20_000) / Decimal(3) / Decimal(1000) * Decimal(100)  # 666.66...
+        assert percent_places([Decimal(20) - Decimal("0.0000001")]) == 0
+        assert format_percent_prose(third) == "666.7"
+
+    def test_half_even_is_kept_so_a_band_edge_prints_as_it_always_has(self):
+        assert format_percent_prose(Decimal("6.25")) == "6.2"
+
+
+class TestDates:
+    def test_every_spelling_of_a_date_comes_out_written_in_full(self):
+        assert format_date("2026-07-31") == "July 31, 2026"
+        assert format_date("2026-07-31T00:00:00") == "July 31, 2026"
+        assert format_date("July 31, 2026") == "July 31, 2026"
+
+    def test_a_note_in_place_of_a_date_is_passed_through(self):
+        assert format_date("manually entered") == "manually entered"
+        assert format_date("") == "unknown date"
+
+    def test_as_of_is_said_only_where_there_is_a_date_to_say_it_of(self):
+        """"as of manually entered" is not a sentence."""
+        assert describe_as_of("2026-07-31") == "as of July 31, 2026"
+        assert describe_as_of("manually entered") == "manually entered"

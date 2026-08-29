@@ -15,6 +15,7 @@ from three_fund_rebalance.prompts import (
     BAND_EXPLANATION,
     FUND_EXPLANATION,
     Prompter,
+    _prompt_target_date_allocation,
     prompt_accounts,
     prompt_choice,
     prompt_decimal,
@@ -87,6 +88,10 @@ class ScriptedPrompter(Prompter):
 
     def all_consumed(self) -> bool:
         return not self._responses
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.said)
 
 
 class TestPromptStr:
@@ -196,11 +201,11 @@ class TestRebalanceBandPrompts:
         assert "(%)" not in self._asked(prompt_rebalance_band)
 
     def test_the_explanation_states_the_policy_the_way_one_is_written(self):
-        """An IPS says a class "deviates from its target" by more than "the
-        lesser of" two bands. Carrying the semantics here is what lets each
+        """An IPS says a class "drifts from its target" by more than "the
+        smaller of" two bands. Carrying the semantics here is what lets each
         question below name only its own unit."""
-        assert "deviates from its target" in BAND_EXPLANATION
-        assert "the lesser of" in BAND_EXPLANATION
+        assert "drifts from its target" in BAND_EXPLANATION
+        assert "the smaller of" in BAND_EXPLANATION
 
     def test_the_explanation_is_one_sentence(self):
         """It exists to make the two questions answerable, not to teach the
@@ -273,7 +278,10 @@ class TestPromptStockBondTarget:
             print_func=lambda _: None,
         )
         prompt_stock_bond_allocation(p)
-        assert any("That leaves 20% bonds. Correct?" in text for text in asked)
+        assert any(
+            "That leaves a target bond allocation of 20%. Use this value?" in text
+            for text in asked
+        )
 
     def test_declining_the_derived_share_restarts_from_the_stock_question(self):
         """The number the user wants to change is the one they typed -- the
@@ -282,6 +290,34 @@ class TestPromptStockBondTarget:
         p = ScriptedPrompter(["80", "n", "70", "y"])
         stock, bond = prompt_stock_bond_allocation(p)
         assert (stock, bond) == (Decimal(70), Decimal(30))
+
+
+class TestTargetDateAllocationPrompt:
+    def _asked(self, answers):
+        asked = []
+        responses = iter(answers)
+        p = Prompter(
+            input_func=lambda text: asked.append(text) or next(responses),
+            print_func=lambda _: None,
+        )
+        return _prompt_target_date_allocation(p), asked
+
+    def test_the_derived_sleeve_is_confirmed_as_one_value(self):
+        allocation, asked = self._asked(["64", "34.3", "y"])
+        assert allocation.bond_pct == Decimal("1.7")
+        assert any("That leaves 1.7% bonds. Use this value?" in text for text in asked)
+
+    def test_a_sleeve_the_answers_have_already_settled_is_not_asked_for(self):
+        """100% U.S. stocks leaves nothing for either of the other two, so
+        both are stated together rather than one being asked for and the
+        other derived. The noun agrees with how many are shown."""
+        allocation, asked = self._asked(["100", "y"])
+        assert (allocation.international_stock_pct, allocation.bond_pct) == (Decimal(0), Decimal(0))
+        assert not any("International stocks" in text for text in asked)
+        assert any(
+            "That leaves 0% international stocks and 0% bonds. Use these values?" in text
+            for text in asked
+        )
 
 
 class TestResolveVtSplit:
@@ -297,6 +333,42 @@ class TestResolveVtSplit:
         result = resolve_vt_allocation(p)
         assert result.us_pct == Decimal("61.9")
         assert result.source == "vanguard_fact_sheet"
+
+    def test_the_fetched_split_is_named_in_full_with_its_date(self, monkeypatch):
+        """Both halves, so the reader does not do the subtraction, and the
+        fund spelled out the first time it is named."""
+        monkeypatch.setattr(
+            prompts_module,
+            "fetch_vt_us_pct",
+            lambda: VTAllocationResult(
+                us_pct=Decimal("62.0"), as_of="2026-07-31", source="vanguard_api"
+            ),
+        )
+        p = ScriptedPrompter(["y"])
+        resolve_vt_allocation(p)
+        said = " ".join(" ".join(p.said).split())
+        assert "Vanguard Total World Stock ETF's (VT) current" in said
+        assert "Found 62% U.S. stocks and 38% international stocks (as of July 31, 2026)." in said
+
+    def test_the_saved_split_is_offered_as_saved_rather_than_as_cached(self, monkeypatch):
+        def raise_fetch_error():
+            raise VTFetchError("network down")
+
+        monkeypatch.setattr(prompts_module, "fetch_vt_us_pct", raise_fetch_error)
+        p = ScriptedPrompter(["y"])
+        resolve_vt_allocation(p, cached_us_pct=Decimal(60), cached_as_of="2026-06-30")
+        said = " ".join(" ".join(p.said).split())
+        assert "Last saved: 60% U.S. stocks and 40% international stocks" in said
+        assert "(as of June 30, 2026)" in said
+        assert "cached" not in said
+
+    def test_the_fund_is_spelled_out_once_however_the_run_reaches_it(self, monkeypatch):
+        """--offline never prints the lookup line, so the manual prompt is
+        the first thing to name the fund -- and the only thing to expand it."""
+        p = ScriptedPrompter(["58"])
+        resolve_vt_allocation(p, offline=True)
+        said = " ".join(" ".join(p.said).split())
+        assert said.count("Vanguard Total World Stock ETF's (VT)") == 1
 
     def test_falls_back_to_cache_when_live_value_rejected(self, monkeypatch):
         monkeypatch.setattr(
@@ -344,10 +416,8 @@ class TestResolveVtSplit:
 
 
 class TestSavedAccountsLine:
-    def _said(self, names):
-        said = []
-        p = Prompter(input_func=lambda _: "n", print_func=said.append)
-        prompt_accounts(p, [
+    def _saved(self, names):
+        return [
             Account(
                 account_type="Roth IRA",
                 name=name,
@@ -355,17 +425,38 @@ class TestSavedAccountsLine:
                 holdings=[Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1))],
             )
             for name in names
-        ])
-        return " ".join(" ".join(said).split())
+        ]
 
-    def test_the_saved_accounts_line_is_a_sentence(self):
-        assert (
-            "You have 3 saved accounts: Alpha, Beta, and Gamma."
-            in self._said(["Alpha", "Beta", "Gamma"])
-        )
+    def _run(self, names):
+        # Kept, then a ticker and a value per asset class plus its cash. The
+        # two slots it has never held have no saved name to press Enter on.
+        per_account = ["y", "", "", "VXUS", "0", "BND", "0", ""]
+        p = ScriptedPrompter([*(per_account * len(names)), "n"])
+        prompt_accounts(p, self._saved(names))
+        assert p.all_consumed()
+        return p
+
+    def test_the_saved_accounts_are_listed_one_per_line(self):
+        """A vertical list, not a sentence: these are the headings the
+        questions below arrive in, so they are read down the page."""
+        output = self._run(["Alpha", "Beta", "Gamma"]).text
+        assert "You have 3 saved accounts:" in output
+        assert "\n  Alpha\n  Beta\n  Gamma\n" in output
 
     def test_a_single_saved_account_reads_in_the_singular(self):
-        assert "You have 1 saved account: Alpha." in self._said(["Alpha"])
+        assert "You have 1 saved account:" in self._run(["Alpha"]).text
+
+    def test_the_instruction_is_said_once_above_the_list(self):
+        """Not once per account: it is the same instruction for every account
+        in the list, so repeating it at the head of each one says nothing the
+        account above it has not already said."""
+        output = self._run(["Alpha", "Beta"]).text
+        assert output.count("press Enter to use its saved value") == 1
+
+    def test_every_kept_account_comes_back(self):
+        p = ScriptedPrompter([*(["y", "", "", "VXUS", "0", "BND", "0", ""] * 2), "n"])
+        accounts = prompt_accounts(p, self._saved(["Alpha", "Beta"]))
+        assert [a.name for a in accounts] == ["Alpha", "Beta"]
 
 
 class TestPromptAccounts:
@@ -474,6 +565,28 @@ class TestPromptAccounts:
         assert p.all_consumed()
         assert accounts[0].get_holding(FundType.US_BOND).name == "VBTLX"
         assert accounts[0].get_holding(FundType.US_BOND).value == Decimal(0)
+
+    def test_a_saved_account_holding_nothing_is_asked_as_though_it_were_new(self):
+        """An account that never committed to either kind of holding has no
+        slots to pre-fill, so it gets the same question a new account does."""
+        existing = Account(
+            account_type="Roth IRA",
+            name="My Roth",
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
+            holdings=[],
+        )
+        responses = [
+            "y",  # Keep account 'My Roth'?
+            "1",  # three individual funds, as a new account is asked
+            "VTI", "1000", "VXUS", "0", "BND", "0",
+            "0",  # cash
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [existing])
+        assert p.all_consumed()
+        assert accounts[0].name == "My Roth"
+        assert accounts[0].get_holding(FundType.US_STOCK).name == "VTI"
 
     def test_removing_existing_account(self):
         existing = Account(
@@ -613,7 +726,7 @@ class TestPromptAccounts:
         # The mix being replaced is shown, so the answer isn't from memory. It
         # is the *old* one: the question hasn't been answered yet at that point.
         assert any(
-            "Currently 60% U.S. stocks / 20% international stocks / 20% bonds" in line
+            "Currently 60% U.S. stocks, 20% international stocks, and 20% bonds" in line
             for line in p.said
         )
 

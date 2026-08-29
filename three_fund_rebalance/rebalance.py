@@ -113,7 +113,7 @@ from three_fund_rebalance.allocation import (
     target_dollar_bounds,
 )
 from three_fund_rebalance.config import MIN_TRADE_DOLLARS
-from three_fund_rebalance.formatting import ASSET_CLASS_LABELS
+from three_fund_rebalance.formatting import ASSET_CLASS_LABELS, format_percent_prose
 from three_fund_rebalance.models import (
     CENT,
     Account,
@@ -424,20 +424,21 @@ def _capacity_warnings(
             label, target = ASSET_CLASS_LABELS[fund_type], dollar_targets[key]
             share = edge / total_value * Decimal(100)
             warnings.append(
-                f"Your {label} target of ${target:,.2f} is "
+                f"The {label} target of ${target:,.2f} is "
                 + (
-                    f"less than your accounts can hold: they hold at least ${edge:,.2f}, or "
-                    f"{share:.1f}% of your portfolio, and cannot hold less"
+                    f"less than these accounts can hold: they hold at least ${edge:,.2f}, or "
+                    f"{format_percent_prose(share)}% of the portfolio, and cannot hold less"
                     if above
-                    else f"more than your accounts can hold: no combination of the funds you "
-                    f"hold reaches more than ${edge:,.2f}, or {share:.1f}% of your portfolio"
+                    else f"more than these accounts can hold: no combination of the funds "
+                    f"held reaches more than ${edge:,.2f}, or "
+                    f"{format_percent_prose(share)}% of the portfolio"
                 )
                 + " -- an account holding a single fund has to put its whole value into that "
                 "fund, and a target-date fund's mix is fixed. "
                 + (
-                    "Raise this target, or hold that fund in a smaller share of your portfolio."
+                    "Raise this target, or hold that fund in a smaller share of the portfolio."
                     if above
-                    else "Hold individual funds in a larger share of your portfolio to make room."
+                    else "Hold individual funds in a larger share of the portfolio to make room."
                 )
             )
     return warnings
@@ -587,7 +588,7 @@ def _place_cash(
     toward_target = [0.0] * 6 + [1.0] * 3
 
     solution = _solve(
-        inside_the_band, A_eq, b_eq, A_ub, b_ub, bounds, "putting your available cash to work"
+        inside_the_band, A_eq, b_eq, A_ub, b_ub, bounds, "putting the available cash to work"
     )
     if solution.fun > _OBJECTIVE_SLACK:
         return None  # cash alone cannot settle this; the caller rebalances.
@@ -601,7 +602,7 @@ def _place_cash(
         A_ub,
         b_ub,
         bounds,
-        "investing your available cash where it is furthest below target",
+        "investing the available cash where it is furthest below target",
     )
     return {key: _to_decimal(solution.x[index]) for index, key in enumerate(keys)}
 
@@ -733,7 +734,7 @@ def _resolve_allocation(
     toward_target = [0.0] * 6 + [1.0] * 3
 
     solution = _solve(
-        toward_target, A_eq, b_eq, A_ub, b_ub, bounds, "bringing your allocation back to target"
+        toward_target, A_eq, b_eq, A_ub, b_ub, bounds, "bringing the allocation back to target"
     )
     if solution.fun > _OBJECTIVE_SLACK:
         # The target itself is out of reach, so its closest reachable points
@@ -750,7 +751,7 @@ def _resolve_allocation(
             A_ub,
             b_ub,
             bounds,
-            "getting your allocation as close to target as the funds you hold allow",
+            "getting the allocation as close to target as the funds held allow",
         )
     return _reconcile_to_total(
         {key: _to_decimal(solution.x[index]) for index, key in enumerate(keys)}, total_value
@@ -848,7 +849,7 @@ def _solve(c, A_eq, b_eq, A_ub, b_ub, bounds, context: str):
         # in the vocabulary of the phase list -- this message is printed
         # straight to whoever is running the CLI.
         raise RebalanceError(
-            f"no arrangement of the funds you hold reaches your target while {context}. "
+            f"no arrangement of the funds held reaches the target while {context}. "
             f"(Solver detail: {result.message})"
         )
     return result
@@ -926,11 +927,11 @@ def _location_objectives(
                     for slot, is_taxable in zip(slots, taxable, strict=True)
                 ]
             ),
-            "moving bonds out of your taxable accounts",
+            "moving bonds out of taxable accounts",
         ),
         (
             over_movement([1.0 if is_taxable else 0.0 for is_taxable in taxable]),
-            "holding down the amount sold in your taxable accounts",
+            "holding down the amount sold in taxable accounts",
         ),
         (
             [0.0] * (2 * n) + [1.0] * k,
@@ -943,7 +944,7 @@ def _location_objectives(
                     for slot, is_tax_free in zip(slots, tax_free, strict=True)
                 ]
             ),
-            "holding your bonds in tax-deferred rather than tax-free accounts",
+            "holding bonds in tax-deferred rather than tax-free accounts",
         ),
         (
             over_slots(
@@ -958,7 +959,7 @@ def _location_objectives(
                     for slot, is_taxable in zip(slots, taxable, strict=True)
                 ]
             ),
-            "holding your international stock in taxable accounts",
+            "holding international stock in taxable accounts",
         ),
         (
             over_movement([1.0] * n),
@@ -1157,8 +1158,8 @@ def compute_trades(
     if taxable_bond_dollars > 0:
         warnings.append(
             f"${taxable_bond_dollars:,} in bonds will stay in taxable accounts -- either "
-            "your tax-advantaged accounts are full, or those bonds sit inside a "
-            "target-date fund that can only be held whole. It is the least your accounts "
+            "the tax-advantaged accounts are full, or those bonds sit inside a "
+            "target-date fund that can only be held whole. It is the least these accounts "
             "allow."
         )
     warnings.extend(_wash_sale_warnings(accounts, trades))

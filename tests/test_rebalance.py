@@ -125,7 +125,7 @@ class TestSolverFailure:
             )
         ]
         with pytest.raises(
-            RebalanceError, match="no arrangement of the funds you hold reaches your target"
+            RebalanceError, match="no arrangement of the funds held reaches the target"
         ):
             compute_trades(accounts, target(100, 0, 0))
 
@@ -176,8 +176,8 @@ class TestUnreachableTargets:
         result = compute_trades(accounts, target(50, 0, 50))
         assert result.trades == [], "there is nothing to trade it into"
         assert any(
-            "bond target of $5,000.00 is more than your accounts can hold" in warning
-            and "reaches more than $0.00, or 0.0% of your portfolio" in warning
+            "bond target of $5,000.00 is more than these accounts can hold" in warning
+            and "reaches more than $0.00, or 0% of the portfolio" in warning
             for warning in result.warnings
         ), result.warnings
 
@@ -207,8 +207,8 @@ class TestUnreachableTargets:
         ]
         result = compute_trades(accounts, target(70, 30, 0))
         assert any(
-            "bond target of $0.00 is less than your accounts can hold" in warning
-            and "they hold at least $2,000.00, or 10.0% of your portfolio" in warning
+            "bond target of $0.00 is less than these accounts can hold" in warning
+            and "they hold at least $2,000.00, or 10% of the portfolio" in warning
             for warning in result.warnings
         ), result.warnings
 

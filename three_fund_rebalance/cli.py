@@ -62,7 +62,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="three-fund-rebalance",
         description=(
             "Calculate the trades needed to rebalance a three-fund portfolio "
-            "across your accounts."
+            "across every account it is held in."
         ),
         # Someone who runs --help and stops there never sees a report, so the
         # report's own disclaimer goes here -- the same string, not a second
@@ -82,7 +82,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Portfolio file to read and write (default: %(default)s)",
     )
     parser.add_argument(
-        "--fresh", action="store_true", help="Ignore your saved portfolio and start blank"
+        "--fresh", action="store_true", help="Ignore the saved portfolio and start blank"
     )
     parser.add_argument(
         "--no-save", action="store_true", help="Don't offer to save this run's answers"
@@ -90,7 +90,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--offline",
         action="store_true",
-        help="Skip the live VT fetch; use the cached or a manually entered value instead",
+        help="Skip the live VT fetch; use the saved or a manually entered value instead",
     )
     parser.add_argument(
         "--vt-us-pct",
@@ -112,25 +112,25 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
             config = load_config(args.config)
         except PersistenceError as exc:
             prompter.say_wrapped(
-                f"Warning: could not read your saved portfolio at {args.config} "
+                f"Warning: could not read the saved portfolio at {args.config} "
                 f"({exc}). Starting from scratch."
             )
 
     prompter.say("\n" + format_section_header(1, _INPUT_STEPS, "Target asset allocation"))
 
-    prompter.say("\n" + format_subheading("Stock and bond allocation"))
+    prompter.say("\n" + format_subheading("Stock and Bond Allocation"))
     stock_pct, bond_pct = prompt_stock_bond_allocation(
         prompter, default_stock=config.stock_pct
     )
 
-    prompter.say("\n" + format_subheading("U.S. and international stock allocation"))
+    prompter.say("\n" + format_subheading("U.S. and International Stock Allocation"))
     if args.vt_us_pct is not None:
         vt_result = VTAllocationResult(
             us_pct=args.vt_us_pct, as_of="manually specified via --vt-us-pct", source="manual"
         )
-        prompter.say(
-            f"Using {format_percent(vt_result.us_pct)}% U.S. / "
-            f"{format_percent(Decimal(100) - vt_result.us_pct)}% international, "
+        prompter.say_wrapped(
+            f"Using {format_percent(vt_result.us_pct)}% U.S. stocks and "
+            f"{format_percent(Decimal(100) - vt_result.us_pct)}% international stocks, "
             f"as given by --vt-us-pct."
         )
     else:
@@ -148,7 +148,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
     # it is in the report, the README and the saved config.
     prompter.say("\n" + format_section_header(2, _INPUT_STEPS, "When to rebalance"))
 
-    prompter.say("\n" + format_subheading("Rebalancing band"))
+    prompter.say("\n" + format_subheading("Rebalancing Bands"))
     # The one place the flow explains before it asks; see BAND_EXPLANATION.
     prompter.say_wrapped(BAND_EXPLANATION)
     prompter.say("")
@@ -186,7 +186,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
     # report: it is a separate action, and the report now closes with a
     # disclaimer that should not read as part of the prompt.
     if not args.no_save:
-        prompter.say("\n" + format_subheading("Save your portfolio"))
+        prompter.say("\n" + format_subheading("Save Portfolio"))
         if prompt_yes_no(prompter, "Save this portfolio for next time?", default=True):
             updated = PersistedConfig(
                 stock_pct=stock_pct,

@@ -162,7 +162,7 @@ class TestEndToEndRun:
         assert saved.rebalance_relative_band_pct == Decimal(25)
         # A 20% bond target and a 25% relative rule meet at 5 points, so the
         # bond band is 15.0% to 25.0%; U.S. stock at 60% gets the same 5.
-        assert "Bonds                 15.0% to 25.0%" in prompter.full_output
+        assert "Bonds                 15% to 25%" in prompter.full_output
 
     def test_already_balanced_reports_no_trades_needed(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -180,7 +180,7 @@ class TestEndToEndRun:
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
         )
         assert exit_code == 0
-        assert "already matches your target allocation" in prompter.full_output
+        assert "already matches the target allocation" in prompter.full_output
         assert not config_path.exists()
 
     def test_no_save_flag_skips_save_prompt_and_file(self, tmp_path):
@@ -239,8 +239,8 @@ class TestEndToEndRun:
         output = " ".join(prompter.full_output.split())
         assert exit_code == 0
         assert "Could not compute a rebalance" not in output
-        assert "bond target of $5,000.00 is more than your accounts can hold" in output
-        assert "as close to your target allocation as the funds you hold allow" in output
+        assert "bond target of $5,000.00 is more than these accounts can hold" in output
+        assert "as close to the target allocation as the funds held allow" in output
 
     def test_a_rebalance_error_is_reported_and_exits_nonzero(self, monkeypatch, tmp_path):
         """The flow itself can no longer produce one -- every account
@@ -276,7 +276,7 @@ class TestEndToEndRun:
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
         )
         assert exit_code == 0
-        assert "could not read your saved portfolio" in prompter.full_output.lower()
+        assert "could not read the saved portfolio" in prompter.full_output.lower()
 
     def test_wrongly_shaped_config_falls_back_to_blank_with_warning(self, tmp_path):
         """Valid JSON, wrong shape -- the file parses, so the failure happens
@@ -288,7 +288,7 @@ class TestEndToEndRun:
             ["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter
         )
         assert exit_code == 0
-        assert "could not read your saved portfolio" in prompter.full_output.lower()
+        assert "could not read the saved portfolio" in prompter.full_output.lower()
 
     def test_fresh_flag_ignores_existing_config(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -341,7 +341,7 @@ class TestLongMessagesWrap:
         config_path.write_text("{not valid json")
         prompter = ScriptedPrompter(["100", "y", "0", "0", "n"])
         run(["--config", str(config_path), "--vt-us-pct", "100"], prompter=prompter)
-        assert "could not read your saved portfolio" in prompter.full_output
+        assert "could not read the saved portfolio" in prompter.full_output
         assert self._unwrapped(prompter) == []
 
     def test_the_unreachable_target_warning_wraps(self, tmp_path):
@@ -358,7 +358,7 @@ class TestLongMessagesWrap:
             ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "100"], prompter=prompter
         )
         assert exit_code == 0
-        assert "more than your accounts can hold" in " ".join(prompter.full_output.split())
+        assert "more than these accounts can hold" in " ".join(prompter.full_output.split())
         assert self._unwrapped(prompter) == []
 
     def test_the_manual_vt_prompt_wraps_without_breaking_the_url(self, tmp_path):

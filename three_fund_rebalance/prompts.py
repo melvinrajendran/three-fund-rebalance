@@ -15,11 +15,14 @@ from three_fund_rebalance.config import (
     ACCOUNT_TYPE_CHOICES,
     FALLBACK_VT_US_PCT,
     MAX_ACCOUNT_NAME_LENGTH,
+    VT_FUND_NAME,
     VT_FUND_PAGE_URL,
+    VT_TICKER,
     infer_tax_treatment,
 )
 from three_fund_rebalance.formatting import (
     INDENT_UNIT,
+    describe_as_of,
     format_account_heading,
     format_percent,
     format_subheading,
@@ -282,6 +285,27 @@ def prompt_choice(
 # --------------------------------------------------------------------------
 
 
+def _and_list(items: list[str]) -> str:
+    """Join names as running prose rather than as a bare comma list, so the
+    line they sit in is a sentence: "A", "A and B", "A, B, and C".
+
+    Two items take no comma -- the serial comma separates three or more, and
+    "A, and B" reads as a stray one.
+    """
+    if len(items) <= 2:
+        return " and ".join(items)
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+def _confirm_remainder(prompter: Prompter, statement: str, count: int) -> bool:
+    """Confirm the share (or shares) a set of percentages summing to 100 has
+    left over. One question shape for every such set, and the noun agrees
+    with how many values are actually being shown -- one derived share is a
+    value, two are values."""
+    noun = "this value" if count == 1 else "these values"
+    return prompt_yes_no(prompter, f"{statement} Use {noun}?", default=True)
+
+
 def prompt_stock_bond_allocation(
     prompter: Prompter, *, default_stock: Decimal | None = None
 ) -> tuple[Decimal, Decimal]:
@@ -298,9 +322,8 @@ def prompt_stock_bond_allocation(
     while True:
         stock = prompt_percent(prompter, "Target stock allocation", default=default_stock)
         bond = Decimal(100) - stock
-        if prompt_yes_no(
-            prompter, f"That leaves {format_percent(bond)}% bonds. Correct?", default=True
-        ):
+        statement = f"That leaves a target bond allocation of {format_percent(bond)}%."
+        if _confirm_remainder(prompter, statement, 1):
             return stock, bond
 
 
@@ -311,30 +334,30 @@ def prompt_stock_bond_allocation(
 
 #: Said once, above both halves of the band. The flow otherwise asks bare
 #: questions and lets the report explain, but the relative half is the one
-#: question nobody can answer from its own label: "or by more than this share
-#: of its own target" reads as an alternative when it is in fact a second,
+#: question nobody can answer from its own label: "or by more than this
+#: percentage of its target" reads as an alternative when it is a second,
 #: tighter limit, and the reason it exists -- that five points of drift is the
 #: whole of a 5% bond sleeve -- is invisible from the prompt.
 #:
 #: Worded the way a rebalancing policy is written in an investment policy
-#: statement -- a class "deviates from its target" by more than "the lesser
+#: statement -- a class "drifts from its target" by more than "the smaller
 #: of" two bands -- so the sentence carries all the semantics and each
 #: question below is left to name only its own unit.
 #:
 #: The vocabulary is the one the Bogleheads wiki and Larry Swedroe use, since
 #: that is where a reader who wants to check the defaults will end up:
-#: "rebalancing band", "asset class", a portfolio that "deviates" from its
+#: "rebalancing band", "asset class", an asset class that "drifts from" its
 #: target. See config.DEFAULT_REBALANCE_BAND_PCT for the wiki link and for
 #: the 5/25 rule the defaults come from.
 #:
 #: One sentence. Earlier drafts also named the rule, said what the relative
 #: band is for, and noted that zero turns the band off -- all true, and all
 #: cut back to the thing a reader needs in order to answer the two questions
-#: below it. The report's own "Rebalancing band" section is where the band's
+#: below it. The report's own "Rebalancing Bands" section is where the band's
 #: effect is visible, and it writes out the resulting ranges per class.
 BAND_EXPLANATION = (
-    "Rebalance an asset class when it deviates from its target by more than the lesser "
-    "of these two bands."
+    "Rebalance the portfolio when an asset class drifts from its target by more than "
+    "the smaller of these two bands."
 )
 
 
@@ -381,7 +404,7 @@ def prompt_relative_rebalance_band(
     """
     return prompt_percent(
         prompter,
-        "Relative band, as a share of the asset class's target",
+        "Relative band, as a percentage of the asset class's target",
         default=default,
     )
 
@@ -389,6 +412,17 @@ def prompt_relative_rebalance_band(
 # --------------------------------------------------------------------------
 # VT's U.S. allocation, with the live-fetch -> cache -> manual fallback chain
 # --------------------------------------------------------------------------
+
+
+def _describe_us_ex_us(us_pct: Decimal, as_of: str) -> str:
+    """The pair of figures a VT lookup answers with, and where they are from.
+    Both halves are named in full -- the split is the thing being confirmed,
+    and "62% U.S." alone leaves the reader to do the subtraction."""
+    return (
+        f"{format_percent(us_pct)}% U.S. stocks and "
+        f"{format_percent(Decimal(100) - us_pct)}% international stocks "
+        f"({describe_as_of(as_of)})."
+    )
 
 
 def resolve_vt_allocation(
@@ -402,38 +436,51 @@ def resolve_vt_allocation(
     # the first one to speak sits flush under the subheading cli.py printed.
     spoken = False
 
+    # The fund is spelled out the first time it is named and abbreviated
+    # after. Which line does the naming depends on which source answers --
+    # --offline skips straight past the lookup to the manual prompt -- so it
+    # is decided here rather than baked into one message.
+    named = False
+
+    def vt_possessive() -> str:
+        nonlocal named
+        if named:
+            return f"{VT_TICKER}'s"
+        named = True
+        return f"{VT_FUND_NAME}'s ({VT_TICKER})"
+
     if not offline:
-        prompter.say("Looking up VT's current U.S./international stock allocation from Vanguard...")
+        prompter.say_wrapped(
+            f"Looking up {vt_possessive()} current U.S. and international stock allocation..."
+        )
         spoken = True
         try:
             result = fetch_vt_us_pct()
-            prompter.say(
-                f"  Found: {format_percent(result.us_pct)}% U.S. / "
-                f"{format_percent(result.ex_us_pct)}% international "
-                f"(as of {result.as_of})."
-            )
-            if prompt_yes_no(prompter, "  Use this value?", default=True):
-                return result
+            with prompter.indented():
+                prompter.say_wrapped(f"Found {_describe_us_ex_us(result.us_pct, result.as_of)}")
+                if prompt_yes_no(prompter, "Use these values?", default=True):
+                    return result
         except VTFetchError as exc:
             with prompter.indented():
                 prompter.say_wrapped(f"Couldn't look up the current allocation ({exc}).")
 
     if cached_us_pct is not None:
         lead = "\n" if spoken else ""
-        prompter.say(
-            f"{lead}Last known value: {format_percent(cached_us_pct)}% U.S. "
-            f"(as of {cached_as_of or 'unknown date'})."
+        prompter.say_wrapped(
+            f"{lead}Last saved: "
+            f"{_describe_us_ex_us(cached_us_pct, cached_as_of or 'unknown date')}"
         )
         spoken = True
-        if prompt_yes_no(prompter, "  Use this cached value?", default=True):
-            return VTAllocationResult(
-                us_pct=cached_us_pct, as_of=cached_as_of or "unknown date", source="cache"
-            )
+        with prompter.indented():
+            if prompt_yes_no(prompter, "Use these values?", default=True):
+                return VTAllocationResult(
+                    us_pct=cached_us_pct, as_of=cached_as_of or "unknown date", source="cache"
+                )
 
     suggested_default = cached_us_pct if cached_us_pct is not None else FALLBACK_VT_US_PCT
     lead = "\n" if spoken else ""
     prompter.say_wrapped(
-        f"{lead}Please enter VT's U.S. stock allocation % manually "
+        f"{lead}Please enter {vt_possessive()} U.S. stock allocation % manually "
         f"(see {VT_FUND_PAGE_URL})."
     )
     manual = prompt_percent(prompter, "U.S. stock", default=suggested_default)
@@ -447,11 +494,16 @@ def resolve_vt_allocation(
 
 def _describe_target_date_allocation(allocation: TargetDateAllocation) -> str:
     """The fund's own mix on one line. Shown before offering to change it, so
-    the user is deciding against the numbers rather than from memory."""
-    return (
-        f"{format_percent(allocation.us_stock_pct)}% U.S. stocks / "
-        f"{format_percent(allocation.international_stock_pct)}% international stocks / "
-        f"{format_percent(allocation.bond_pct)}% bonds"
+    the user is deciding against the numbers rather than from memory.
+
+    A sentence, not a slash-separated fragment: it sits inside one, and the
+    flow names a set of asset classes the same way wherever it does it."""
+    return _and_list(
+        [
+            f"{format_percent(allocation.us_stock_pct)}% U.S. stocks",
+            f"{format_percent(allocation.international_stock_pct)}% international stocks",
+            f"{format_percent(allocation.bond_pct)}% bonds",
+        ]
     )
 
 
@@ -474,14 +526,24 @@ def _prompt_target_date_allocation(prompter: Prompter) -> TargetDateAllocation:
     with prompter.indented():
         while True:
             us_stock = prompt_percent(prompter, "U.S. stocks")
-            international = prompt_percent(prompter, "International stocks")
-            if us_stock + international > Decimal(100):
-                prompter.say("Those add up to more than 100%. Let's try again.")
-                continue
+            # A question the answer above has already settled is not worth
+            # asking: 100% U.S. stocks leaves nothing for either of the other
+            # two sleeves, so both are derived and stated together.
+            settled = us_stock == Decimal(100)
+            if settled:
+                international = Decimal(0)
+            else:
+                international = prompt_percent(prompter, "International stocks")
+                if us_stock + international > Decimal(100):
+                    prompter.say("Those add up to more than 100%. Let's try again.")
+                    continue
             bond = Decimal(100) - us_stock - international
-            if prompt_yes_no(
-                prompter, f"That leaves {format_percent(bond)}% bonds. Correct?", default=True
-            ):
+            derived = [(international, "international stocks")] if settled else []
+            derived.append((bond, "bonds"))
+            statement = "That leaves " + _and_list(
+                [f"{format_percent(value)}% {label}" for value, label in derived]
+            )
+            if _confirm_remainder(prompter, f"{statement}.", len(derived)):
                 return TargetDateAllocation(
                     us_stock_pct=us_stock, international_stock_pct=international, bond_pct=bond
                 )
@@ -633,7 +695,6 @@ def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Ac
     slot was opened with. Making it editable is also why no slot ever needs
     removing: a lineup change is a rename.
     """
-    prompter.say("Press Enter to keep the last value.")
     by_type = {h.fund_type: h for h in existing.holdings if h.fund_type != FundType.CASH}
     if by_type:
         new_holdings = [
@@ -657,26 +718,30 @@ def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Ac
     )
 
 
-def _and_list(items: list[str]) -> str:
-    """Join names as running prose rather than as a bare comma list, so the
-    line they sit in is a sentence: "A", "A and B", "A, B, and C".
-
-    Two items take no comma -- the serial comma separates three or more, and
-    "A, and B" reads as a stray one.
-    """
-    if len(items) <= 2:
-        return " and ".join(items)
-    return f"{', '.join(items[:-1])}, and {items[-1]}"
-
-
 def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> list[Account]:
+    """Every saved account, offered back with its own answers pre-filled,
+    then however many new ones are added.
+
+    The saved accounts are listed vertically first: those names are the
+    headings the questions below arrive in, and a list read down the page is
+    what lets someone match one to the next. How to answer them is said once,
+    above the list, because it is the same instruction for every account in
+    it -- repeating "press Enter to keep the last value" at the head of each
+    one said nothing the previous account had not already said.
+    """
     accounts: list[Account] = []
     if existing_accounts:
-        prompter.say("\n" + format_subheading("Saved accounts"))
+        prompter.say("\n" + format_subheading("Saved Accounts"))
         noun = "account" if len(existing_accounts) == 1 else "accounts"
+        # A vertical list, not a sentence: these are the headings the
+        # questions below arrive in, and a list read down the page is what
+        # lets someone match one to the next.
+        prompter.say_wrapped(f"You have {len(existing_accounts)} saved {noun}:")
+        with prompter.indented():
+            for existing in existing_accounts:
+                prompter.say(existing.name)
         prompter.say_wrapped(
-            f"You have {len(existing_accounts)} saved {noun}: "
-            f"{_and_list([a.name for a in existing_accounts])}."
+            "\nFor each, press Enter to use its saved value, or type a new value."
         )
         for existing in existing_accounts:
             prompter.say("")
@@ -689,8 +754,8 @@ def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> lis
                         prompter.say(f"Removed '{existing.name}'.")
 
     # Both states of this heading are imperative: it is a section that asks
-    # you to do something, unlike "Saved accounts" above, which names a list.
-    heading = "Add more accounts" if existing_accounts else "Add your accounts"
+    # you to do something, unlike "Saved Accounts" above, which names a list.
+    heading = "Add More Accounts" if existing_accounts else "Add Accounts"
     prompter.say("\n" + format_subheading(heading))
     is_first_prompt = True
     listed_account_types = False
