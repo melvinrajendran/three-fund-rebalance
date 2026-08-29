@@ -258,6 +258,28 @@ class TargetAllocation:
 
 
 @dataclass(frozen=True)
+class Note:
+    """One thing the reader has to be told about a plan, in two parts.
+
+    `label` is a two- or three-word name for the finding, printed leading the
+    summary, so a reader can decide from the first words whether the
+    paragraph is theirs -- the tail of the report is where several unrelated
+    findings pile up, and undifferentiated paragraphs are what made it a wall.
+    `detail` is the part that explains or qualifies rather than reports;
+    `report` sets it one level deeper, where it reads as optional. A note that
+    says everything it has to say in one sentence leaves it None.
+
+    Structured rather than pre-formatted prose because `report` owns how these
+    land on the page, exactly as it owns every other line: the solver's job is
+    to say what happened, not how wide it wraps or how far it indents.
+    """
+
+    label: str
+    summary: str
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
 class Trade:
     """One buy or sell of a specific fund within a specific
     account. `amount` is always positive; `action` says which direction."""
@@ -277,7 +299,7 @@ class Trade:
 
 @dataclass
 class RebalanceResult:
-    """What a rebalance came out to: the orders, anything the user has to be
+    """What a rebalance came out to: the orders, the notes the user has to be
     told about them, and two figures the report discloses.
 
     Lives here rather than in `rebalance` so that `report` -- whose whole job
@@ -287,7 +309,11 @@ class RebalanceResult:
     """
 
     trades: list[Trade]
-    warnings: list[str]
+    # Named for what the report prints them under. They are not all warnings
+    # -- a taxable sale is a disclosure and a dropped order is a footnote --
+    # and one heading over the lot is what lets the reader take them as a
+    # single, countable list rather than a run of loose paragraphs.
+    notes: list[Note]
     # Total $ of bonds left in taxable accounts in the final solution (0 if
     # tax-advantaged capacity was sufficient to hold the whole bond target).
     taxable_bond_dollars: Decimal
