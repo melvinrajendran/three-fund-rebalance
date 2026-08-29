@@ -119,6 +119,7 @@ from three_fund_rebalance.models import (
     Account,
     FundType,
     Holding,
+    Note,
     RebalanceResult,
     TargetAllocation,
     TaxTreatment,
@@ -161,7 +162,7 @@ class RebalanceError(Exception):
     allocation.
 
     Not raised for a target the funds cannot reach: that is approximated as
-    closely as the accounts allow and reported through `_capacity_warnings`.
+    closely as the accounts allow and reported through `_capacity_notes`.
     """
 
 
@@ -381,12 +382,11 @@ def _reachable_bounds(
     return widened
 
 
-def _capacity_warnings(
+def _capacity_notes(
     band_bounds: dict[str, tuple[Decimal, Decimal]],
     reachable_bounds: dict[str, tuple[Decimal, Decimal]],
-    dollar_targets: dict[str, Decimal],
     total_value: Decimal,
-) -> list[str]:
+) -> list[Note]:
     """Say so when the funds the user holds cannot reach a target, rather
     than letting the plan quietly land somewhere else.
 
@@ -406,7 +406,7 @@ def _capacity_warnings(
     are stuck holding this much U.S. stock" describes the same problem from
     the side the user can do least about.
     """
-    warnings = []
+    notes = []
     for above in (False, True):
         for fund_type in _TARGET_FUND_TYPES:
             key = _TARGET_KEYS[fund_type]
@@ -421,27 +421,37 @@ def _capacity_warnings(
             edge = reachable_bounds[key][1 if above else 0]
             if edge == band_bounds[key][1 if above else 0]:
                 continue  # this class can reach its band; nothing to report
-            label, target = ASSET_CLASS_LABELS[fund_type], dollar_targets[key]
+            label = ASSET_CLASS_LABELS[fund_type]
             share = edge / total_value * Decimal(100)
-            warnings.append(
-                f"The {label} target of ${target:,.2f} is "
-                + (
-                    f"less than these accounts can hold: they hold at least ${edge:,.2f}, or "
-                    f"{format_percent_prose(share)}% of the portfolio, and cannot hold less"
-                    if above
-                    else f"more than these accounts can hold: no combination of the funds "
-                    f"held reaches more than ${edge:,.2f}, or "
-                    f"{format_percent_prose(share)}% of the portfolio"
-                )
-                + " -- an account holding a single fund has to put its whole value into that "
-                "fund, and a target-date fund's mix is fixed. "
-                + (
-                    "Raise this target, or hold that fund in a smaller share of the portfolio."
-                    if above
-                    else "Hold individual funds in a larger share of the portfolio to make room."
+            # Three lines at the longest label and a ten-figure amount, which
+            # is what fits without an indented second paragraph. Two things
+            # went to get there. The target's own dollar figure, because the
+            # comparison table two sections up prints it for every class in
+            # dollars *and* as a share, so restating it here was a
+            # restatement -- the label says this is about the target, and the
+            # verb says which side of it the accounts are stuck on. And the
+            # sentence explaining *why* they are stuck, which the remedy below
+            # now names obliquely: a reader who does not already know that a
+            # target-date fund's mix cannot be split will not learn it here.
+            #
+            # The label leads the note on screen, so it is capitalized the way
+            # a sentence would be -- sliced rather than .capitalize()d, which
+            # would lower-case the rest and leave "U.s. stock".
+            notes.append(
+                Note(
+                    label=f"{label[0].upper()}{label[1:]} target out of reach",
+                    summary=(
+                        f"These accounts cannot hold less than ${edge:,.2f}, or "
+                        f"{format_percent_prose(share)}% of the portfolio. Raise the target, "
+                        "or hold less in single-fund and target-date accounts."
+                        if above
+                        else f"No combination of the funds held reaches more than "
+                        f"${edge:,.2f}, or {format_percent_prose(share)}% of the portfolio. "
+                        "Hold individual funds in a larger share of the portfolio."
+                    ),
                 )
             )
-    return warnings
+    return notes
 
 
 def _current_asset_class_dollars(accounts: list[Account]) -> dict[str, Decimal]:
@@ -855,11 +865,20 @@ def _solve(c, A_eq, b_eq, A_ub, b_ub, bounds, context: str):
     return result
 
 
-def _wash_sale_warnings(accounts: list[Account], trades: list[Trade]) -> list[str]:
+def _wash_sale_notes(accounts: list[Account], trades: list[Trade]) -> list[Note]:
     """Flag any fund this plan sells in a taxable account while buying it in
     a sheltered one. Phase 3 avoids this arrangement whenever an equally good
     alternative exists, so anything left here was unavoidable given what the
-    accounts hold -- which is exactly when the user needs to be told."""
+    accounts hold -- which is exactly when the user needs to be told.
+
+    States the finding and stops. This used to recite section 1091's window
+    and standard and the IRS's position on a replacement bought inside an
+    IRA, which ran to seven lines -- the single largest block below the
+    orders, and statute rather than anything about this portfolio. The
+    conditional "may be" stays: the tool cannot see cost basis, trade dates,
+    or purchases made anywhere else in the window, so it flags the shape and
+    never asserts the conclusion.
+    """
     treatment = {a.name: a.tax_treatment for a in accounts}
     sold_in_taxable: dict[str, Decimal] = {}
     bought_in_shelter: dict[str, Decimal] = {}
@@ -876,19 +895,18 @@ def _wash_sale_warnings(accounts: list[Account], trades: list[Trade]) -> list[st
         elif not taxable and trade.action == "buy":
             bought_in_shelter[key] = bought_in_shelter.get(key, Decimal(0)) + trade.amount
 
-    warnings = []
+    notes = []
     for key in sorted(set(sold_in_taxable) & set(bought_in_shelter)):
         overlap = min(sold_in_taxable[key], bought_in_shelter[key])
-        warnings.append(
-            f"This plan sells {display[key]} in a taxable account and buys it in a "
-            f"tax-advantaged one, overlapping by ${overlap:,}. If any of those shares are "
-            "at a loss this may be a wash sale: section 1091 disallows the loss when "
-            "substantially identical shares are bought within 30 days either side of the "
-            "sale, in any account you control -- and the IRS has taken the position "
-            "(Rev. Rul. 2008-5) that a replacement bought inside an IRA forfeits the basis "
-            "adjustment that would otherwise offset it."
+        notes.append(
+            Note(
+                label="Wash sale",
+                summary=f"This plan sells {display[key]} in a taxable account and buys it "
+                f"in a tax-advantaged one, overlapping by ${overlap:,}. If any of those "
+                "shares are at a loss this may be a wash sale.",
+            )
         )
-    return warnings
+    return notes
 
 
 def _location_objectives(
@@ -982,7 +1000,7 @@ def compute_trades(
 
     total_value = sum((a.total_value() for a in accounts), Decimal(0))
     if total_value <= 0:
-        return RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
+        return RebalanceResult(trades=[], notes=[], taxable_bond_dollars=Decimal(0))
 
     dollar_targets = target_dollar_amounts(target, total_value)
     dollar_bounds = target_dollar_bounds(target, total_value, band_pct, relative_band_pct)
@@ -998,7 +1016,7 @@ def compute_trades(
     # What each asset class should be worth is settled here, once, before any
     # objective about *where* to hold it gets a say -- see _resolve_allocation.
     # The trigger reads the band widened to what the accounts can reach; the
-    # warnings below read the band as the user set it, which is the one that
+    # notes below read the band as the user set it, which is the one that
     # says whether the target was met.
     reachable_bounds = _reachable_bounds(dollar_bounds, reach)
     resolved = _resolve_allocation(
@@ -1008,9 +1026,7 @@ def compute_trades(
         reach,
         total_value,
     )
-    capacity_warnings = _capacity_warnings(
-        dollar_bounds, reachable_bounds, dollar_targets, total_value
-    )
+    capacity_notes = _capacity_notes(dollar_bounds, reachable_bounds, total_value)
 
     # --- variable layout -------------------------------------------------
     # [ x_0..x_n-1 | y_0..y_n-1 | w_0..w_k-1 ]
@@ -1154,19 +1170,24 @@ def compute_trades(
 
     # Capacity first: it is about the target itself, where the two below are
     # about the orders that chase it.
-    warnings = list(capacity_warnings)
+    notes = list(capacity_notes)
     if taxable_bond_dollars > 0:
-        warnings.append(
-            f"${taxable_bond_dollars:,} in bonds will stay in taxable accounts -- either "
-            "the tax-advantaged accounts are full, or those bonds sit inside a "
-            "target-date fund that can only be held whole. It is the least these accounts "
-            "allow."
+        notes.append(
+            Note(
+                label="Bonds in taxable",
+                # The bound sits with the figure it qualifies, and the cause
+                # follows -- three lines with no second paragraph. "That can
+                # only be held whole" is what the sentence could spare.
+                summary=f"${taxable_bond_dollars:,} in bonds will stay in taxable accounts, "
+                "the least these accounts allow. Either the tax-advantaged accounts are "
+                "full, or those bonds sit inside a target-date fund.",
+            )
         )
-    warnings.extend(_wash_sale_warnings(accounts, trades))
+    notes.extend(_wash_sale_notes(accounts, trades))
 
     return RebalanceResult(
         trades=trades,
-        warnings=warnings,
+        notes=notes,
         taxable_bond_dollars=taxable_bond_dollars,
         dropped_trades=dropped_trades,
     )

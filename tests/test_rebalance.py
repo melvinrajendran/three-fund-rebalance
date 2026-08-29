@@ -40,6 +40,14 @@ def target(us_stock, international, bond):
     )
 
 
+def note_texts(result):
+    """A note's label, finding and explanation as one string, so a test can
+    assert on wording without caring which of the three parts carries it."""
+    return [
+        " ".join(part for part in (n.label, n.summary, n.detail) if part) for n in result.notes
+    ]
+
+
 def trades_by_key(result):
     return {(t.account_name, t.fund_name): (t.action, t.amount) for t in result.trades}
 
@@ -60,7 +68,7 @@ class TestBasicRebalance:
         ]
         result = compute_trades(accounts, target(60, 20, 20))
         assert result.trades == []
-        assert result.warnings == []
+        assert result.notes == []
         assert result.taxable_bond_dollars == Decimal(0)
 
     def test_single_account_needs_full_reallocation(self):
@@ -86,7 +94,7 @@ class TestBasicRebalance:
     def test_empty_accounts_returns_empty_result(self):
         result = compute_trades([], target(60, 20, 20))
         assert result.trades == []
-        assert result.warnings == []
+        assert result.notes == []
 
     def test_zero_value_accounts_return_no_trades(self):
         accounts = [account("Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED, [])]
@@ -176,10 +184,11 @@ class TestUnreachableTargets:
         result = compute_trades(accounts, target(50, 0, 50))
         assert result.trades == [], "there is nothing to trade it into"
         assert any(
-            "bond target of $5,000.00 is more than these accounts can hold" in warning
-            and "reaches more than $0.00, or 0% of the portfolio" in warning
-            for warning in result.warnings
-        ), result.warnings
+            "Bond target out of reach" in note
+            and "No combination of the funds held reaches more than $0.00, or 0% of the "
+            "portfolio" in note
+            for note in note_texts(result)
+        ), note_texts(result)
 
     def test_a_class_the_accounts_cannot_hold_less_of_is_warned_about(self):
         """A pinned account sets a floor as well as a ceiling: this fund is
@@ -207,10 +216,11 @@ class TestUnreachableTargets:
         ]
         result = compute_trades(accounts, target(70, 30, 0))
         assert any(
-            "bond target of $0.00 is less than these accounts can hold" in warning
-            and "they hold at least $2,000.00, or 10% of the portfolio" in warning
-            for warning in result.warnings
-        ), result.warnings
+            "Bond target out of reach" in note
+            and "These accounts cannot hold less than $2,000.00, or 10% of the portfolio"
+            in note
+            for note in note_texts(result)
+        ), note_texts(result)
 
     def test_the_rest_of_the_portfolio_is_still_rebalanced_around_it(self):
         """The point of approximating rather than refusing: the two classes
@@ -265,7 +275,7 @@ class TestUnreachableTargets:
         # must not read as a target out of reach.
         result = compute_trades(accounts, target("34.98", "32.73", "32.29"))
         assert result.trades == []
-        assert result.warnings == []
+        assert result.notes == []
 
     def test_a_target_the_accounts_can_reach_warns_about_nothing(self):
         accounts = [
@@ -278,7 +288,7 @@ class TestUnreachableTargets:
             )
         ]
         result = compute_trades(accounts, target(80, 0, 20))
-        assert result.warnings == []
+        assert result.notes == []
 
 
 class TestBondsPreferTaxAdvantaged:
@@ -298,7 +308,7 @@ class TestBondsPreferTaxAdvantaged:
         result = compute_trades([tax_adv_1, tax_adv_2, taxable], target(60, 0, 40))
 
         assert result.taxable_bond_dollars == Decimal(0)
-        assert result.warnings == []
+        assert result.notes == []
         taxable_bond_trade = [
             t for t in result.trades if t.account_name == "Brokerage" and t.fund_name == "BND"
         ]
@@ -327,8 +337,8 @@ class TestBondsPreferTaxAdvantaged:
         result = compute_trades([small_roth, big_taxable], target(60, 0, 40))
 
         assert result.taxable_bond_dollars == Decimal("3900.00")
-        assert len(result.warnings) == 1
-        assert "3,900.00" in result.warnings[0] or "3900" in result.warnings[0]
+        assert len(result.notes) == 1
+        assert "3,900.00" in note_texts(result)[0] or "3900" in note_texts(result)[0]
 
         roth_bond = next(
             t for t in result.trades if t.account_name == "Roth" and t.fund_name == "BND"
@@ -539,7 +549,7 @@ class TestTargetDateFunds:
         assert result.trades == []
         # The bonds are stuck in taxable, and the tool says so rather than trading.
         assert result.taxable_bond_dollars == Decimal(1000)
-        assert result.warnings
+        assert result.notes
 
     def test_target_date_fund_in_taxable_account_counts_toward_taxable_bonds(self):
         target_date_alloc = TargetDateAllocation(
@@ -560,7 +570,7 @@ class TestTargetDateFunds:
         # the $2,000 bond sleeve inside the taxable target-date fund is unavoidable.
         assert result.trades == []
         assert result.taxable_bond_dollars == Decimal("2000.00")
-        assert len(result.warnings) == 1
+        assert len(result.notes) == 1
 
 
 class TestCashInvestment:
@@ -804,20 +814,19 @@ class TestWashSaleAvoidance:
         # to go but VTI -- the very fund taxable is selling.
         assert trades[("Brokerage", "VTI")][0] == "sell"
         assert trades[("Roth", "VTI")][0] == "buy"
-        warning = "\n".join(result.warnings)
+        warning = "\n".join(note_texts(result))
         assert "VTI" in warning
         assert "wash sale" in warning
         assert "$10,000.00" in warning
-        # The rule, its window and its standard. Without them "matched by
-        # name" is a caveat about nothing in particular, and the reader has
-        # no way to tell whether their own second fund is far enough away.
-        assert "section 1091" in warning
-        assert "substantially identical" in warning
-        assert "within 30 days either side of the sale" in warning
-        assert "in any account you control" in warning
-        # Conditional and attributed, never "this is a wash sale".
+        # Conditional, never "this is a wash sale": the tool cannot see cost
+        # basis, trade dates, or purchases made anywhere else in the window.
         assert "this may be a wash sale" in warning
-        assert "the IRS has taken the position (Rev. Rul. 2008-5)" in warning
+        # The note states the finding and stops. Reciting section 1091's
+        # window and standard, and the IRS's position on a replacement bought
+        # inside an IRA, ran to seven lines -- the largest block below the
+        # orders, and statute rather than anything about this portfolio.
+        for statute in ("section 1091", "substantially identical", "30 days", "Rev. Rul."):
+            assert statute not in warning, statute
 
     def test_no_warning_when_the_taxable_sale_is_of_a_different_fund(self):
         accounts = [
@@ -831,7 +840,7 @@ class TestWashSaleAvoidance:
             ]),
         ]
         result = compute_trades(accounts, target(49.6, 30.4, 20))
-        assert result.warnings == []
+        assert result.notes == []
 
     def test_selling_and_buying_the_same_fund_within_taxable_is_not_a_wash_warning(self):
         """Two taxable accounts are not the sheltered leg the rule is about --
@@ -846,7 +855,7 @@ class TestWashSaleAvoidance:
             ]),
         ]
         result = compute_trades(accounts, target(70, 0, 30))
-        assert all("wash sale" not in w for w in result.warnings)
+        assert all("wash sale" not in w for w in note_texts(result))
 
     def test_fund_names_are_matched_ignoring_case_and_surrounding_space(self):
         accounts = [
@@ -860,7 +869,7 @@ class TestWashSaleAvoidance:
             ]),
         ]
         result = compute_trades(accounts, target(49.6, 30.4, 20))
-        assert any("wash sale" in w for w in result.warnings)
+        assert any("wash sale" in w for w in note_texts(result))
 
     def test_an_empty_taxable_slot_does_not_suppress_a_sheltered_purchase(self):
         """A taxable holding of zero cannot be sold, so it cannot pair into a
@@ -907,7 +916,9 @@ class TestDeclaredCapacity:
         accounts = self._roth([holding(FundType.US_STOCK, "VTI", 10_000)])
         result = compute_trades(accounts, target(80, 0, 20))
         assert result.trades == []
-        assert any("bond target" in warning for warning in result.warnings), result.warnings
+        assert any(
+            "Bond target out of reach" in note for note in note_texts(result)
+        ), note_texts(result)
 
 
 class TestRebalancingBand:
@@ -1053,7 +1064,8 @@ class TestRebalancingBand:
         exact = compute_trades(accounts, target(50, 25, 25), Decimal(0))
         banded = compute_trades(accounts, target(50, 25, 25), Decimal(10))
         assert exact.trades == banded.trades == []
-        assert any("U.S. stock target" in warning for warning in exact.warnings), exact.warnings
+        notes = note_texts(exact)
+        assert any("U.S. stock target" in warning for warning in notes), notes
 
     def test_a_class_pinned_outside_its_band_stops_re_triggering_once_settled(self):
         """A band that can never be satisfied is a band that never says

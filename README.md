@@ -85,8 +85,8 @@ Review each order before placing it:
     Buy $10,000.00 of VXUS
     Buy $20,000.00 of BND
 
-If these orders fill at the values entered here, the portfolio will hold 49.6%
-U.S. stocks, 30.4% international stocks, and 20% bonds.
+  If these orders fill at the values entered here, the portfolio will hold
+  49.6% U.S. stocks, 30.4% international stocks, and 20% bonds.
 
 Not investment, tax, or legal advice, and not a recommendation to buy or sell.
 Consult a professional about your situation.
@@ -211,7 +211,7 @@ short-term redemption fees, and it does not know your broker's fund minimums
 or trading restrictions. Prices move between the values entered and the price
 an order fills at.
 
-**The wash-sale check is a warning, not a guarantee.** It matches funds by
+**The wash-sale note is a flag, not a guarantee.** It matches funds by
 the name entered, so two share classes of one index (VTI and VTSAX) are not
 recognized as the same security even though the IRS may treat them as
 substantially identical. Check the lots before placing the orders.

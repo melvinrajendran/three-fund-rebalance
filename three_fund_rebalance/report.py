@@ -26,6 +26,11 @@ header, where the column cannot take the words. See formatting.percent_places.
 Trades are grouped by account, with a buy/sell pair within one account
 collapsed into a single "exchange" line where that reads more naturally (the
 common case of moving money from one fund to another in the same account).
+
+Everything that qualifies the orders -- a taxable sale, a class the accounts
+cannot reach, a wash-sale overlap, an order too small to place -- is a
+`models.Note` under one "Notes" subheading, rather than the run of unlabelled
+paragraphs this used to end in. See `_describe_notes`.
 """
 
 from __future__ import annotations
@@ -55,6 +60,7 @@ from three_fund_rebalance.formatting import (
 from three_fund_rebalance.models import (
     Account,
     FundType,
+    Note,
     RebalanceResult,
     TargetAllocation,
     TaxTreatment,
@@ -504,15 +510,19 @@ def _describe_outcome(inputs: RebalanceInputs, trades: list[Trade]) -> list[str]
     ]
     return [
         "",
+        # Indented to the depth of the account blocks above, because this
+        # belongs to the orders: it is the payoff line, and set flush it read
+        # as the first of the notes below rather than the answer to them.
         wrap(
             "If these orders fill at the values entered here, the portfolio will hold "
             + ", ".join(parts)
-            + "."
+            + ".",
+            indent=INDENT_UNIT,
         ),
     ]
 
 
-def _describe_taxable_sales(inputs: RebalanceInputs, trades: list[Trade]) -> list[str]:
+def _taxable_sale_note(inputs: RebalanceInputs, trades: list[Trade]) -> Note | None:
     """Disclose that a sale in a taxable account is a taxable event.
 
     Only when the plan actually sells in one -- a taxable buy realizes
@@ -526,14 +536,54 @@ def _describe_taxable_sales(inputs: RebalanceInputs, trades: list[Trade]) -> lis
         Decimal(0),
     )
     if sold <= 0:
-        return []
-    return [
-        "",
-        wrap(
-            f"Selling {_money(sold)} in taxable accounts may realize capital gains "
-            "or losses; no cost basis is collected here, so that tax is not estimated."
-        ),
-    ]
+        return None
+    return Note(
+        label="Taxable sale",
+        # Two sentences where there was a semicolon, and no second paragraph:
+        # what the tool did not do is short enough to sit with the finding.
+        summary=f"Selling {_money(sold)} in taxable accounts may realize capital gains "
+        "or losses. No cost basis is collected here, so that tax is not estimated.",
+    )
+
+
+def _dropped_orders_note(dropped: int) -> Note:
+    """The orders left out for being too small to place.
+
+    "Order", not "move": everything under the heading above is an order not
+    yet placed, so a dropped one is simply an order missing from the list. A
+    third noun for the same thing is a vocabulary the reader would have to
+    learn. It forces "the above orders" at the end, since "these orders"
+    would then point at either the listed ones or the dropped one.
+    """
+    one = dropped == 1
+    return Note(
+        label="Orders left out",
+        summary=f"{_count(dropped)} {'order' if one else 'orders'} smaller than "
+        f"{_money(MIN_TRADE_DOLLARS)} {'was' if one else 'were'} left out as impractical, "
+        "so the above orders do not reach the target exactly.",
+    )
+
+
+def _describe_notes(notes: list[Note]) -> list[str]:
+    """The tail of the report, under one heading and as a countable list.
+
+    Everything here used to be a run of flush paragraphs of the same width
+    and weight, with no heading, in an order a reader could not infer -- a
+    two-line finding and a seven-line statute recital looked identical, and
+    there was no signal for where to stop reading. The label leads each one
+    so three words say whether the paragraph is theirs, and the detail sits a
+    level in, where it reads as optional.
+
+    No "Warning:" prefix on each: several of these are not warnings, and
+    under a heading the prefix only repeated what the heading already said.
+    """
+    lines = _subheading("Notes")
+    for note in notes:
+        lines.append("")
+        lines.append(wrap(f"{note.label}. {note.summary}"))
+        if note.detail:
+            lines.append(wrap(note.detail, indent=INDENT_UNIT))
+    return lines
 
 
 def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
@@ -604,30 +654,26 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
                     wrap(line, indent=body_indent, hanging_indent=body_indent + INDENT_UNIT)
                 )
         lines.extend(_describe_outcome(inputs, result.trades))
-        lines.extend(_describe_taxable_sales(inputs, result.trades))
-        if result.dropped_trades:
-            one = result.dropped_trades == 1
-            lines.append("")
-            lines.append(
-                wrap(
-                    # "Order", not "move": everything under this heading is an
-                    # order not yet placed, so a dropped one is simply an order
-                    # missing from the list. A third noun for the same thing is
-                    # a vocabulary the reader would have to learn. It forces
-                    # "the above orders" at the end, since "these orders" would
-                    # then point at either the listed ones or the dropped one.
-                    f"{_count(result.dropped_trades)} {'order' if one else 'orders'} "
-                    f"smaller than {_money(MIN_TRADE_DOLLARS)} {'was' if one else 'were'} "
-                    "left out as impractical, so the above orders do not reach the "
-                    "target exactly."
-                )
-            )
 
-    # Warnings sit with the orders they are about, rather than stranded above
-    # the comparison table where they were easy to scroll straight past.
-    for warning in result.warnings:
+    # Notes sit with the orders they are about, rather than stranded above the
+    # comparison table where they were easy to scroll straight past -- but
+    # under their own heading, because the run of them is not part of the
+    # order list. Report-side and solver-side notes interleave here: the
+    # taxable sale leads, since it is the consequence of placing these orders
+    # at all, and the dropped-order footnote trails, since it is about the
+    # completeness of the list rather than about the portfolio.
+    notes: list[Note] = []
+    if result.trades:
+        taxable_sale = _taxable_sale_note(inputs, result.trades)
+        if taxable_sale is not None:
+            notes.append(taxable_sale)
+    notes.extend(result.notes)
+    if result.trades and result.dropped_trades:
+        notes.append(_dropped_orders_note(result.dropped_trades))
+
+    if notes:
         lines.append("")
-        lines.append(wrap(f"Warning: {warning}"))
+        lines.extend(_describe_notes(notes))
 
     lines.append("")
     lines.append(wrap(DISCLAIMER))

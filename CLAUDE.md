@@ -354,7 +354,7 @@ Phase 3 cannot condition on whether the taxable side is *actually* sold — that
 decided by the same solve, and no linear objective can express it. The residue is a
 mild preference against accumulating, in a shelter, a fund you already hold in
 taxable. It costs nothing and usually points the same way as phases 4 and 5. What the
-LP cannot avoid, `_wash_sale_warnings` reports after the fact from the final trades.
+LP cannot avoid, `_wash_sale_notes` reports after the fact from the final trades.
 
 A caution when testing placement: this LP is degenerate, so a scenario where the
 preferred placement merely *ties* proves nothing — the old solver often picked it
@@ -399,7 +399,7 @@ against a target-date fund's bond sleeve could not be planned at all, which is h
 was found. Both it and `_band_note` are gone. The band is now the trigger and nothing
 else.
 
-`_capacity_warnings` says what the reach costs, and its test is `_reachable_bounds`
+`_capacity_notes` says what the reach costs, and its test is `_reachable_bounds`
 having had to widen that class — the band and what the accounts can hold do not overlap
 at all, so the class is outside its band whatever else the portfolio does. Nothing
 weaker will do: a class can also miss its band because the *other two* pinned the
@@ -410,14 +410,19 @@ would be a false one.
 
 Since an account holding individual funds declares all three, its coefficient for
 every class runs 0 to 1 — floor zero, ceiling its whole value — so **a target-date
-account is now the only thing that can pin one.** Both messages say so: "an account
-holding a single fund has to put its whole value into that fund, and a target-date
-fund's mix is fixed". Ceilings are reported before floors: one account holding one fund
-breaches both at once, and "nothing you hold can be bonds" points at the missing piece,
-while "you are stuck holding this much U.S. stock" describes the same problem from the
-side the user can do least about. Note the bound itself is general — `compute_trades` is
-public and tests call it with partial slot sets — so the messages name the likely cause
-rather than asserting it.
+account is now the only thing that can pin one.** Both messages used to say so
+outright, in a second indented paragraph ("an account holding a single fund has to put
+its whole value into that fund, and a target-date fund's mix is fixed"); shortening
+each note to one paragraph cut that, and the remedy now names the same two culprits
+only obliquely — "hold less in single-fund and target-date accounts". Note the bound
+itself is general — `compute_trades` is public and tests call it with partial slot
+sets — so a message may name the likely cause but never asserts it, which is what made
+the oblique form an acceptable trade rather than a loss of precision.
+
+Ceilings are reported before floors: one account holding one fund breaches both at
+once, and "nothing you hold can be bonds" points at the missing piece, while "you are
+stuck holding this much U.S. stock" describes the same problem from the side the user
+can do least about.
 
 Trades below `MIN_TRADE_DOLLARS` are dropped as impractical.
 
@@ -504,7 +509,7 @@ target allocation" nor "every asset class is within its band" — it is what the
 can hold that stopped it, so a third line says so. It reads `within_band` off
 `summary.categories` rather than anything the solver reports: the summary describes the
 current holdings, which with no trades are also the final ones, so it is right by
-construction even where `_capacity_warnings` has nothing it can truthfully say.
+construction even where `_capacity_notes` has nothing it can truthfully say.
 
 ### VT allocation (`vt_allocation.py`)
 
@@ -591,7 +596,8 @@ width, just no step number.
 
 **Every `-` subheading is Title Case; everything else is a sentence.** "Stock and
 Bond Allocation", "Rebalancing Bands", "Account Holdings", "Current vs. Target
-Allocation", "Orders to Place", "Saved Accounts", "Add Accounts", "Save Portfolio" —
+Allocation", "Orders to Place", "Notes", "Saved Accounts", "Add Accounts", "Save
+Portfolio" —
 the `=` banners above them are upper-cased by `format_section_header` anyway, and
 everything below them is prose. A subheading names a thing rather than saying
 something, which is what the casing marks. Short prepositions and conjunctions stay
@@ -600,7 +606,7 @@ lowercase ("and", "to", "vs."), the way a title is set anywhere else.
 **Two widths, both following the terminal.** `formatting.prose_width()` is
 `min(terminal - 2, PROSE_MAX_WIDTH)`; `formatting.table_width()` is `terminal - 2` with
 no cap. They diverge because they want opposite things: a paragraph gets *harder* to
-read as it widens, while a table of dollar figures does not. Prose, warnings, notes and
+read as it widens, while a table of dollar figures does not. Prose, notes and
 the `=` banners all use prose width; tables are sized to their own contents within the
 table budget.
 
@@ -618,7 +624,7 @@ because textwrap will otherwise split "tax-advantaged" across lines, and in a do
 about tax treatment that reads as a different term.
 
 **Only the per-account holdings table may exceed the width budget.** Everything else --
-prose, warnings, account headings, trade lines, the comparison table -- wraps or is
+prose, notes, account headings, trade lines, the comparison table -- wraps or is
 sized to fit, and `test_long_names_do_not_push_prose_or_headings_off_the_page` holds
 the line. The exception is deliberate: a fund entered by its real name rather than its
 ticker ("Vanguard Total Stock Market Index Fund Admiral Shares") cannot fit alongside
@@ -694,23 +700,28 @@ loses them is a regression:
   because in portfolio-rebalancing systems the computed output is a *trade list* --
   "order" belongs to the execution layer this program never reaches. That is a
   deliberate split, not an oversight.
-- **Tax statements are conditional and attributed.** The wash-sale warning says a sale
-  "may be" a wash sale and that "the IRS has taken the position (Rev. Rul. 2008-5)"
-  -- never that it *is* one or that a loss *is* lost. The tool cannot see cost basis,
-  trade dates, or purchases made elsewhere in the 61-day window. It also names the
-  rule it is talking about -- section 1091, "substantially identical" securities,
-  "within 30 days before or after the sale, in any account you control" -- so a reader
-  can judge whether their own replacement fund is far enough away.
+- **Tax statements are conditional.** The wash-sale note says a sale "may be" a wash
+  sale -- never that it *is* one, or that a loss *is* lost. The tool cannot see cost
+  basis, trade dates, or purchases made elsewhere in the 61-day window, so it flags
+  the shape and stops short of the conclusion. `TestWashSaleAvoidance` pins the
+  conditional.
 
-  **It stops at the standard.** Two closing sentences were cut: one suggesting a
-  different fund in the sheltered account, and one noting that matching by name misses
-  two share classes of the same index. The first is advice, which is the one thing this
-  program does not give; the second is a limitation of the check rather than a fact
-  about the user's situation, and the README's Limitations section is where it lives.
-  Seven lines rather than nine, and everything left is either the rule or this
-  portfolio's own numbers.
-- **A taxable sale is disclosed as a taxable event.** `report._describe_taxable_sales`
-  says it "may realize capital gains or losses" and that no cost basis is collected.
+  **It states the finding and nothing else.** Successive drafts have cut everything
+  around it. First a suggestion to hold a different fund in the sheltered account
+  (advice, which is the one thing this program does not give) and a note that matching
+  by name misses two share classes of one index (a limitation of the check, which is
+  the README's Limitations section's job). Then the statute itself -- section 1091's
+  window and standard, and the IRS's position (Rev. Rul. 2008-5) on a replacement
+  bought inside an IRA. That last was seven lines, the single largest block below the
+  orders, and it was law rather than anything about this portfolio: a reader who wants
+  to know whether their own replacement fund is far enough away is looking the rule up
+  regardless, and a reader who wants to know whether to place the order was scrolling
+  past it. Three lines rather than nine, all of them this portfolio's own numbers.
+  The same test asserts the statute is *gone*, so it does not creep back a clause at a
+  time.
+- **A taxable sale is disclosed as a taxable event.** `report._taxable_sale_note`
+  says it "may realize capital gains or losses" and, in its `detail`, that no cost
+  basis is collected.
   Phase 2 minimizes taxable *volume*, which is not the same as pricing the sale, so the
   wording must neither skip the disclosure nor imply the solver costed it. Only the
   sale leg triggers it; a taxable buy realizes nothing.
@@ -724,11 +735,11 @@ loses them is a regression:
   "your portfolio", "your accounts", "your target" or "the funds you hold" — "the
   portfolio", "these accounts", "the target", "the funds held". It reads as a statement about the
   portfolio in front of you rather than a claim about you, and it is one voice across
-  the report, the prompts and the solver's warnings, which were written at different
-  times and had drifted apart. **Two sentences are exempt, and both are fixed
-  formulas**: `DISCLAIMER`'s "Consult a professional about your situation", and the
-  wash-sale warning's "in any account you control", which is the scope section 1091
-  itself sets. Reworking either to dodge a pronoun is a worse trade than the pronoun.
+  the report, the prompts and the solver's notes, which were written at different
+  times and had drifted apart. **One sentence is exempt, and it is a fixed formula**:
+  `DISCLAIMER`'s "Consult a professional about your situation". Reworking it to dodge
+  the pronoun is a worse trade than the pronoun. (The wash-sale note's "in any account
+  you control" was the second, and went with the statute it belonged to.)
   The README follows the same rule where it describes what the program prints; its own
   documentation voice ("puts the CLI on your PATH") is unaffected.
 - **The tax-treatment labels are not glossed.** "Tax-free" used to carry a line under
@@ -756,7 +767,7 @@ loses them is a regression:
   spelled out through nine (`report._count`): the sentence opens on it, and "1 order
   smaller than $1.00 was left out" reads as a fragment rather than a sentence.
 - **A target the funds cannot reach is disclosed, not silently approximated.** The plan
-  goes as close as the accounts allow and `_capacity_warnings` says which class, what it
+  goes as close as the accounts allow and `_capacity_notes` says which class, what it
   can reach, in dollars and as a share of the portfolio, and what the user could change.
   It states the reachable bound rather than where the plan happened to land, so the
   claim is true of the accounts and not merely of this solve — which is also why it
@@ -872,9 +883,56 @@ gives it a precision it does not have.
 rest of the report only answers by implication. It is computed from the holdings
 rather than the class totals, so a trade in a target-date fund moves all three sleeves
 by their own fractions, and it is stated conditionally ("If these orders fill at the
-values entered here") for the reason in the wording section below. The disclosures that
-follow it — taxable sales, then costs — sit between it and the warnings, so everything
-qualifying the orders is in one run rather than split across the page.
+values entered here") for the reason in the wording section below. **It is indented to
+the depth of the account blocks above it**, because it belongs to the orders: set
+flush it read as the first of the notes below rather than as the answer to them.
+
+**Everything after that is a `Note`, and they go under one `-` subheading.** The tail
+of the report is where several unrelated findings pile up — a taxable sale, a class the
+accounts cannot reach, a wash-sale overlap, an order too small to place — and it was
+the one part of the page carrying no structure at all: a run of flush paragraphs of the
+same width and weight, no heading, in an order a reader could not infer, each prefixed
+`Warning:` whether or not it was one. A two-line finding and a seven-line statute
+recital looked identical, and there was no signal for where to stop reading.
+
+`models.Note` is `label`, `summary` and an optional `detail`, and `report._describe_notes`
+is the one place they land on the page — the label leads the summary, so three words say
+whether the paragraph is the reader's, and a `detail` sits one `INDENT_UNIT` in, where it
+reads as optional.
+
+**No note currently uses `detail`, and each is three lines or fewer.** Three did, and
+they were cut to fit in one paragraph: the taxable sale's semicolon became a period, the
+stranded-bonds note dropped "that can only be held whole", and the capacity note lost
+both the target's own dollar figure (the comparison table two sections up prints it for
+every class, in dollars and as a share) and the sentence explaining *why* the accounts
+are stuck. Three lines is measured at the worst case, not the typical one — the longest
+label ("International stock target out of reach") against a ten-figure amount — because
+that is what decides whether a note ever spills to four. `_describe_notes` still renders
+`detail`, and the split is still worth knowing if one earns its way back: **the summary
+reports and the detail explains.**
+
+**No colons or semicolons in a note.** Every clause is its own sentence or joins with a
+comma. `TestNoteWording` holds this, the line count and the absence of `detail`.
+
+What the capacity note gave up is worth knowing before shortening it further. Its remedy
+now names the two culprits only obliquely ("hold less in single-fund and target-date
+accounts"), so a reader who does not already know that a target-date fund's mix cannot
+be split will not learn it from the note. That was the deliberate trade for one
+paragraph.
+
+The `Warning:` prefix is gone with them: several of these are not warnings — a taxable
+sale is a disclosure, a dropped order a footnote — and under a heading the prefix only
+repeated what the heading said. Which is also why the field is `RebalanceResult.notes`
+rather than `warnings`: the printed word and the code's name for it agree, as they do
+everywhere else here.
+
+**Report-side and solver-side notes interleave in `format_report`**, and the order is
+deliberate: the taxable sale leads, because it is the consequence of placing these
+orders at all; `result.notes` follows in the solver's own order (capacity, then bonds
+stranded in taxable, then wash sales); and the dropped-order footnote trails, because
+it is about the completeness of the list rather than about the portfolio. The
+dropped-order note fires only when there *are* orders — "the above orders" has nothing
+to point at otherwise.
 
 The report restates every answer it was given — target allocation and where it came
 from, the band, the accounts and their holdings — before the current-vs-target summary

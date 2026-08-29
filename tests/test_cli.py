@@ -239,7 +239,12 @@ class TestEndToEndRun:
         output = " ".join(prompter.full_output.split())
         assert exit_code == 0
         assert "Could not compute a rebalance" not in output
-        assert "bond target of $5,000.00 is more than these accounts can hold" in output
+        # The note names the class, the bound in dollars and as a share, and
+        # the one thing to change. The target's own figure is not restated --
+        # the comparison table above prints it for every class.
+        assert "Bond target out of reach." in output
+        assert "No combination of the funds held reaches more than $0.00, or 0%" in output
+        assert "Hold individual funds in a larger share of the portfolio." in output
         assert "as close to the target allocation as the funds held allow" in output
 
     def test_a_rebalance_error_is_reported_and_exits_nonzero(self, monkeypatch, tmp_path):
@@ -358,7 +363,9 @@ class TestLongMessagesWrap:
             ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "100"], prompter=prompter
         )
         assert exit_code == 0
-        assert "more than these accounts can hold" in " ".join(prompter.full_output.split())
+        assert "No combination of the funds held reaches more than" in " ".join(
+            prompter.full_output.split()
+        )
         assert self._unwrapped(prompter) == []
 
     def test_the_manual_vt_prompt_wraps_without_breaking_the_url(self, tmp_path):
