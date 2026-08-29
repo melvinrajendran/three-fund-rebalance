@@ -148,29 +148,20 @@ type a new one.
 
 ## How it works
 
-**Allocation before location.** The tool settles what each asset class should
-be worth, then decides which accounts hold it.
+**The U.S. and international split** comes from the Vanguard Total World Stock
+ETF (VT): Vanguard's monthly JSON endpoint, falling back to the quarterly fact
+sheet PDF, then the last saved value, then manual entry, which points you at
+VT's fund page to read the number off yourself. It never guesses silently.
 
 **Rebalancing bands.** You set two -- and an asset class has to satisfy both,
 so the tighter binds: the *absolute band*, in percentage points of the
 portfolio, and the *relative band*, as a percentage of the asset class's
-target. Zero on either tolerates no drift. Both are asked outright with no
-suggested answer; 5 and 25 -- the 5/25 rule -- is the usual convention.
+target. Zero on either tolerates no drift.
 
 **A band is a trigger, not a destination.** No trades while every asset class
 stays within its band; if any drifts outside, all three are rebalanced back to
 target. Cash is invested first, and the band is judged on what it leaves
 behind.
-
-**Asset location.** Bonds fill tax-advantaged accounts first, tax-deferred
-before tax-free, since their interest is taxed yearly as ordinary income.
-International stocks prefer taxable, where the foreign tax withheld on them is
-claimable as a credit a tax-advantaged account forfeits.
-
-**Two things open a taxable trade: reaching the allocation, and moving bonds
-out of taxable.** No capital-gains tax is realized inside a sheltered account,
-so every preference below those only decides which funds an account already
-being traded ends up holding.
 
 **An account holds one target-date fund or all three individual funds, never
 both** -- a U.S. stock fund, an international stock fund and a bond fund --
@@ -182,39 +173,57 @@ whether or not you hold any today, and one entered at $0 is capacity: the plan
 can buy into it. That is often what lets a portfolio reach its bond target
 without selling anything in a taxable account.
 
-**Money never moves between accounts.** Each account's total is fixed; a
-rebalance only reallocates within it, including investing its cash. Orders
-smaller than $1.00 are left out as impractical.
+**Allocation before location.** Two solves, in order. The first settles what
+each asset class should be worth -- as close to the target as the accounts
+allow, and among equally close answers, the one that moves least. The second
+decides which accounts hold it, and can never revisit the first.
 
-**The U.S. and international split** comes from the Vanguard Total World Stock
-ETF (VT): Vanguard's monthly JSON endpoint, falling back to the quarterly fact
-sheet PDF, then the last saved value, then manual entry, which points you at
-VT's fund page to read the number off yourself. It never guesses silently.
+**Both stages are linear programs.** Every variable is a dollar amount -- one
+per asset class in the first solve, one per fund position per account in the
+second. Equalities pin what cannot move, each preference is a cost to
+minimize, and the answer is an exact optimum, not an approximation.
+
+**Money never moves between accounts.** Each account spends exactly its own
+total, so a rebalance only reallocates within one, including investing its
+cash.
+
+**Preferences are ranked, not weighted.** Each is optimized in turn and its
+result frozen as a constraint on the next, so a lower priority can never cost
+anything on a higher one. There is no exchange rate between a basis point of
+foreign tax credit and a dollar of realized gain, and nothing here invents
+one. The second solve ranks six:
+
+1. Move bonds out of taxable accounts, since their interest is taxed yearly
+   as ordinary income.
+2. Trade as little as possible inside taxable accounts.
+3. Avoid buying, in a sheltered account, a fund being sold in a taxable one.
+4. Among shelters, hold bonds in tax-deferred space, which by common
+   convention leaves tax-free accounts for stocks.
+5. Hold the international fund in taxable, where the foreign tax withheld on
+   it is claimable as a credit a sheltered account forfeits.
+6. Trade as little as possible everywhere else.
+
+Reaching the settled allocation is a hard constraint, so it will sell in a
+taxable account if the sheltered ones cannot absorb the change. Of the six
+only the first can; 3 through 6 rearrange sheltered accounts and choose which
+fund an account already being traded ends up in.
 
 ## Limitations
 
-**No cost basis.** It cannot compute capital gains, and minimizes taxable
-trade *volume* as a proxy. Selling in a taxable account may realize capital
-gains or losses this tool never sees.
+**VT's allocation may be stale**, or the fetch may fail and fall back to a
+saved or manually entered value.
 
 **Every account holding individual funds is assumed able to buy all three.**
 A plan with a restricted fund lineup -- a 401(k) with no international option,
 say -- may be given an order it cannot fill.
 
-**A target the funds cannot reach is approximated, not refused.** A
-target-date fund holds a fixed mix, so its bond sleeve still counts against a
-0% bond target and no order can sell it on its own. The plan gets as close as
-the accounts allow, and says which asset class fell short and by how much.
+**All the cash you enter is invested.** There is no reserve: keep an
+emergency fund or a spending reserve out of the amounts you enter.
 
-**No costs.** Amounts exclude commissions, fees, bid-ask spreads and
-short-term redemption fees, and it does not know your broker's fund minimums
-or trading restrictions. Prices move between the values entered and the price
-an order fills at.
-
-**The wash-sale note is a flag, not a guarantee.** It matches funds by
-the name entered, so two share classes of one index (VTI and VTSAX) are not
-recognized as the same security even though the IRS may treat them as
-substantially identical. Check the lots before placing the orders.
+**The orders may not hit the target exactly.** A target-date fund's mix is
+fixed, so its bond sleeve counts against even a 0% bond target -- the plan
+gets as close as the accounts allow, and says which asset class fell short and
+by how much. Orders under $1.00 are also left out as impractical, and counted.
 
 **Preferring international in taxable is a rule of thumb.** The credit is
 worth a couple of basis points and is partly offset by those funds' higher,
@@ -224,15 +233,21 @@ less-qualified dividends; the tool weighs neither.
 into sheltered accounts on the assumption their interest is taxed as
 ordinary income; a muni fund belongs in taxable, and this will move it out.
 
-**All the cash you enter is invested.** There is no reserve: keep an
-emergency fund or a spending reserve out of the amounts you enter.
+**No cost basis.** Trading less in a taxable account is a stand-in for
+realizing less tax, not a calculation of it. Selling there may realize capital
+gains or losses this tool never sees.
 
-**It knows nothing about** contribution or withdrawal limits, holding
-periods, early-withdrawal penalties, or what a given account can actually
-hold -- a 401(k)'s fixed fund menu, for instance.
+**The wash-sale note is a flag, not a guarantee.** It matches funds by
+the name entered, so two share classes of one index (VTI and VTSAX) are not
+recognized as the same security even though the IRS may treat them as
+substantially identical. Check the lots before placing the orders.
 
-**VT's allocation may be stale**, or the fetch may fail and fall back to a
-saved or manually entered value.
+**Nothing that happens at the broker is modeled.** Amounts exclude
+commissions, fees, bid-ask spreads and short-term redemption fees, and the
+tool knows nothing of your broker's fund minimums or trading restrictions, or
+of contribution and withdrawal limits, holding periods and early-withdrawal
+penalties. Prices move between the values entered and the price an order fills
+at.
 
 ## Development
 
@@ -251,10 +266,6 @@ ruff check three_fund_rebalance tests
 
 Run it as a module rather than through the console script: that always
 executes the copy you are editing, whatever else is on your PATH.
-
-[CLAUDE.md](CLAUDE.md) is the contributor guide -- the solver's design, the
-invariants that span files, testing conventions, and the wording the output
-has to keep.
 
 ## License
 

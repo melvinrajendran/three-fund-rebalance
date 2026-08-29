@@ -460,10 +460,18 @@ meant the whole of step 2 could be walked past with two keystrokes. The band is 
 one setting here that decides whether the program does anything at all, 5 and 25 are
 a convention rather than a recommendation this program is in a position to make, and a
 number the user never chose reads back in the report's "Rebalancing Bands" section as
-their own policy. The constants stay in `config.py` as the documented convention and
-the README still names the 5/25 rule -- what is gone is the program answering on the
-user's behalf. `TestRebalanceBandPrompts` pins both halves of that: no suggested
-answer on a first run, a saved answer still offered.
+their own policy. The constants stay in `config.py` as the documented convention --
+what is gone is the program answering on the user's behalf. `TestRebalanceBandPrompts`
+pins both halves of that: no suggested answer on a first run, a saved answer still
+offered.
+
+**The README says none of this, deliberately.** It claimed "both are asked outright
+with no suggested answer", which is true of a first run and false of every run after
+it, since a saved answer *is* offered back -- one of those halves is easy to state and
+forget the other. It named the 5/25 rule in the same breath, which put a specific pair
+of numbers in front of a reader as the convention while the program itself declines to
+suggest them. Both went. Whether a prompt has a default is not what someone deciding
+to install needs to know, and the two facts were only ever there together.
 
 Note this makes `prompt_percent`'s no-default path load-bearing for the first time in
 the flow: pressing Enter falls through to "Please enter a number." rather than
@@ -490,10 +498,10 @@ prompt, the saved key and the report all say one thing. `TestRebalanceBandPrompt
 holds this.
 
 The vocabulary throughout is the Bogleheads wiki's and Larry Swedroe's, because that
-is where a reader checking the defaults ends up: "rebalancing band", "asset class", an
+is where a reader checking what to answer ends up: "rebalancing band", "asset class", an
 asset class that "drifts from" its target, and the pair of numbers as **the 5/25
-rule** — absolute 5, relative 25. The rule is named in `config.py`, the README and this
-file rather than in the prompt itself. Where the two traditions disagree, precision
+rule** — absolute 5, relative 25. The rule is named in `config.py` and this file, and
+nowhere the user can see it: not in the prompt, and no longer in the README. Where the two traditions disagree, precision
 wins: Bogleheads writes the absolute half as "5%", which is 5 percentage *points*, so
 the prompt's unit stays `pts`.
 
@@ -1021,10 +1029,15 @@ exists.
 
 ## The README
 
-It answers "what will this print, and what will it not do" — for someone deciding
-whether to install it. Everything about *how* the code works lives in this file
-instead, and the two must not converge: a README that grows a solver-phase
-explanation is the failure mode to watch for.
+It answers "what will this print, what does it optimize for, and what will it not
+do" — for someone deciding whether to install it and whether to trust the plan. The
+middle question earns the solver a place there, but only at the altitude of *what is
+being optimized and in what order*: the ranking as six one-line clauses, the two
+stages, and the fact that ranks are lexicographic rather than weighted. **How** any of
+it is computed still lives in this file alone — the variable layout, the carried
+bounds, `_OBJECTIVE_SLACK`, the implied third equality, which phase reads
+`_fund_type_coefficient` and which reads `slot.fund_type`. A README that starts
+explaining a phase rather than naming it is the failure mode to watch for.
 
 Sections, in order: the one-paragraph blurb, Disclaimer, Example, Install, Running,
 How it works, Limitations, Development, License.
@@ -1056,6 +1069,21 @@ needs more room is either two entries (the band's definition and the band's trig
 semantics are split for exactly this reason) or a Limitations bullet. Growing one past
 a short paragraph is the thing that keeps happening; splitting it is the fix.
 
+**The ranked list is the one exception**, because a ranking is the one thing a
+paragraph cannot carry: six preferences in prose reads as six things the solver
+balances, which is precisely what lexicographic ordering is not. It is six numbered
+items of one line each, and each has to survive being read against `_location_objectives`
+— the ordering there *is* the list here. It sits *inside* the "Preferences are ranked,
+not weighted" entry, between that paragraph and the one sentence on what can open a
+taxable trade, rather than under a bolded lead-in of its own. Splitting it out was
+tried: it produced a lead-in that was not a sentence, and stranded the taxable-trade
+rule outside the list it qualifies. Two clauses in it are load-bearing beyond
+their length. Item 1's "since their interest is taxed yearly as ordinary income" is the
+only justification given for the whole shelter preference. Item 4's "by common
+convention" is required: saying tax-free space is for stocks *because* stocks grow more
+is a claim about future performance, which nothing here may make — see "No claim implies
+future performance".
+
 **But compressing one until it says something false is the worse failure**, and it has
 happened. An entry read "Only bond placement opens a taxable trade. Trades inside
 sheltered accounts cost nothing" — two false claims in one lead-in. Reaching the
@@ -1069,16 +1097,42 @@ list; when it cannot be made both short and true, it is a Limitations bullet.
 lets How it works stay short. A newly discovered thing the tool cannot see is a bullet
 there, not a qualification bolted onto a paragraph above.
 
+**Both sections run roughly in the order a run meets them** — for Limitations, the
+lookup, then the step 3 questions, then the report top to bottom, then what happens at
+the broker; for How it works, step 1, step 2, step 3, then the solve. Nothing says so on
+either page; a lead-in announcing the order was written and cut, because an order either
+reads naturally or does not, and one that needs explaining is the wrong order. It is
+only roughly true: the muni bullet sits with the orders, since that is where a muni
+holder notices, rather than with the question where the ticker was typed.
+
+How it works did not always follow it, and the failure was invisible until the two
+sections were read against each other: the three entries about what you are *asked*
+sat last, with the VT split — the first line of the Example directly above — dead last
+of all. The objection to fixing it is real and was weighed. Run order opens the section
+on where a number comes from rather than on what the tool does with it, which buries the
+lede by one entry. It wins anyway, because the Example ends on that same VT provenance
+line, so the two read continuously; and because the section now closes on the ranking
+instead of trailing off into fund-entry rules, which is the stronger place for it.
+
+**A mechanism goes above and its caveat goes below, and neither restates the other.**
+Three pairs are split that way on purpose — "Name a fund you don't own yet" against the
+restricted-lineup bullet, ranking 5 against "a rule of thumb", ranking 2 against "No
+cost basis". The failure mode is the caveat re-explaining the mechanism to set up its
+own point: "No cost basis" used to open by re-describing the taxable-volume proxy, which
+the ranking now states, and "It knows nothing about" ended on a 401(k)'s fixed fund menu,
+which is the whole subject of a bullet two above it.
+
 **The Disclaimer section is `report.DISCLAIMER`'s two clauses plus a pointer to
 Limitations, and nothing else.** The clauses cut from the report — advisory
 relationship, order placement, trademark use — are not restated here either; see the
 disclaimer entry under "Wording the output has to keep" for why.
 
 **Every name the README uses for a user-visible concept is the program's own name for
-it.** The two bands, the 5/25 rule, the order/trade split, and the ban on
-"recommendation" all apply here exactly as they do to printed output — the README is
-one of the places the band names have to agree, and a rename is a change to all of
-them at once.
+it.** The two bands, the order/trade split, and the ban on "recommendation" all apply
+here exactly as they do to printed output — the README is one of the places the band
+names have to agree, and a rename is a change to all of them at once. The 5/25 rule is
+the exception in the other direction: it is a name for something the program never
+shows, so the README does not use it either.
 
 Mechanically: prose wraps at 78 columns, hard; `--` for a dash, never an em dash, so
 the source matches what the CLI prints; asterisk emphasis for the band names on first

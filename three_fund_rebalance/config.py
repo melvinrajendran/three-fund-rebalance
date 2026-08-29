@@ -44,9 +44,11 @@ MIN_TRADE_DOLLARS = Decimal("1.00")
 # correcting, in percentage points of the whole portfolio. Trading to an
 # exact target means every drift, however small, generates trades -- and in a
 # taxable account those trades cost real money to save a rounding error. The
-# 5 of the 5/25 rule, so that is the suggested default; 0 means correct any
-# drift at all. This is the *absolute band*, the name the prompt and the
-# report both give it.
+# 5 of the 5/25 rule. Nothing suggests it: the prompts offer a saved answer
+# and never this, so both halves are recorded here as the documented
+# convention and nowhere the user can see them. 0 means correct any drift at
+# all. This is the *absolute band*, the name the prompt and the report both
+# give it.
 # https://www.bogleheads.org/wiki/Rebalancing
 DEFAULT_REBALANCE_BAND_PCT = Decimal(5)
 
