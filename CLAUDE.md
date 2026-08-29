@@ -425,10 +425,10 @@ Trades below `MIN_TRADE_DOLLARS` are dropped as impractical.
 
 Two rules, and a class has to satisfy **both**, so the tighter of the two is what
 binds — **the 5/25 rule**. `band_pct` is the *absolute band*, in points of the whole
-portfolio; `relative_band_pct` is the *relative band*, a share of the asset class's own
-target, so it scales with the target where the absolute one does not. Those three names
-are what the prompts, the report, the saved keys and the README all say, so a change to
-one of them is a change to all five places.
+portfolio; `relative_band_pct` is the *relative band*, a percentage of the asset
+class's target, so it scales with the target where the absolute one does not. Those
+three names are what the prompts, the report, the saved keys and the README all say,
+so a change to one of them is a change to all five places.
 
 Neither alone works for all three classes. Five points is a quarter of a 20% bond
 sleeve and far too loose for a 5% one — five points below a 5% target is *zero bonds*,
@@ -454,7 +454,7 @@ back to `DEFAULT_REBALANCE_BAND_PCT` / `DEFAULT_REBALANCE_RELATIVE_BAND_PCT`, wh
 meant the whole of step 2 could be walked past with two keystrokes. The band is the
 one setting here that decides whether the program does anything at all, 5 and 25 are
 a convention rather than a recommendation this program is in a position to make, and a
-number the user never chose reads back in the report's "Rebalancing band" section as
+number the user never chose reads back in the report's "Rebalancing Bands" section as
 their own policy. The constants stay in `config.py` as the documented convention and
 the README still names the 5/25 rule -- what is gone is the program answering on the
 user's behalf. `TestRebalanceBandPrompts` pins both halves of that: no suggested
@@ -467,17 +467,17 @@ returning anything, which is what "required" means here.
 **The relative half is one of the two questions in the flow that get explained before
 they are asked** (the other is the three fund slots — see `prompts.FUND_EXPLANATION`).
 Everything else is asked bare and explained where its effect is visible, in the
-report. That does not work here: "or by more than this share of its own target"
+report. That does not work here: "or by more than this percentage of its target"
 reads as an alternative when it is a second, tighter limit, and the reason the rule
 exists — five points of drift is the whole of a 5% bond sleeve — is invisible from the
 prompt. So `prompts.BAND_EXPLANATION` states the policy above the pair, worded the way
-one is written in an investment policy statement — an asset class "deviates from its
-target" by more than "the lesser of" two bands. That one sentence carries all the
+one is written in an investment policy statement — an asset class "drifts from its
+target" by more than "the smaller of" two bands. That one sentence carries all the
 semantics, which leaves each question below naming only its own unit (`pts` against
 `%`) — the part that was actually ambiguous. It stays one sentence: drafts that also
 named the 5/25 rule, said what the relative band is for and noted that zero turns the
 band off were all cut back to what a reader needs in order to answer the two questions.
-The report's "Rebalancing band" section is where the band's effect is visible, and it
+The report's "Rebalancing Bands" section is where the band's effect is visible, and it
 writes the resulting ranges out per class. The questions are "Absolute
 band" and "Relative band": the industry's own names for the two halves, and the words
 `rebalance_band_pct` and `rebalance_relative_band_pct` are already named after, so the
@@ -486,7 +486,7 @@ holds this.
 
 The vocabulary throughout is the Bogleheads wiki's and Larry Swedroe's, because that
 is where a reader checking the defaults ends up: "rebalancing band", "asset class", an
-asset class that "deviates" from its target, and the pair of numbers as **the 5/25
+asset class that "drifts from" its target, and the pair of numbers as **the 5/25
 rule** — absolute 5, relative 25. The rule is named in `config.py`, the README and this
 file rather than in the prompt itself. Where the two traditions disagree, precision
 wins: Bogleheads writes the absolute half as "5%", which is 5 percentage *points*, so
@@ -494,12 +494,12 @@ the prompt's unit stays `pts`.
 
 Because each class now has its own band, nothing user-facing may name a single number
 for it. `report._describe_band` writes the three ranges out; `_describe_band_extent`
-is the one place that decides between "your band of plus or minus X percentage points"
+is the one place that decides between "the band of plus or minus X percentage points"
 (absolute only) and "its rebalancing band" (both rules), and the comparison table's
 footnote and the no-trades line both go through it.
 
 **The no-trades line has to survive being read against the starred rows above it.**
-Nothing to trade and a class still outside its band is neither "already matches your
+Nothing to trade and a class still outside its band is neither "already matches the
 target allocation" nor "every asset class is within its band" — it is what the accounts
 can hold that stopped it, so a third line says so. It reads `within_band` off
 `summary.categories` rather than anything the solver reports: the summary describes the
@@ -509,9 +509,30 @@ construction even where `_capacity_warnings` has nothing it can truthfully say.
 ### VT allocation (`vt_allocation.py`)
 
 Source chain, tried in freshness order: monthly JSON endpoint → quarterly fact-sheet
-PDF (separate host, outside the interactive site's bot protection) → last cached
+PDF (separate host, outside the interactive site's bot protection) → last saved
 value → manual entry. **It never guesses silently.** `FALLBACK_VT_US_PCT` is only
 ever a *suggested default* in the manual prompt.
+
+The word on screen is **saved**, never "cached": the value came out of the user's own
+config file, which is the same file the accounts and the band come from, and one word
+for it means one thing to learn. `source="cache"` stays as the internal identifier,
+the same split `Trade` versus "order" keeps.
+
+**The fund is spelled out the first time a run names it and abbreviated after** --
+"Looking up Vanguard Total World Stock ETF's (VT) current U.S. and international stock
+allocation...", then "VT's" everywhere below. `VT_FUND_NAME` and `VT_TICKER` are the
+constants; the *rule* lives in `resolve_vt_allocation`'s `vt_possessive`, a two-line
+closure, because which line speaks first depends on which source answers: `--offline`
+never prints the lookup line at all, and the manual prompt is then the first thing to
+name the fund. Baking the long form into one message would leave the other paths
+saying "VT" with nothing having said what it stands for.
+`test_the_fund_is_spelled_out_once_however_the_run_reaches_it` holds it.
+
+**Both halves of the split are named, in prose.** "Found 62% U.S. stocks and 38%
+international stocks (as of July 31, 2026)." -- not "62% U.S. / 38% international",
+and not the U.S. share alone with the remainder left as an exercise. The confirmation
+below it is "Use these values?", plural, because two values are on screen; see the
+confirmation rule under "Output structure".
 
 The fund page's HTML is deliberately not scraped — client-side rendered behind bot
 protection. Don't "improve" this by adding a scraper.
@@ -567,6 +588,14 @@ within either, and below that nesting is position alone — an account is a plai
 indented, with its contents one level deeper. Resist adding a third rule style; that
 was tried and reverted. `format_result_header` is not a third style: same rule, same
 width, just no step number.
+
+**Every `-` subheading is Title Case; everything else is a sentence.** "Stock and
+Bond Allocation", "Rebalancing Bands", "Account Holdings", "Current vs. Target
+Allocation", "Orders to Place", "Saved Accounts", "Add Accounts", "Save Portfolio" —
+the `=` banners above them are upper-cased by `format_section_header` anyway, and
+everything below them is prose. A subheading names a thing rather than saying
+something, which is what the casing marks. Short prepositions and conjunctions stay
+lowercase ("and", "to", "vs."), the way a title is set anywhere else.
 
 **Two widths, both following the terminal.** `formatting.prose_width()` is
 `min(terminal - 2, PROSE_MAX_WIDTH)`; `formatting.table_width()` is `terminal - 2` with
@@ -640,13 +669,13 @@ loses them is a regression:
   appear throughout the prompts and the README.
 - **Nothing is called a "recommendation" and no order is phrased as an instruction.**
   "Recommendation" is a term of art under Reg BI and FINRA Rule 2111. Hence "Orders to
-  place" and "Review each order before placing it:" rather than "Recommended trades"
+  Place" and "Review each order before placing it:" rather than "Recommended trades"
   and "Place the following orders:". The disclaimer's "not a recommendation to buy or
   sell any security" is the explicit denial that goes with the avoidance.
 
 - **"Order" and "trade" are not synonyms — use the industry split.** An *order* is the
   instruction you submit to a broker; a *trade* is the transaction that results, and
-  the activity in general. So: "Orders to place", "Review each order before placing
+  the activity in general. So: "Orders to Place", "Review each order before placing
   it", "before placing these orders", "the above orders do not reach the target",
   "once these orders are filled" — all instructions. And: "no trades needed", "the
   trades needed to rebalance", "taxable trade volume" — all activity or outcome. The
@@ -654,7 +683,7 @@ loses them is a regression:
   and live with its result.
 
   Note that "not yet submitted" does **not** make something a third kind of thing.
-  Everything under "Orders to place" is an order that has not been placed, so a
+  Everything under "Orders to Place" is an order that has not been placed, so a
   sub-minimum one that was dropped is simply an order missing from the list — "One
   order smaller than $1.00 was left out", not "one move". A third noun for the same
   object is a vocabulary the reader has to learn for no gain. It does force "so the
@@ -686,15 +715,26 @@ loses them is a regression:
   wording must neither skip the disclosure nor imply the solver costed it. Only the
   sale leg triggers it; a taxable buy realizes nothing.
 - **The landing allocation is conditional on the orders filling.** "If these orders
-  fill at the values you entered, your portfolio will hold ...", not "After these
+  fill at the values entered here, the portfolio will hold ...", not "After these
   trades": an order fills at the market's price on the day, not at the figure typed
   into the prompts, so the number is arithmetic rather than a promise. It is a full
   sentence, naming each class in the words the rest of the report uses ("U.S. stocks",
   "international stocks", "bonds") rather than a slash-separated fragment.
-- **"Tax-free" is qualified once**, under "Your accounts", because Roth and HSA
-  withdrawals are tax-free only when qualified. One line: naming the age,
-  holding-period and medical-expense conditions is the reader's plan documents' job,
-  not a rebalancer's.
+- **The output does not address the reader's holdings in the second person.** Not
+  "your portfolio", "your accounts", "your target" or "the funds you hold" — "the
+  portfolio", "these accounts", "the target", "the funds held". It reads as a statement about the
+  portfolio in front of you rather than a claim about you, and it is one voice across
+  the report, the prompts and the solver's warnings, which were written at different
+  times and had drifted apart. **Two sentences are exempt, and both are fixed
+  formulas**: `DISCLAIMER`'s "Consult a professional about your situation", and the
+  wash-sale warning's "in any account you control", which is the scope section 1091
+  itself sets. Reworking either to dodge a pronoun is a worse trade than the pronoun.
+  The README follows the same rule where it describes what the program prints; its own
+  documentation voice ("puts the CLI on your PATH") is unaffected.
+- **The tax-treatment labels are not glossed.** "Tax-free" used to carry a line under
+  the accounts saying it meant qualified withdrawals only. It is standard shorthand,
+  the conditions on it are the reader's plan documents' job, and the report states what
+  each account is and stops.
 - **A prompt that classifies tax treatment says when the tax is paid, accurately.**
   The "Other" account's three choices are the only place the program explains the
   distinction, and they had said gains in a taxable account are taxed "every year".
@@ -708,8 +748,9 @@ loses them is a regression:
   no other unprompted commentary on its own reasoning.
   `test_the_asset_location_note_is_not_said_during_onboarding` holds the line.
 - **Figures carry their provenance** -- "Values as entered, not live market prices.",
-  plus "Last saved <date>." as its own sentence when they came from a config file. The
-  numbers are the user's, and can be stale.
+  plus "Last saved July 31, 2026." as its own sentence when they came from a config
+  file. The numbers are the user's, and can be stale. The date is written out in full
+  like every other date the program prints; see `formatting.format_date`.
 - **Dropped sub-minimum moves are disclosed**, so trades that do not reach the target
   exactly are explained rather than looking like an arithmetic error. The count is
   spelled out through nine (`report._count`): the sentence opens on it, and "1 order
@@ -729,24 +770,83 @@ let a `say_wrapped` conversion silently drop a line four columns out from its ow
 siblings. Every level steps by exactly one `INDENT_UNIT`.
 `TestIndentation` pins the report's depths.
 
-**Percentages follow two rules, one per side of the program.** The report fixes every
-percentage at **one decimal place** -- whole numbers included, because "20% bonds" two
-lines under "20.0%" is exactly the inconsistency the rule exists to stop. Prompts and
-echoed-back values do the opposite and **trim trailing zeros** via
-`formatting.format_percent`, so a default reads the way someone would type it and one
-prompt never offers `[80]` while the next offers `[62.0]`. `prompt_percent` is the
+**A number carries the precision its neighbours need, and nothing more.** Two rules,
+both in `formatting`, and the difference between them is whether the figure has a
+column to line up with:
+
+- **In prose, every value is written as short as it goes** — `format_percent_prose`,
+  which is `format_percent_at(v, percent_places([v]))`. "Derived from 80% stocks and
+  20% bonds", "VT's 62% U.S. allocation". A sentence has nothing to align to, and
+  "20.0%" in one is a precision the figure does not have. This *replaced* a rule
+  fixing every percentage in the report at one decimal place; the argument for that
+  one was that "20% bonds" two lines under "20.0%" reads as an inconsistency, and the
+  answer is that the two are in different places doing different jobs.
+- **In a table, every value of one unit shares one precision** — `format_percents`,
+  which is `percent_places` over the whole set and then each value at that. The
+  comparison table's current and target shares are one unit and are read against each
+  other across the row, so they share; its drift column is percentage *points* and
+  gets its own. The three band ranges share all six of their edges. A column holding
+  62.5 writes its 38 as "38.0", because the point of a column is to be read down the
+  page.
+
+`PERCENT_MAX_PLACES` is 1 and `round_percent` applies it before anything measures a
+value, so a non-terminating division is measured on what will be printed rather than
+on its 28 significant digits. It rounds **half-even**, which is the decimal context's
+own default and therefore exactly what `f"{value:.1f}"` did here before any of this: a
+band edge of 6.25% has always printed as 6.2%, and a rounding rule is not something to
+change as a side effect of a formatting change.
+
+`formatting.format_percent` is untouched and still **trims trailing zeros** for
+prompts and echoed-back values, so a default reads the way someone would type it and
+one prompt never offers `[80]` while the next offers `[62.0]`. `prompt_percent` is the
 single door for asking one: it owns the 0-100 bounds, the `(%)` suffix, and the default
 formatting.
 
-**A set of percentages that must sum to 100 is asked for one short, and the last one
-is stated and confirmed.** `prompt_stock_bond_allocation` asks for stock and says
-"That leaves 20% bonds. Correct?"; `_prompt_target_date_allocation` asks for two
-sleeves and derives the third. Questions for every member of the set outnumber the
-degrees of freedom, which invites an answer that cannot be honored and turns a typo
-into a form the user has to re-fill. A denial restarts from the *first* question,
-because the number they want to change is one they typed — the derived one is not
-theirs to edit — and the only remaining way to be wrong is for the entered values to
-exceed 100 outright, which the target-date prompt rejects in place.
+**Dollars always carry cents, and a money column is aligned on them.** The comparison
+table's dollars and the share in parentheses beside them are *two* columns, not one
+cell: aligned as a single string, a five-figure amount next to a six-figure one lines
+up on whatever trails it and the cents wander, which is what `$1,289.17 (1.2%)` under
+`$40,187.16 (37.5%)` used to do. Each of the four is sized to its own contents -- one
+shared width across both money columns costs a character the 78-column budget does not
+have. `test_the_cents_line_up_in_every_money_column` holds it.
+
+**Every date is written out in full, wherever it came from.** `formatting.format_date`
+takes an ISO date, an ISO timestamp or the fact sheet's own long form and answers
+"July 31, 2026" for all three; `vt_allocation._format_as_of` delegates to it rather
+than keeping a second copy. `describe_as_of` is the parenthetical: "as of July 31,
+2026" for a date, and the bare note for the several fields that carry one instead
+("manually entered", "manually specified via --vt-us-pct") -- "as of manually entered"
+is not a sentence, which is why the test is a parse rather than a format.
+
+**A set of percentages that must sum to 100 is asked for one short, and whatever is
+left over is stated and confirmed, in the same words the question that derived it
+used.** `prompt_stock_bond_allocation` asks for the "Target stock allocation" and says
+"That leaves a target bond allocation of 20%. Use this value?" -- one noun phrase
+across both halves, so the derived share reads as the other side of the answer rather
+than as a differently-named quantity. `_prompt_target_date_allocation` is the same
+shape one level down: it asks for "U.S. stocks" and "International stocks" and
+confirms "That leaves 1.7% bonds. Use this value?". Questions for every member of
+the set outnumber the degrees of freedom, which invites an answer that cannot be
+honored and turns a typo into a form the user has to re-fill. A denial restarts from
+the *first* question, because the number they want to change is one they typed — the
+derived one is not theirs to edit — and the only remaining way to be wrong is for the
+entered values to exceed 100 outright, which the target-date prompt rejects in place.
+
+**A question the answers so far have already settled is not asked.** 100% U.S. stocks
+leaves nothing for either of the other two sleeves, so the international question is
+skipped and both are stated together: "That leaves 0% international stocks and 0%
+bonds. Use these values?". Asking for a number that can only be zero is a question
+whose only wrong answer is one the prompt then has to reject.
+
+Both confirmations end in **a statement and then a question the user acts on**, not a
+statement and a bare "Correct?". Every other yes/no in the flow is verb-led -- "Use
+these values?", "Save this portfolio for next time?" -- and the derived share is
+arithmetic, which is correct by construction: what is actually being asked is whether
+to proceed on the number the user typed above it. `_confirm_remainder` is the one
+place that shape lives, which is also what keeps **the noun agreeing with how many
+values are actually on screen**: "Use this value?" for one, "Use these values?" for
+two. The same agreement governs the VT lookup, which shows a U.S. share and an
+international one and therefore asks for both.
 
 One consequence to know: entered target-date sleeves now sum to exactly 100, where a
 fact sheet rounding each to a tenth often does not, so a fund printed 64.0 / 34.3 /
@@ -772,7 +872,7 @@ gives it a precision it does not have.
 rest of the report only answers by implication. It is computed from the holdings
 rather than the class totals, so a trade in a target-date fund moves all three sleeves
 by their own fractions, and it is stated conditionally ("If these orders fill at the
-values you entered") for the reason in the wording section below. The disclosures that
+values entered here") for the reason in the wording section below. The disclosures that
 follow it — taxable sales, then costs — sit between it and the warnings, so everything
 qualifying the orders is in one run rather than split across the page.
 
@@ -795,6 +895,16 @@ with `\n` as a separator, and padding it would emit trailing whitespace.
 `~/.three_fund_rebalance/config.json`, versioned by `SCHEMA_VERSION`, written
 atomically (temp file + `os.replace`). Saved values are re-offered as *editable
 defaults*, never silently trusted.
+
+**The saved accounts are listed before they are asked about, and the instruction is
+said once.** Step 3 lists them vertically under "Saved Accounts" — one name per line,
+because those names are the headings the questions below arrive in and a list read
+down the page is what lets someone match one to the next — then says how to answer
+them ("For each, press Enter to use its saved value, or type a new value.") **above
+the list rather than at the head of each account**, where it said nothing the previous
+account had not already said. Each account then opens with "Keep this account?", which
+is the one way the flow drops a saved account; answering no says `Removed '<name>'.`
+and moves on. `TestSavedAccountsLine` pins the list and the single instruction.
 
 **Every way a config file can fail to load raises `PersistenceError`** — that is
 what `cli.run()` catches to warn and continue blank instead of crashing, so any
@@ -877,8 +987,8 @@ disclosure.
 
 **One line of the Example cannot come from such a run.** Passing `--vt-us-pct` to skip
 the network stamps the provenance line "manually specified via --vt-us-pct"
-(`cli.py`), where the README shows the fetched form — `_format_as_of`'s
-`%B %-d, %Y`, e.g. "(June 30, 2026)". The README deliberately shows the fetch path,
+(`cli.py`), where the README shows the fetched form — `formatting.describe_as_of` on a
+real date, e.g. "(as of June 30, 2026)". The README deliberately shows the fetch path,
 because that is what a reader running the CLI normally will see. Substitute that one
 line by hand and leave the other seventy-odd exactly as printed.
 
@@ -979,10 +1089,13 @@ between the VT allocation and the first "Add an account?", and existing flows pa
 
 Two shapes to know when writing one. A stock/bond target is `"80", "y"` — the stock
 share and then the confirmation of the derived bond share — and a target-date
-allocation is `"60", "20", "y"` for the same reason. An account holding individual
-funds is a name and a value per asset class with no yes/no between them, in the order
-`_INDIVIDUAL_SLOT_PROMPTS` lists; the update path asks the same questions with the
-saved ticker and value as defaults, so `""` twice keeps a holding exactly as it was.
+allocation is `"60", "20", "y"` for the same reason. (`"100", "y"` is the third: a
+first answer of 100 settles both remaining sleeves, so the second question is never
+asked.) An account holding individual funds is a name and a value per asset class with
+no yes/no between them, in the order `_INDIVIDUAL_SLOT_PROMPTS` lists; the update path
+asks the same questions with the saved ticker and value as defaults, so `""` twice
+keeps a holding exactly as it was — behind a leading `"y"` for "Keep this account?",
+which every saved account starts with.
 
 `compute_trades`'s `band_pct` defaults to `Decimal(0)`, which is the exact target and
 therefore the pre-band behavior — solver tests that aren't about the band say nothing

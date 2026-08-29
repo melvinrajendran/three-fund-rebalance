@@ -27,7 +27,6 @@ from __future__ import annotations
 import io
 import re
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 import requests
@@ -35,6 +34,7 @@ from pypdf import PdfReader
 
 from three_fund_rebalance import __version__
 from three_fund_rebalance.config import VT_DIVERSIFICATION_API_URL, VT_FACT_SHEET_URL
+from three_fund_rebalance.formatting import format_date
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
 _USER_AGENT = f"three-fund-rebalance/{__version__}"
@@ -96,11 +96,10 @@ def _extract_us_pct_and_as_of(text: str) -> tuple[Decimal, str]:
 def _format_as_of(raw: str) -> str:
     """Render the API's ISO timestamp the same way the fact sheet spells its
     date ("July 31, 2026"), so the two sources read identically to the user.
-    Falls back to the raw string if the format ever changes."""
-    try:
-        return datetime.fromisoformat(raw).strftime("%B %-d, %Y")
-    except (ValueError, TypeError):
-        return raw or "unknown date"
+    One spelling for every date the program prints, so this is the shared
+    formatter rather than a second one; it falls back to the raw string if
+    the format ever changes."""
+    return format_date(raw)
 
 
 def _extract_us_pct_from_diversification(payload: dict) -> tuple[Decimal, str]:

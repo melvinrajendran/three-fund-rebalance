@@ -60,6 +60,14 @@ DEFAULT_REBALANCE_RELATIVE_BAND_PCT = Decimal(25)
 # VT (Vanguard Total World Stock ETF) US / ex-US allocation
 # ---------------------------------------------------------------------------
 
+# What the fund is called on screen. Spelled out in full the first time a
+# run mentions it and by its ticker after that: "VT" is what a reader will
+# see at their broker, but it is not a word until something has said what it
+# stands for. prompts.resolve_vt_allocation owns that first-mention rule,
+# because which line speaks first depends on which source answers.
+VT_FUND_NAME = "Vanguard Total World Stock ETF"
+VT_TICKER = "VT"
+
 # Primary source: the JSON endpoint backing the fund profile page's country
 # diversification table. It is refreshed monthly, so it leads the quarterly
 # fact sheet by up to three months (e.g. 62.0% as of 2026-07-31 versus 61.9%

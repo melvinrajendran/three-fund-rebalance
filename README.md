@@ -14,34 +14,34 @@ sell.** Consult a professional about your situation, and see the CLI's
 
 ## Example
 
-Three accounts, a target of 80% stocks / 20% bonds, and a rebalancing band of
-5 percentage points or 25% of an asset class's own target, whichever is
+Three accounts, a target of 80% stocks and 20% bonds, and a rebalancing band
+of 5 percentage points or 25% of an asset class's target, whichever is
 tighter:
 
 ```
-Target asset allocation
+Target Asset Allocation
 -----------------------
-  U.S. stocks            49.6%
-  International stocks   30.4%
-  Bonds                  20.0%
+  U.S. stocks           49.6%
+  International stocks  30.4%
+  Bonds                 20.0%
 
-  From 80.0% stocks / 20.0% bonds, where stocks are split on VT's 62.0% U.S.
-  allocation (June 30, 2026).
+  Derived from 80% stocks and 20% bonds, with stocks split based on VT's 62%
+  U.S. allocation (as of June 30, 2026).
 
-Rebalancing band
-----------------
-Plus or minus 5.0 percentage points, or 25.0% of an asset class's own target,
+Rebalancing Bands
+-----------------
+Plus or minus 5 percentage points, or 25% of an asset class's target,
 whichever is tighter:
 
   U.S. stocks           44.6% to 54.6%
   International stocks  25.4% to 35.4%
   Bonds                 15.0% to 25.0%
 
-No trades while every asset class is inside its band; once one falls outside,
-all three go back to target.
+No trades while every asset class stays within its band. If any asset class
+drifts outside its band, all three are rebalanced back to target.
 
-Your accounts
--------------
+Account Holdings
+----------------
 
   Vanguard Brokerage (Brokerage, taxable)
     VTI (U.S. stock fund)            $60,000.00
@@ -61,9 +61,7 @@ Your accounts
     BND (bond fund)                  $10,000.00
     Total                            $40,000.00
 
-"Tax-free" means qualified withdrawals only; Roth and HSA rules apply.
-
-Current vs. target allocation
+Current vs. Target Allocation
 -----------------------------
 Total portfolio value: $150,000.00
   Values as entered, not live market prices.
@@ -71,11 +69,11 @@ Total portfolio value: $150,000.00
                                     Current              Target  Drift (pts)
   U.S. stocks           $110,000.00 (73.3%)  $74,400.00 (49.6%)        +23.7 *
   International stocks   $30,000.00 (20.0%)  $45,600.00 (30.4%)        -10.4 *
-  Bonds                   $10,000.00 (6.7%)  $30,000.00 (20.0%)        -13.3 *
+  Bonds                  $10,000.00  (6.7%)  $30,000.00 (20.0%)        -13.3 *
 
   * outside its rebalancing band
 
-Orders to place
+Orders to Place
 ---------------
 Review each order before placing it:
 
@@ -87,8 +85,8 @@ Review each order before placing it:
     Buy $10,000.00 of VXUS
     Buy $20,000.00 of BND
 
-If these orders fill at the values you entered, your portfolio will hold 49.6%
-U.S. stocks, 30.4% international stocks, and 20.0% bonds.
+If these orders fill at the values entered here, the portfolio will hold 49.6%
+U.S. stocks, 30.4% international stocks, and 20% bonds.
 
 Not investment, tax, or legal advice, and not a recommendation to buy or sell.
 Consult a professional about your situation.
@@ -123,7 +121,7 @@ No uv? `brew install uv` on macOS, or elsewhere:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Your saved portfolio lives outside the installation at
+The saved portfolio lives outside the installation at
 `~/.three_fund_rebalance/config.json`, so updating -- or uninstalling -- never
 touches it. Files written by older versions are upgraded in place on the next
 save.
@@ -134,17 +132,17 @@ save.
 three-fund-rebalance
 ```
 
-Three numbered steps -- your target asset allocation, when to rebalance, your
-account holdings -- then the summary above. Run it again and your saved
-accounts come back with their last values pre-filled: press Enter to keep one
-or type a new one.
+Three numbered steps -- the target asset allocation, when to rebalance, the
+account holdings -- then the summary above. Run it again and every saved
+account comes back with its last values pre-filled: press Enter to keep one or
+type a new one.
 
 | Flag | Effect |
 | --- | --- |
 | `--config PATH` | Portfolio file to read and write (default `~/.three_fund_rebalance/config.json`) |
-| `--fresh` | Ignore your saved portfolio and start blank |
+| `--fresh` | Ignore the saved portfolio and start blank |
 | `--no-save` | Don't offer to save this run's answers |
-| `--offline` | Skip the live VT fetch; use the cached or a manually entered value instead |
+| `--offline` | Skip the live VT fetch; use the saved or a manually entered value instead |
 | `--vt-us-pct PCT` | Set VT's U.S. stock allocation % directly, skipping the lookup and the prompt |
 | `--version` | Print the installed version and exit |
 
@@ -155,13 +153,14 @@ be worth, then decides which accounts hold it.
 
 **Rebalancing bands.** You set two -- and an asset class has to satisfy both,
 so the tighter binds: the *absolute band*, in percentage points of the
-portfolio, and the *relative band*, as a share of the asset class's own
+portfolio, and the *relative band*, as a percentage of the asset class's
 target. Zero on either tolerates no drift. Both are asked outright with no
 suggested answer; 5 and 25 -- the 5/25 rule -- is the usual convention.
 
 **A band is a trigger, not a destination.** No trades while every asset class
-is inside its band; once one falls outside, all three go back to target. Cash
-is invested first, and the band is judged on what it leaves behind.
+stays within its band; if any drifts outside, all three are rebalanced back to
+target. Cash is invested first, and the band is judged on what it leaves
+behind.
 
 **Asset location.** Bonds fill tax-advantaged accounts first, tax-deferred
 before tax-free, since their interest is taxed yearly as ordinary income.
@@ -187,10 +186,10 @@ without selling anything in a taxable account.
 rebalance only reallocates within it, including investing its cash. Orders
 smaller than $1.00 are left out as impractical.
 
-**VT's U.S./international split** comes from Vanguard's monthly JSON endpoint,
-falling back to the quarterly fact sheet PDF, then your last cached value,
-then manual entry -- which points you at VT's fund page to read the number
-off yourself. It never guesses silently.
+**The U.S. and international split** comes from the Vanguard Total World Stock
+ETF (VT): Vanguard's monthly JSON endpoint, falling back to the quarterly fact
+sheet PDF, then the last saved value, then manual entry, which points you at
+VT's fund page to read the number off yourself. It never guesses silently.
 
 ## Limitations
 
@@ -202,20 +201,20 @@ gains or losses this tool never sees.
 A plan with a restricted fund lineup -- a 401(k) with no international option,
 say -- may be given an order it cannot fill.
 
-**A target your funds cannot reach is approximated, not refused.** A
+**A target the funds cannot reach is approximated, not refused.** A
 target-date fund holds a fixed mix, so its bond sleeve still counts against a
 0% bond target and no order can sell it on its own. The plan gets as close as
-your accounts allow, and says which asset class fell short and by how much.
+the accounts allow, and says which asset class fell short and by how much.
 
 **No costs.** Amounts exclude commissions, fees, bid-ask spreads and
 short-term redemption fees, and it does not know your broker's fund minimums
-or trading restrictions. Prices move between the values you type and the
-price an order fills at.
+or trading restrictions. Prices move between the values entered and the price
+an order fills at.
 
 **The wash-sale check is a warning, not a guarantee.** It matches funds by
-the name you type, so two share classes of one index (VTI and VTSAX) are not
+the name entered, so two share classes of one index (VTI and VTSAX) are not
 recognized as the same security even though the IRS may treat them as
-substantially identical. Check your lots before placing the orders.
+substantially identical. Check the lots before placing the orders.
 
 **Preferring international in taxable is a rule of thumb.** The credit is
 worth a couple of basis points and is partly offset by those funds' higher,
@@ -233,7 +232,7 @@ periods, early-withdrawal penalties, or what a given account can actually
 hold -- a 401(k)'s fixed fund menu, for instance.
 
 **VT's allocation may be stale**, or the fetch may fail and fall back to a
-cached or manually entered value.
+saved or manually entered value.
 
 ## Development
 

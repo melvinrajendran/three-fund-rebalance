@@ -15,10 +15,13 @@ harder to read as it gets wider, and a table of dollar figures does not.
 Amounts are right-aligned in their columns, because the whole point of
 putting them in rows is to compare them down the page.
 
-Every percentage here is shown to exactly one decimal place, and a distance
-between two percentages is called "percentage points" -- abbreviated "pts"
-only in the comparison table's header, where the column cannot take the words.
-Prompts do the opposite and trim trailing zeros; see formatting.format_percent.
+A percentage in running prose carries only the precision it needs ("20%",
+"62.5%"); a percentage in a table is written at the precision its whole
+column needs, so the figures line up on the decimal point. Dollar amounts
+always carry cents, and their columns are aligned on those cents rather than
+on whatever trails them. A distance between two percentages is called
+"percentage points" -- abbreviated "pts" only in the comparison table's
+header, where the column cannot take the words. See formatting.percent_places.
 
 Trades are grouped by account, with a buy/sell pair within one account
 collapsed into a single "exchange" line where that reads more naturally (the
@@ -41,7 +44,11 @@ from three_fund_rebalance.formatting import (
     ASSET_CLASS_LABELS,
     INDENT_UNIT,
     TAX_TREATMENT_LABELS,
+    describe_as_of,
     format_account_heading,
+    format_date,
+    format_percent_prose,
+    format_percents,
     format_subheading,
     wrap,
 )
@@ -261,19 +268,23 @@ def allocation_after_trades(accounts: list[Account], trades: list[Trade]) -> dic
 def _describe_target(inputs: RebalanceInputs) -> list[str]:
     target = inputs.target
     width = max(len(label) for label in _CATEGORY_LABELS)
-    lines = _subheading("Target asset allocation")
-    percentages = (target.us_stock_pct, target.international_stock_pct, target.bond_pct)
-    for label, pct in zip(_CATEGORY_LABELS, percentages, strict=True):
-        lines.append(f"{INDENT_UNIT}{label:<{width}}  {pct:>5.1f}%")
+    lines = _subheading("Target Asset Allocation")
+    cells = format_percents(
+        [target.us_stock_pct, target.international_stock_pct, target.bond_pct]
+    )
+    pct_width = max(len(cell) for cell in cells)
+    for label, cell in zip(_CATEGORY_LABELS, cells, strict=True):
+        lines.append(f"{INDENT_UNIT}{label:<{width}}  {cell:>{pct_width}}%")
     lines.append("")
     lines.append(
         wrap(
-            # "where stocks are" is not padding: without a subject, "split on
-            # VT's 61.9% U.S. allocation" attaches to the whole 95/5 line
-            # above it, which says VT decides the bond share too.
-            f"From {inputs.stock_pct:.1f}% stocks / {inputs.bond_pct:.1f}% bonds, where "
-            f"stocks are split on VT's {inputs.vt.us_pct:.1f}% U.S. allocation "
-            f"({inputs.vt.as_of}).",
+            # "with stocks split" is not padding: without a subject, "split
+            # based on VT's 62% U.S. allocation" attaches to the whole 95/5
+            # line above it, which says VT decides the bond share too.
+            f"Derived from {format_percent_prose(inputs.stock_pct)}% stocks and "
+            f"{format_percent_prose(inputs.bond_pct)}% bonds, with stocks split based on "
+            f"VT's {format_percent_prose(inputs.vt.us_pct)}% U.S. allocation "
+            f"({describe_as_of(inputs.vt.as_of)}).",
             indent=INDENT_UNIT,
         )
     )
@@ -286,8 +297,8 @@ def _describe_target(inputs: RebalanceInputs) -> list[str]:
 #: band can be under target as easily as over, and correcting it means
 #: buying.
 _BAND_RULE = (
-    "No trades while every asset class is inside its band; once one falls outside, all "
-    "three go back to target."
+    "No trades while every asset class stays within its band. If any asset class drifts "
+    "outside its band, all three are rebalanced back to target."
 )
 
 
@@ -302,7 +313,10 @@ def _describe_band_extent(inputs: RebalanceInputs) -> str:
     absolute half is the whole of it; otherwise each class has its own, and
     the "Rebalancing band" section is where they are written out."""
     if inputs.relative_band_pct is None:
-        return f"your band of plus or minus {inputs.band_pct:.1f} percentage points"
+        return (
+            "the band of plus or minus "
+            f"{format_percent_prose(inputs.band_pct)} percentage points"
+        )
     return "its rebalancing band"
 
 
@@ -323,13 +337,18 @@ def _band_ranges(inputs: RebalanceInputs) -> list[tuple[str, Decimal, Decimal]]:
 
 
 def _describe_band(inputs: RebalanceInputs) -> list[str]:
-    lines = _subheading("Rebalancing band")
+    lines = _subheading("Rebalancing Bands")
     if inputs.band_pct == 0 or inputs.relative_band_pct == 0:
         lines.append("Off -- every asset class is traded back to its exact target.")
         return lines
 
     if inputs.relative_band_pct is None:
-        lines.append(wrap(f"Plus or minus {inputs.band_pct:.1f} percentage points. {_BAND_RULE}"))
+        lines.append(
+            wrap(
+                f"Plus or minus {format_percent_prose(inputs.band_pct)} percentage points. "
+                f"{_BAND_RULE}"
+            )
+        )
         return lines
 
     # Two rules meeting at whichever is tighter give each class a different
@@ -337,15 +356,22 @@ def _describe_band(inputs: RebalanceInputs) -> list[str]:
     # should not have to work out that 25% of a 5% target is 1.2 points.
     lines.append(
         wrap(
-            f"Plus or minus {inputs.band_pct:.1f} percentage points, or "
-            f"{inputs.relative_band_pct:.1f}% of an asset class's own target, whichever is "
-            "tighter:"
+            f"Plus or minus {format_percent_prose(inputs.band_pct)} percentage points, or "
+            f"{format_percent_prose(inputs.relative_band_pct)}% of an asset class's target, "
+            "whichever is tighter:"
         )
     )
     lines.append("")
     ranges = _band_ranges(inputs)
     label_w = max(len(label) for label, _, _ in ranges)
-    cells = [(label, f"{low:.1f}%", f"{high:.1f}%") for label, low, high in ranges]
+    # Every figure in the table is a share of the portfolio, so all six are
+    # written at one precision -- the two columns line up with each other as
+    # well as down the page.
+    edges = format_percents([edge for _, low, high in ranges for edge in (low, high)])
+    cells = [
+        (label, f"{edges[i * 2]}%", f"{edges[i * 2 + 1]}%")
+        for i, (label, _, _) in enumerate(ranges)
+    ]
     low_w = max(len(low) for _, low, _ in cells)
     high_w = max(len(high) for _, _, high in cells)
     for label, low, high in cells:
@@ -356,7 +382,7 @@ def _describe_band(inputs: RebalanceInputs) -> list[str]:
 
 
 def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
-    lines = _subheading("Your accounts")
+    lines = _subheading("Account Holdings")
     for account in inputs.accounts:
         # Every account reads `nickname (type, treatment)`, with no exceptions
         # -- one line shaped like the next is what lets the eye compare them
@@ -392,56 +418,65 @@ def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
         for label, amount in rows:
             lines.append(f"{body_indent}{label:<{label_width}}  {amount:>{amount_width}}")
 
-    # Roth and HSA withdrawals are tax-free only when qualified. The label is
-    # standard shorthand and the column is tight, so it is qualified here.
-    if any(a.tax_treatment == TaxTreatment.TAX_FREE for a in inputs.accounts):
-        lines.append("")
-        lines.append(
-            wrap('"Tax-free" means qualified withdrawals only; Roth and HSA rules apply.')
-        )
     return lines
 
 
 def _describe_comparison(inputs: RebalanceInputs, summary: AllocationSummary) -> list[str]:
-    lines = _subheading("Current vs. target allocation")
+    lines = _subheading("Current vs. Target Allocation")
     total = f"Total portfolio value: {_money(summary.total_value)}"
     if summary.available_cash > 0:
         total += f" (includes {_money(summary.available_cash)} of cash to invest)"
     lines.append(wrap(total))
     provenance = "Values as entered, not live market prices."
     if inputs.values_as_of:
-        provenance += f" Last saved {inputs.values_as_of}."
+        provenance += f" Last saved {format_date(inputs.values_as_of)}."
     lines.append(wrap(provenance, indent=INDENT_UNIT))
     lines.append("")
 
     banded = _band_is_on(inputs)
     drift_header = "Drift (pts)"
+    # Every share of the portfolio in this table is written at one precision,
+    # current and target alike -- they are the same unit and are read against
+    # each other across the row. The drift column is a different unit and
+    # gets its own.
+    shares = format_percents(
+        [pct for cat in summary.categories for pct in (cat.current_pct, cat.target_pct)]
+    )
+    drifts = format_percents([cat.drift_pct for cat in summary.categories], signed=True)
     rows = [
         (
             cat.label,
-            f"{_money(cat.current_amount)} ({cat.current_pct:.1f}%)",
-            f"{_money(cat.target_amount)} ({cat.target_pct:.1f}%)",
-            f"{cat.drift_pct:+.1f}",
+            _money(cat.current_amount),
+            f"({shares[i * 2]}%)",
+            _money(cat.target_amount),
+            f"({shares[i * 2 + 1]}%)",
+            drifts[i],
             "" if not banded or cat.within_band else " *",
         )
-        for cat in summary.categories
+        for i, cat in enumerate(summary.categories)
     ]
 
+    # The dollars and the share in parentheses are two columns, not one cell:
+    # aligned as one string, a five-figure amount beside a six-figure one
+    # lines up on whatever trails it and the cents wander. Each of the four
+    # is sized to its own contents, so the table stays as narrow as it can.
     label_w = max(len(row[0]) for row in rows)
-    current_w = max(len(row[1]) for row in rows + [("", "Current", "", "", "")])
-    target_w = max(len(row[2]) for row in rows + [("", "", "Target", "", "")])
-    drift_w = max(len(row[3]) for row in rows + [("", "", "", drift_header, "")])
+    widths = [max(len(row[i]) for row in rows) for i in (1, 2, 3, 4)]
+    current_w, current_pct_w, target_w, target_pct_w = widths
+    drift_w = max(len(row[5]) for row in rows + [("", "", "", "", "", drift_header, "")])
 
     lines.append(
-        f"{INDENT_UNIT}{'':<{label_w}}  {'Current':>{current_w}}  "
-        f"{'Target':>{target_w}}  {drift_header:>{drift_w}}"
+        f"{INDENT_UNIT}{'':<{label_w}}  {'Current':>{current_w + 1 + current_pct_w}}  "
+        f"{'Target':>{target_w + 1 + target_pct_w}}  {drift_header:>{drift_w}}"
     )
-    for label, current, target, drift, marker in rows:
+    for label, current, current_pct, target, target_pct, drift, marker in rows:
         lines.append(
-            f"{INDENT_UNIT}{label:<{label_w}}  {current:>{current_w}}  "
-            f"{target:>{target_w}}  {drift:>{drift_w}}{marker}"
+            f"{INDENT_UNIT}{label:<{label_w}}  "
+            f"{current:>{current_w}} {current_pct:>{current_pct_w}}  "
+            f"{target:>{target_w}} {target_pct:>{target_pct_w}}  "
+            f"{drift:>{drift_w}}{marker}"
         )
-    if any(row[4] for row in rows):
+    if any(row[6] for row in rows):
         lines.append("")
         lines.append(f"{INDENT_UNIT}* outside {_describe_band_extent(inputs)}")
     return lines
@@ -461,15 +496,16 @@ def _describe_outcome(inputs: RebalanceInputs, trades: list[Trade]) -> list[str]
     if total <= 0:
         return []
     after = allocation_after_trades(inputs.accounts, trades)
+    shares = [after[label] / total * Decimal(100) for label in _CATEGORY_LABELS]
     parts = [
-        f"{after['U.S. stocks'] / total * 100:.1f}% U.S. stocks",
-        f"{after['International stocks'] / total * 100:.1f}% international stocks",
-        f"and {after['Bonds'] / total * 100:.1f}% bonds",
+        f"{format_percent_prose(shares[0])}% U.S. stocks",
+        f"{format_percent_prose(shares[1])}% international stocks",
+        f"and {format_percent_prose(shares[2])}% bonds",
     ]
     return [
         "",
         wrap(
-            "If these orders fill at the values you entered, your portfolio will hold "
+            "If these orders fill at the values entered here, the portfolio will hold "
             + ", ".join(parts)
             + "."
         ),
@@ -494,7 +530,7 @@ def _describe_taxable_sales(inputs: RebalanceInputs, trades: list[Trade]) -> lis
     return [
         "",
         wrap(
-            f"Selling {_money(sold)} in your taxable accounts may realize capital gains "
+            f"Selling {_money(sold)} in taxable accounts may realize capital gains "
             "or losses; no cost basis is collected here, so that tax is not estimated."
         ),
     ]
@@ -517,7 +553,7 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
     # where it is, dropped sub-minimum moves stop short, and an account
     # holding a single fund can pin a class out of reach. The outcome line
     # below is what says where the orders actually land.
-    lines.extend(_subheading("Orders to place"))
+    lines.extend(_subheading("Orders to Place"))
 
     if not result.trades:
         if not all(category.within_band for category in summary.categories):
@@ -526,8 +562,8 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
             # true of this portfolio. The starred row above says which class,
             # and a warning under the orders says why where it can.
             lines.append(
-                wrap("Your portfolio is as close to your target allocation as the funds you "
-                     "hold allow -- no trades needed.")
+                wrap("The portfolio is as close to the target allocation as the funds "
+                     "held allow -- no trades needed.")
             )
         elif _band_is_on(inputs):
             lines.append(
@@ -536,7 +572,8 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
             )
         else:
             lines.append(
-                wrap("Your portfolio already matches your target allocation -- no trades needed.")
+                wrap("The portfolio already matches the target allocation -- no trades "
+                     "needed.")
             )
     else:
         lines.append("Review each order before placing it:")

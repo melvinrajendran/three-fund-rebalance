@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import shutil
 import textwrap
+from collections.abc import Iterable
+from datetime import datetime
 from decimal import Decimal
 
 from three_fund_rebalance.models import FundType, TaxTreatment
@@ -121,10 +123,100 @@ def format_percent(value: Decimal) -> str:
 
     This is for prompts and for echoing a value back, where a fixed number of
     decimal places is noise and an inconsistent one -- [80] next to [62.0] --
-    looks like a bug. Report output does the opposite and fixes every
-    percentage at one decimal place; see report.py.
+    looks like a bug. A percentage the program computed rather than one the
+    user typed goes through `percent_places` first, which rounds it; see
+    `format_percent_at`.
     """
     return f"{value.normalize():f}"
+
+
+#: The most decimal places any percentage is ever shown to. A tenth of a
+#: point of a portfolio is already below what anyone can trade to, and the
+#: figures behind these are non-terminating divisions.
+PERCENT_MAX_PLACES = 1
+
+
+def percent_places(values: Iterable[Decimal]) -> int:
+    """How many decimal places to write a set of percentages at: the fewest
+    that still write every one of them exactly, once each is rounded to
+    PERCENT_MAX_PLACES.
+
+    Prose passes one value at a time, so each figure is written as short as
+    it can be -- "20%" rather than "20.0%". A table passes a whole column,
+    or every value sharing one unit, so the figures line up on the decimal
+    point instead: a column holding 62.5 writes its 38 as "38.0".
+    """
+    places = 0
+    for value in values:
+        rounded = round_percent(value)
+        exponent = rounded.normalize().as_tuple().exponent
+        places = max(places, min(PERCENT_MAX_PLACES, -int(exponent)))
+    return places
+
+
+def round_percent(value: Decimal) -> Decimal:
+    """A percentage at the precision it is displayed to. Rounding first is
+    what lets `percent_places` see 19.999999 as the "20" it will print.
+
+    Half-even, which is the decimal context's own default and therefore what
+    `f"{value:.1f}"` has always done here -- a band edge of 6.25% has printed
+    as 6.2% since before any of this, and a rounding rule is not the kind of
+    thing to change as a side effect of a formatting change.
+    """
+    return value.quantize(Decimal(1).scaleb(-PERCENT_MAX_PLACES))
+
+
+def format_percent_at(value: Decimal, places: int, *, signed: bool = False) -> str:
+    """One percentage at a precision `percent_places` chose. `signed` keeps
+    the leading "+" on a drift, where the direction is the point."""
+    return f"{round_percent(value):{'+' if signed else ''}.{places}f}"
+
+
+def format_percent_prose(value: Decimal) -> str:
+    """One percentage in running prose, written as short as it goes: "20%"
+    rather than "20.0%", but "62.5%" in full. Prose has no column to line up
+    with, so each figure carries only the precision it needs."""
+    return format_percent_at(value, percent_places([value]))
+
+
+def format_percents(values: list[Decimal], *, signed: bool = False) -> list[str]:
+    """A set of percentages sharing one unit in one table, all written at the
+    same precision so their decimal points line up."""
+    places = percent_places(values)
+    return [format_percent_at(value, places, signed=signed) for value in values]
+
+
+#: How every date is written out. The fact sheet's own spelling, which is
+#: also the one a reader would say out loud.
+_DATE_FORMAT = "%B %-d, %Y"
+
+
+def _parse_date(raw: str) -> datetime | None:
+    """The same date reaches the user in three spellings -- a JSON
+    timestamp, a config file's ISO date, and the fact sheet's own long form,
+    which round-trips through here unchanged -- and several of these fields
+    carry a note ("manually entered") rather than a date at all. None says it
+    was a note."""
+    for parse in (datetime.fromisoformat, lambda text: datetime.strptime(text, "%B %d, %Y")):
+        try:
+            return parse(raw)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def format_date(raw: str) -> str:
+    """A date the way it is written out in full -- "July 31, 2026". Dates are
+    read in one place, so they are spelled one way wherever they came from.
+    Anything that is not a date is passed through untouched."""
+    parsed = _parse_date(raw)
+    return parsed.strftime(_DATE_FORMAT) if parsed else (raw or "unknown date")
+
+
+def describe_as_of(raw: str) -> str:
+    """The parenthetical a figure carries its provenance in. A real date gets
+    "as of"; a note does not -- "as of manually entered" is not a sentence."""
+    return f"as of {format_date(raw)}" if _parse_date(raw) else format_date(raw)
 
 
 def format_result_header(title: str) -> str:

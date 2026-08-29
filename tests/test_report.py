@@ -186,7 +186,7 @@ class TestFormatReport:
         )
         result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
         text = format_report(inputs([on_target], target), result)
-        assert "already matches your target allocation" in text
+        assert "already matches the target allocation" in text
 
     def test_no_trades_message_when_a_class_cannot_reach_its_band(self):
         """A portfolio with nothing to trade and a class still outside its
@@ -195,8 +195,8 @@ class TestFormatReport:
         account, target = self.make_account_and_target()  # all stock, half-bond target
         result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
         text = " ".join(format_report(inputs([account], target), result).split())
-        assert "as close to your target allocation as the funds you hold allow" in text
-        assert "already matches your target allocation" not in text
+        assert "as close to the target allocation as the funds held allow" in text
+        assert "already matches the target allocation" not in text
 
     def test_trades_grouped_under_account_header(self):
         account, target = self.make_account_and_target()
@@ -237,7 +237,7 @@ class TestFormatReport:
         assert format_account_heading("Roth", "Roth IRA") in text
         # The account recap above lists every account whether it trades or
         # not, so this has to look at the trade listing specifically.
-        trade_listing = text.split("Orders to place")[1]
+        trade_listing = text.split("Orders to Place")[1]
         assert "Trad IRA" not in trade_listing
 
     def test_cash_investment_note_shown_when_present(self):
@@ -300,15 +300,15 @@ class TestReportRecap:
 
     def test_restates_the_target_allocation_and_where_it_came_from(self):
         text = self._report()
-        assert "Target asset allocation" in text
-        assert "50.0%" in text and "30.0%" in text and "20.0%" in text
+        assert "Target Asset Allocation" in text
+        assert "50%" in text and "30%" in text and "20%" in text
         # The provenance line is wrapped, so match it with the line breaks
         # collapsed rather than pinning where the wrap happens to fall.
-        assert "62.0% U.S. allocation" in " ".join(text.split())
-        assert "2026-07-31" in text
+        assert "62% U.S. allocation" in " ".join(text.split())
+        assert "July 31, 2026" in text
 
     def test_restates_the_rebalancing_band(self):
-        assert "Plus or minus 5.0 percentage points" in self._report()
+        assert "Plus or minus 5 percentage points" in self._report()
 
     def test_says_so_plainly_when_there_is_no_band(self):
         assert "exact target" in self._report(band_pct="0")
@@ -337,7 +337,7 @@ class TestReportRecap:
         )
         result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
         text = format_report(inputs(accounts, self._target(), "5"), result)
-        account_block = text.split("Your accounts")[1].split("Current vs. target")[0]
+        account_block = text.split("Account Holdings")[1].split("Current vs. Target")[0]
         assert "BND (bond fund)" in account_block
         assert "--" in account_block
         assert "$0.00" not in account_block
@@ -354,18 +354,39 @@ class TestReportRecap:
         assert len({line.index("%)") for line in rows}) == 1
         assert len({len(line.rstrip(" *")) for line in rows}) == 1
 
+    def test_the_cents_line_up_in_every_money_column(self):
+        """The dollars and the share beside them are two columns, not one
+        cell: aligned as one string, a five-figure amount next to a
+        six-figure one lines up on whatever trails it and the cents wander."""
+        accounts = self._accounts()
+        accounts[0].holdings[0] = replace(accounts[0].holdings[0], value=Decimal(100_000))
+        result = RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
+        text = format_report(inputs(accounts, self._target(), "5"), result)
+        rows = [
+            line for line in text.split("\n")
+            if line.startswith("  ") and "%)" in line and "$" in line
+        ]
+        assert len(rows) == 3
+        # The cents of both money columns fall in the same two places on
+        # every row, whatever else the row is wide enough to hold.
+        cents = [
+            tuple(line.index(".", i) for i, c in enumerate(line) if c == "$") for line in rows
+        ]
+        assert all(len(places) == 2 for places in cents)
+        assert len(set(cents)) == 1
+
     def test_shows_drift_against_target_and_flags_what_sits_outside_the_band(self):
         text = self._report()
         # $6,000 of $10,000 is 60% U.S. against a 50% target: 10 points out.
-        assert "+10.0 *" in text
+        assert "+10 *" in text
         # $3,500 is 35% international against 30%: 5 points, just inside.
-        assert "+5.0\n" in text or "+5.0 " in text
-        assert "outside your band of plus or minus 5.0 percentage points" in " ".join(text.split())
+        assert "+5\n" in text or "+5 " in text
+        assert "outside the band of plus or minus 5 percentage points" in " ".join(text.split())
 
     def test_no_band_means_no_footnote_to_explain(self):
         text = self._report(band_pct="0")
-        assert "+10.0" in text
-        assert "outside your band of" not in text
+        assert "+10" in text
+        assert "outside the band of" not in text
 
     def test_no_trades_message_names_the_band(self):
         # Sitting on the target, so the band is what the line has to name.
@@ -387,7 +408,7 @@ class TestReportRecap:
         rendered = " ".join(
             format_report(inputs(in_band, self._target(), "5"), result).split()
         )
-        assert "within your band of plus or minus 5.0 percentage points" in rendered
+        assert "within the band of plus or minus 5 percentage points" in rendered
 
     def test_every_line_fits_the_page_width(self):
         """Four different widths at once was the thing that made this output
@@ -434,8 +455,8 @@ class TestReportRecap:
 
     def test_long_names_do_not_push_prose_or_headings_off_the_page(self):
         text = self._long_named_report()
-        before, _, rest = text.partition("Your accounts")
-        _holdings, _, after = rest.partition("Current vs. target")
+        before, _, rest = text.partition("Account Holdings")
+        _holdings, _, after = rest.partition("Current vs. Target")
         for line in (before + after).split("\n"):
             assert len(line) <= prose_width(), line
 
@@ -452,7 +473,7 @@ class TestReportRecap:
         is how someone buys the wrong fund -- they search that name at the
         broker. The table keeps its columns and runs wide instead."""
         text = self._long_named_report()
-        holdings_block = text.split("Your accounts")[1].split("Current vs. target")[0]
+        holdings_block = text.split("Account Holdings")[1].split("Current vs. Target")[0]
         rows = [
             line
             for line in holdings_block.split("\n")
@@ -487,8 +508,8 @@ class TestOutcomeLine:
         )
         text = format_report(inputs([account], target), result)
         assert (
-            "If these orders fill at the values you entered, your portfolio will hold "
-            "50.0% U.S. stocks, 0.0% international stocks, and 50.0% bonds."
+            "If these orders fill at the values entered here, the portfolio will hold "
+            "50% U.S. stocks, 0% international stocks, and 50% bonds."
             in " ".join(text.split())
         )
 
@@ -596,7 +617,7 @@ class TestRequiredWording:
             taxable_bond_dollars=Decimal(0),
         )
         text = " ".join(self._report(result).split())
-        assert "If these orders fill at the values you entered," in text
+        assert "If these orders fill at the values entered here," in text
         assert "After these trades:" not in text
 
     def _taxable_report(self, trades):
@@ -622,7 +643,7 @@ class TestRequiredWording:
             trade("Brokerage", FundType.US_STOCK, "VTI", "sell", "100.00"),
             trade("Brokerage", FundType.US_BOND, "BND", "buy", "100.00"),
         ]).split())
-        assert "Selling $100.00 in your taxable accounts" in text
+        assert "Selling $100.00 in taxable accounts" in text
         assert "may realize capital gains or losses" in text
         assert "no cost basis is collected here, so that tax is not estimated" in text
 
@@ -651,7 +672,7 @@ class TestRequiredWording:
             taxable_bond_dollars=Decimal(0),
         )
         text = self._report(result)
-        assert "Orders to place" in text
+        assert "Orders to Place" in text
         assert "Review each order before placing it:" in text
         assert "Recommended trades" not in text
         assert "Place the following orders" not in text
@@ -673,25 +694,18 @@ class TestRequiredWording:
         # ...and the other sense still says which kind of class it means.
         assert "share classes" in text
 
-    def test_tax_free_is_qualified_where_it_is_used(self):
-        assert '"Tax-free" means qualified withdrawals' in self._report()
-
-    def test_tax_free_is_not_qualified_when_no_account_is_tax_free(self):
-        report_inputs = replace(
-            inputs([self._account(TaxTreatment.TAXABLE, "Brokerage")], self._target())
-        )
-        text = format_report(
-            report_inputs, RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
-        )
-        assert "qualified withdrawals" not in text
+    def test_the_report_does_not_gloss_the_tax_treatment_labels(self):
+        """The labels are standard shorthand and the plan documents are where
+        the conditions on them live; the report states what each account is
+        and stops."""
+        assert "qualified withdrawals" not in self._report()
 
     def test_figures_say_they_came_from_the_user(self):
         assert "Values as entered, not live market prices." in self._report()
 
     def test_figures_name_the_last_saved_date_when_there_is_one(self):
-        assert "Values as entered, not live market prices. Last saved 2026-08-21." in self._report(
-            values_as_of="2026-08-21"
-        )
+        text = self._report(values_as_of="2026-08-21")
+        assert "Values as entered, not live market prices. Last saved August 21, 2026." in text
 
     def test_dropped_sub_minimum_orders_are_disclosed(self):
         result = RebalanceResult(
@@ -757,7 +771,7 @@ class TestIndentation:
 
     def test_both_asset_class_listings_sit_at_the_same_depth(self):
         text = self._report()
-        target_row = self._depth(text, "U.S. stocks            50.0%")
+        target_row = self._depth(text, "U.S. stocks           50%")
         comparison_row = self._depth(text, "U.S. stocks  ")
         assert target_row == comparison_row == len(INDENT_UNIT)
 
@@ -766,17 +780,13 @@ class TestIndentation:
         assert self._depth(text, "Roth (Roth IRA, tax-free)") == len(INDENT_UNIT)
         assert self._depth(text, "VTI (U.S. stock fund)") == len(INDENT_UNIT) * 2
 
-    def test_a_section_footnote_does_not_align_with_the_account_headings(self):
-        """At one level in it reads as a third account rather than a note."""
-        text = self._report()
-        assert self._depth(text, "means qualified withdrawals") == 0
 
 
 class TestPercentFormatting:
-    """Two rules, one for each side of the program: the report fixes every
-    percentage at one decimal place, prompts trim trailing zeros. A distance
-    between two percentages is "percentage points" -- "pts" only in the
-    comparison table header, where the column cannot take the words."""
+    """Prose carries the precision each figure needs; a table carries the
+    precision its column needs, so the figures line up. A distance between
+    two percentages is "percentage points" -- "pts" only in the comparison
+    table header, where the column cannot take the words."""
 
     def _report(self, band_pct="5", stock=Decimal(80), bond=Decimal(20)):
         accounts = [
@@ -798,19 +808,43 @@ class TestPercentFormatting:
             report_inputs, RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0))
         )
 
-    def test_every_percentage_carries_one_decimal_place(self):
-        """Whole numbers included -- "20% bonds" two lines under "20.0%" is
-        the inconsistency this rule exists to stop."""
+    def test_prose_writes_each_percentage_as_short_as_it_goes(self):
+        """A sentence has no column to line up with, so a whole number is
+        written as one."""
         text = " ".join(self._report().split())
-        assert "From 80.0% stocks / 20.0% bonds" in text
-        assert "VT's 62.0% U.S. allocation" in text
-        for bare in ("80% ", "20% ", "62% "):
-            assert bare not in text
+        assert "Derived from 80% stocks and 20% bonds" in text
+        assert "VT's 62% U.S. allocation" in text
+        for padded in ("80.0%", "20.0%", "62.0%"):
+            assert padded not in text
+
+    def test_a_table_column_shares_one_precision(self):
+        """The figures are read down the page, so they line up on the decimal
+        point: a column holding 58.8 writes its 5 as 5.0."""
+        accounts = [
+            Account(
+                account_type="Roth IRA",
+                name="Roth",
+                tax_treatment=TaxTreatment.TAX_FREE,
+                holdings=[Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(10000))],
+            )
+        ]
+        target = TargetAllocation(
+            us_stock_pct=Decimal("58.8"),
+            international_stock_pct=Decimal("36.2"),
+            bond_pct=Decimal(5),
+        )
+        text = format_report(
+            inputs(accounts, target),
+            RebalanceResult(trades=[], warnings=[], taxable_bond_dollars=Decimal(0)),
+        )
+        assert "  U.S. stocks           58.8%" in text
+        assert "  International stocks  36.2%" in text
+        assert "  Bonds                  5.0%" in text
 
     def test_a_distance_between_percentages_is_called_percentage_points(self):
         text = " ".join(self._report().split())
-        assert "Plus or minus 5.0 percentage points" in text
-        assert "band of plus or minus 5.0 percentage points" in text
+        assert "Plus or minus 5 percentage points" in text
+        assert "band of plus or minus 5 percentage points" in text
         assert "point band" not in text
         assert "percentage point rebalancing band" not in text
 
@@ -952,11 +986,11 @@ class TestRelativeBandInTheReport:
         )
 
     def _band_section(self, text):
-        return text.split("Rebalancing band")[1].split("Your accounts")[0]
+        return text.split("Rebalancing Bands")[1].split("Account Holdings")[0]
 
     def test_states_both_rules_and_which_one_wins(self):
         assert (
-            "Plus or minus 5.0 percentage points, or 25.0% of an asset class's own "
+            "Plus or minus 5 percentage points, or 25% of an asset class's "
             "target, whichever is tighter"
         ) in " ".join(self._report().split())
 
@@ -970,7 +1004,7 @@ class TestRelativeBandInTheReport:
 
     def test_the_ranges_are_omitted_when_only_the_absolute_rule_applies(self):
         section = self._band_section(self._report(relative_band_pct=None))
-        assert "Plus or minus 5.0 percentage points." in " ".join(section.split())
+        assert "Plus or minus 5 percentage points." in " ".join(section.split())
         assert "% to " not in section  # no per-class ranges: one number covers all three
 
     def test_the_footnote_stops_naming_a_single_band(self):
@@ -980,7 +1014,7 @@ class TestRelativeBandInTheReport:
         text = self._report()
         assert "-3.8 *" in text
         assert "* outside its rebalancing band" in text
-        assert "percentage points" not in text.split("Current vs. target")[1]
+        assert "percentage points" not in text.split("Current vs. Target")[1]
 
     def test_the_no_trades_line_stops_naming_a_single_band(self):
         on_target = [
