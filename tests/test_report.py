@@ -1167,8 +1167,8 @@ class TestNoteWording:
                 TargetAllocation(Decimal(50), Decimal(0), Decimal(50)),
             ),
             # The same shape aimed away from U.S. stock, so the longest label
-            # of the six -- "International stock target out of reach" -- is
-            # measured too. It is what decides the three-line budget.
+            # of the eight -- "International stock target out of reach" -- is
+            # measured too.
             (
                 [
                     Account(brokerage, "Brokerage", TaxTreatment.TAXABLE, [
@@ -1234,7 +1234,7 @@ class TestNoteWording:
             "Taxable sale",
             "Wash sale",
             "Bonds in taxable",
-            "International in tax-advantaged",
+            "International stocks in tax-advantaged",
             "U.S. stock target out of reach",
             "International stock target out of reach",
             "Bond target out of reach",
@@ -1250,8 +1250,13 @@ class TestNoteWording:
 
     @pytest.mark.parametrize("scale", [1, 123_456])
     def test_no_note_runs_past_three_lines(self, scale):
-        """Measured at the worst case, not the typical one: the longest label
-        against a ten-figure amount is what decides whether one spills."""
+        """Measured at the worst case, not the typical one: a long label
+        against a ten-figure amount is what decides whether one spills. The
+        tightest is not the longest label but the note whose own sentences
+        repeat it -- "International stocks in tax-advantaged", which says
+        "in tax-advantaged accounts" again in the clause below. It spilled to
+        four lines the moment the label gained one word, and getting it back
+        cost the last sentence's "there"."""
         for note in self._every_note(scale):
             rendered = wrap(f"{note.label}. {note.summary}")
             assert len(rendered.splitlines()) <= 3, rendered
