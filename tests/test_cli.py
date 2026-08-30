@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -573,6 +574,50 @@ class TestRevisionLoop:
         ) == 0
         assert "Could not compute a rebalance: nothing works here" in prompter.full_output
         assert "Orders to Place" in prompter.full_output
+
+
+class TestSavedDateIsTheUsersOwn:
+    """`values_as_of` is the date the user would say it was, which is the
+    local one. It used to be UTC's."""
+
+    def test_an_evening_run_west_of_greenwich_saves_todays_date(self, tmp_path, monkeypatch):
+        """9:03 PM in New York is already tomorrow in UTC, so this is the
+        case that was wrong -- every evening, for anyone in the Americas,
+        the report came back next run saying the figures were saved a day
+        after the session that entered them."""
+        evening = datetime(2026, 8, 29, 21, 3, tzinfo=ZoneInfo("America/New_York"))
+        assert evening.astimezone(timezone.utc).date().isoformat() == "2026-08-30"
+        monkeypatch.setattr(cli, "_now_local", lambda: evening)
+
+        config_path = tmp_path / "c.json"
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n", NO_REVISION, "y",
+        ])
+        run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter)
+        assert load_config(config_path).values_as_of == "2026-08-29"
+
+    def test_the_report_reads_it_back_in_full(self, tmp_path, monkeypatch):
+        """And the next run says so, through the same `format_date` every
+        other date goes through."""
+        evening = datetime(2026, 8, 29, 21, 3, tzinfo=ZoneInfo("America/New_York"))
+        monkeypatch.setattr(cli, "_now_local", lambda: evening)
+        config_path = tmp_path / "c.json"
+        run(
+            ["--config", str(config_path), "--vt-us-pct", "75"],
+            prompter=ScriptedPrompter([
+                "80", "y", "0", "0",
+                "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+                "n", NO_REVISION, "y",
+            ]),
+        )
+        # Every saved answer kept: the target and its confirmation, both band
+        # halves, "Keep this account?", then its three tickers, three values
+        # and its cash.
+        prompter = ScriptedPrompter([*[""] * 12, "n", NO_REVISION, "n"])
+        run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter)
+        assert "Last saved August 29, 2026." in prompter.full_output
 
 
 class TestSummaryFile:

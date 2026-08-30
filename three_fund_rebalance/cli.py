@@ -413,7 +413,11 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
                 vt_as_of=answers.vt.as_of,
                 rebalance_band_pct=answers.band_pct,
                 rebalance_relative_band_pct=answers.relative_band_pct,
-                values_as_of=datetime.now(tz=timezone.utc).date().isoformat(),
+                # The local date, not UTC's. Saving UTC's meant anyone west
+                # of Greenwich running this in the evening got tomorrow's
+                # date back as "Last saved ...", misdating their own figures
+                # by a day every evening.
+                values_as_of=_now_local().date().isoformat(),
                 accounts=answers.accounts,
             )
             save_config(args.config, updated)
