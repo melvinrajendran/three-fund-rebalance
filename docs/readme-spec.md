@@ -12,8 +12,8 @@ bounds, `_OBJECTIVE_SLACK`, the implied third equality, which phase reads
 `_fund_type_coefficient` and which reads `slot.fund_type`. A README that starts
 explaining a phase rather than naming it is the failure mode to watch for.
 
-Sections, in order: the one-paragraph blurb, Disclaimer, Example, Install, Running,
-How it works, Limitations, Development, License.
+Sections, in order: the one-paragraph blurb, Disclaimer, Example, Installation,
+Running, How It Works, Limitations, Development, License.
 
 **The Example is real output, pasted verbatim.** It is the first thing a reader sees
 and the reason the README is structured around it, so it may never be hand-edited or
@@ -55,7 +55,7 @@ Everything between those two is exactly as printed. Note this makes "real output
 pasted verbatim" mean *a contiguous run of it*: the trim is at the ends only, and
 nothing inside may be touched or idealized.
 
-**How it works is a list of bolded lead-ins, each followed by at most a short
+**How It Works is a list of bolded lead-ins, each followed by at most a short
 paragraph** -- two to four lines. It is a summary, not a specification. An entry that
 needs more room is either two entries (the band's definition and the band's trigger
 semantics are split for exactly this reason) or a Limitations bullet. Growing one past
@@ -86,18 +86,18 @@ lead-in that ranks or excludes something has to survive being read against the p
 list; when it cannot be made both short and true, it is a Limitations bullet.
 
 **Limitations is where caveats go**, as bullets with bolded lead-ins, which is what
-lets How it works stay short. A newly discovered thing the tool cannot see is a bullet
+lets How It Works stay short. A newly discovered thing the tool cannot see is a bullet
 there, not a qualification bolted onto a paragraph above.
 
 **Both sections run roughly in the order a run meets them** -- for Limitations, the
 lookup, then the step 3 questions, then the report top to bottom, then what happens at
-the broker; for How it works, step 1, step 2, step 3, then the solve. Nothing says so on
+the broker; for How It Works, step 1, step 2, step 3, then the solve. Nothing says so on
 either page; a lead-in announcing the order was written and cut, because an order either
 reads naturally or does not, and one that needs explaining is the wrong order. It is
 only roughly true: the muni bullet sits with the orders, since that is where a muni
 holder notices, rather than with the question where the ticker was typed.
 
-How it works did not always follow it, and the failure was invisible until the two
+How It Works did not always follow it, and the failure was invisible until the two
 sections were read against each other: the three entries about what you are *asked*
 sat last, with the VT split -- the first line of the Example directly above -- dead last
 of all. The objection to fixing it is real and was weighed. Run order opens the section
@@ -114,7 +114,7 @@ own point: "No cost basis" used to open by re-describing the taxable-volume prox
 the ranking now states, and "It knows nothing about" ended on a 401(k)'s fixed fund menu,
 which is the whole subject of a bullet two above it.
 
-**Install is four subsections -- Prerequisites, Install, Update, Uninstall --**
+**Installation is four subsections -- Prerequisites, Install, Update, Uninstall --**
 in the order a reader meets them, each holding the one command it names. Only
 uv is a prerequisite, installed by its own script; no platform package manager
 is named, since one that has to be installed first is a second prerequisite
