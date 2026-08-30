@@ -36,6 +36,7 @@ paragraphs this used to end in. See `_describe_notes`.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 from decimal import Decimal
 
 from three_fund_rebalance.allocation import (
@@ -52,6 +53,7 @@ from three_fund_rebalance.formatting import (
     describe_as_of,
     format_account_heading,
     format_date,
+    format_generated_at,
     format_percent_prose,
     format_percents,
     format_subheading,
@@ -122,6 +124,11 @@ class RebalanceInputs:
     # When the saved values were last written, if they came from a config
     # file. None when everything was typed this session.
     values_as_of: str | None = None
+    # When this plan was computed, as an aware UTC datetime. Passed in rather
+    # than read from the clock inside `format_report`, so the same inputs
+    # render the same report -- and so the summary file's name and the line
+    # at the head of the report are stamped from one instant.
+    generated_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -389,7 +396,7 @@ def _describe_band(inputs: RebalanceInputs) -> list[str]:
 
 def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
     lines = _subheading("Account Holdings")
-    for account in inputs.accounts:
+    for index, account in enumerate(inputs.accounts):
         # Every account reads `nickname (type, treatment)`, with no exceptions
         # -- one line shaped like the next is what lets the eye compare them
         # down the page. There used to be a rule suppressing the treatment
@@ -419,7 +426,12 @@ def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
         amount_width = max(len(amount) for _, amount in rows)
         body_indent = INDENT_UNIT * 2
 
-        lines.append("")
+        # A blank line *between* accounts, never under the rule: every
+        # subheading in the report starts its content on the line directly
+        # beneath, and one that does not reads as a different kind of
+        # division rather than the same one spaced differently.
+        if index:
+            lines.append("")
         lines.append(wrap(heading, indent=INDENT_UNIT, hanging_indent=INDENT_UNIT * 2))
         for label, amount in rows:
             lines.append(f"{body_indent}{label:<{label_width}}  {amount:>{amount_width}}")
@@ -578,8 +590,10 @@ def _describe_notes(notes: list[Note]) -> list[str]:
     under a heading the prefix only repeated what the heading already said.
     """
     lines = _subheading("Notes")
-    for note in notes:
-        lines.append("")
+    for index, note in enumerate(notes):
+        # Between notes only -- see the same rule in `_describe_accounts`.
+        if index:
+            lines.append("")
         lines.append(wrap(f"{note.label}. {note.summary}"))
         if note.detail:
             lines.append(wrap(note.detail, indent=INDENT_UNIT))
@@ -591,7 +605,15 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
         inputs.accounts, inputs.target, inputs.band_pct, inputs.relative_band_pct
     )
 
-    lines = _describe_target(inputs)
+    # The document's own provenance, at the document's head. The figures
+    # carry theirs further down ("Values as entered", "Last saved ..."); this
+    # is about the plan rather than the numbers it was computed from, which
+    # is why it leads rather than joining them.
+    lines: list[str] = []
+    if inputs.generated_at is not None:
+        lines.append(wrap(f"Generated {format_generated_at(inputs.generated_at)}."))
+        lines.append("")
+    lines.extend(_describe_target(inputs))
     lines.append("")
     lines.extend(_describe_band(inputs))
     lines.append("")

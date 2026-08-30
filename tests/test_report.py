@@ -1191,6 +1191,29 @@ class TestNoteWording:
                 ],
                 TargetAllocation(Decimal(60), Decimal(0), Decimal(40)),
             ),
+            # Taxable is all U.S. stock, so the international shortfall can
+            # only be made up inside the shelters -- phase 5 losing to phase
+            # 2, which is what the disclosure is for.
+            (
+                [
+                    Account(brokerage, "Brokerage", TaxTreatment.TAXABLE, [
+                        h(FundType.US_STOCK, "VTI", 150_000),
+                        h(FundType.INTERNATIONAL_STOCK, "VXUS", 40_000),
+                        h(FundType.US_BOND, "BND", 0),
+                    ]),
+                    Account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                        h(FundType.US_STOCK, "VTI", 60_000),
+                        h(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                        h(FundType.US_BOND, "BND", 0),
+                    ]),
+                    Account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                        h(FundType.US_STOCK, "VTI", 80_000),
+                        h(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                        h(FundType.US_BOND, "BND", 20_000),
+                    ]),
+                ],
+                TargetAllocation(Decimal("49.6"), Decimal("30.4"), Decimal(20)),
+            ),
         ]
 
     def _every_note(self, scale):
@@ -1211,6 +1234,7 @@ class TestNoteWording:
             "Taxable sale",
             "Wash sale",
             "Bonds in taxable",
+            "International in tax-advantaged",
             "U.S. stock target out of reach",
             "International stock target out of reach",
             "Bond target out of reach",
