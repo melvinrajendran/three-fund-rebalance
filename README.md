@@ -96,19 +96,20 @@ in a taxable account would have meant triggering a taxable sale.
 
 ## Install
 
-Requires [uv](https://docs.astral.sh/uv/), which puts the CLI on your PATH in
-its own isolated environment and fetches a suitable Python if your system one
-is older than 3.10:
+### Prerequisites
+
+[uv](https://docs.astral.sh/uv/), which puts the CLI on your PATH in its own
+isolated environment and fetches a suitable Python if your system one is older
+than 3.10:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### Install
 
 ```bash
 uv tool install three-fund-rebalance
-```
-
-To update, and to remove it again:
-
-```bash
-uv tool upgrade three-fund-rebalance
-uv tool uninstall three-fund-rebalance
 ```
 
 Or run it once without installing anything:
@@ -117,10 +118,16 @@ Or run it once without installing anything:
 uvx three-fund-rebalance
 ```
 
-No uv? `brew install uv` on macOS, or elsewhere:
+### Update
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool upgrade three-fund-rebalance
+```
+
+### Uninstall
+
+```bash
+uv tool uninstall three-fund-rebalance
 ```
 
 The saved portfolio lives outside the installation at
@@ -139,15 +146,6 @@ account holdings -- then the summary above. Run it again and every saved
 account comes back with its last values pre-filled: press Enter to keep one or
 type a new one.
 
-The summary is followed by "Update an answer and recompute?". Answering yes
-lists the questions by the heading each was asked under, re-asks the one
-picked -- an account comes back with its own values pre-filled, as on a second
-run -- and prints the whole summary again. The list ends with "No Updates,
-Continue" for a mind changed one question later. A mistyped balance costs one
-answer rather than the whole session, which matters because a typo is not
-visible at the prompt that took it: it shows up as an implausible order
-further down.
-
 | Flag | Effect |
 | --- | --- |
 | `--config PATH` | Portfolio file to read and write (default `~/.three_fund_rebalance/config.json`) |
@@ -157,13 +155,6 @@ further down.
 | `--vt-us-pct PCT` | Set VT's U.S. stock allocation % directly, skipping the lookup and the prompt |
 | `--write-summary [PATH]` | Write the summary to PATH, or with no PATH to a timestamped file beside the portfolio file |
 | `--version` | Print the installed version and exit |
-
-`--no-save` and `--write-summary` govern different files and neither implies
-the other. `--no-save` is about the portfolio -- the answers read back on the
-next run. `--write-summary` is about this run's summary, written only when
-asked, and never overwriting an earlier one when it chose the name itself:
-`rebalancing-summary-2026-08-29-2113-edt.txt`, stamped in local time with the
-same instant the summary's own first line names. Nothing prunes those files.
 
 ## How it works
 
