@@ -21,7 +21,7 @@ ruff check --fix <path>                  # autofix
 ```
 
 Re-run `pip install -e ".[dev]"` only when packaging metadata changes (a new/bumped
-dependency, a renamed console script, a new top-level package) — new modules inside
+dependency, a renamed console script, a new top-level package) -- new modules inside
 `three_fund_rebalance/` take effect immediately under the editable install.
 
 ### Running the CLI without side effects
@@ -38,7 +38,7 @@ script: that runs the working copy regardless of what else is on PATH, so a uv
 or pip install of the published package can never be what you actually tested.
 
 To see rendered output non-interactively, drive `run()` with a scripted prompter
-rather than piping stdin — see "Testing conventions" below. Piping to stdin is
+rather than piping stdin -- see "Testing conventions" below. Piping to stdin is
 brittle because the prompt sequence branches on answers.
 
 ## Architecture
@@ -60,10 +60,10 @@ The imports form a DAG with `models` at the bottom and `cli` at the top, and it 
 worth keeping that way. In particular **`report` does not import `rebalance`**: it
 renders a `RebalanceResult`, which lives in `models` alongside `Trade` for exactly
 that reason, so the reporting layer depends on the data and not on the scipy-backed
-solver that produced it. (`report.py` must not import `prompts.py` either — shared
+solver that produced it. (`report.py` must not import `prompts.py` either -- shared
 presentation constants live in `formatting.py`.)
 
-The user walks **three** numbered steps — target allocation, rebalancing band,
+The user walks **three** numbered steps -- target allocation, rebalancing band,
 account holdings. The report is not a fourth: it is what those produce, so it gets
 `format_result_header` (same `=` rule, no "STEP x OF y") rather than a step banner.
 `cli._INPUT_STEPS` is the count, in one place.
@@ -74,13 +74,13 @@ account holdings. The report is not a fourth: it is what those produce, so it ge
 necessarily works in floats; `rebalance._to_decimal` and `models.to_cents` convert
 back at the boundary. Introducing a float into a dollar amount elsewhere is a bug.
 The two crossings *into* float are `_fund_type_coefficient` and the `float(...)` calls
-building constraint rows; anything coming back out — `taxable_bond_dollars` included —
+building constraint rows; anything coming back out -- `taxable_bond_dollars` included --
 reads the Decimal from the holding rather than round-tripping a coefficient through
 `Decimal(str(some_float))`.
 
 **An asset class has one key, defined in one place.** The dicts of dollar amounts and
 percentages that pass between `allocation`, `rebalance` and `report` are keyed by
-`allocation.ASSET_CLASS_KEYS` — and note bonds are `"bond"` there, not
+`allocation.ASSET_CLASS_KEYS` -- and note bonds are `"bond"` there, not
 `FundType.US_BOND.value` (`"us_bond"`, which is the *storage* spelling that goes into
 config.json). Two of the three keys coincide with the enum values and the third does
 not, which is exactly why the mapping is imported rather than re-typed: `_TARGET_KEYS`
@@ -95,8 +95,8 @@ that account's available cash.
 `TAX_DEFERRED` (traditional 401(k)/IRA, 403(b), 457(b), SEP, SIMPLE) and `TAX_FREE`
 (Roth IRA, Roth 401(k), HSA). Both shelters are exempt today; they differ in what a
 dollar of growth inside them is worth, which is what decides that bonds belong in
-tax-deferred space and stocks in tax-free. Anything not `TAXABLE` is a shelter —
-`Account.is_tax_advantaged()` — and every taxable-vs-sheltered test in the solver is
+tax-deferred space and stocks in tax-free. Anything not `TAXABLE` is a shelter --
+`Account.is_tax_advantaged()` -- and every taxable-vs-sheltered test in the solver is
 written against `TAXABLE` so that adding a third shelter kind would not silently
 change phases 1, 2 or 5.
 
@@ -104,35 +104,35 @@ change phases 1, 2 or 5.
 `_resolve_allocation` settles the three asset-class totals first, honoring the
 rebalancing band; the solver then hits those as hard equalities. Every location
 objective is phrased as "minimize this asset class in that kind of account", which
-means *relocate* only while the class total is fixed — see the solver section, where
+means *relocate* only while the class total is fixed -- see the solver section, where
 letting the band reach those phases turned out to be a real bug.
 
-**`FundType.CASH` has an implicit target of zero** — cash is always fully invested.
+**`FundType.CASH` has an implicit target of zero** -- cash is always fully invested.
 It is excluded from the tradeable slots and from `_TARGET_FUND_TYPES`.
 
 **Cash is therefore not an asset class for drift purposes either.** It sits in the
-portfolio total the three classes are measured *against* — so a dividend swept into
-an account dilutes all three at once — but `_current_asset_class_dollars` never
+portfolio total the three classes are measured *against* -- so a dividend swept into
+an account dilutes all three at once -- but `_current_asset_class_dollars` never
 counts it as one of them, and it has no band. What it does is trip
 `_resolve_allocation`'s gate, which sends it through `_place_cash`; the band is then
 asked about the portfolio the cash leaves behind. The user is asked for "Cash
 available to invest", and every dollar of it is spent, so a reserve the user does
-not intend to invest must simply not be entered — a README limitation, not
+not intend to invest must simply not be entered -- a README limitation, not
 something the solver can see.
 
 **A target-date fund is one position holding a fixed internal ratio,** not three
 positions. `Holding.fraction_of` is what lets a single slot contribute fractionally
 to all three targets, and it is stated once: `Holding.component` is it times the
 value, and `rebalance._fund_type_coefficient` is it as the float the LP needs. It
-used to be written out four times — once per asset class as
-`Holding.us_stock_component()` and friends, and again for the solver — which is four
+used to be written out four times -- once per asset class as
+`Holding.us_stock_component()` and friends, and again for the solver -- which is four
 copies of one invariant and three chances for the report and the solver to disagree
 about what an account holds.
 
 **The LP must never over-determine the portfolio total.** Each account spends
 exactly its own total, and each asset class hits exactly the figure
 `_resolve_allocation` settled on. Every slot's three class coefficients sum to 1, so
-adding the three class rows together reproduces the account rows — the third class
+adding the three class rows together reproduces the account rows -- the third class
 equality is *implied*, and stating it anyway is not free. An implied row is
 satisfiable only if the two sides agree to the last bit, which floating point will
 not do: coefficients summing to 1 + 1e-16 make a portfolio infeasible outright once
@@ -150,22 +150,22 @@ Two things feed it, and both shipped as infeasible portfolios reported to the us
   `_resolve_allocation` (the `dict(current)` return, the `_place_cash` return and the
   LP's own), putting the residue on the largest class. With the third row implicit
   this no longer decides feasibility, only whether the implied class lands on its
-  resolved figure or a hair off — but three amounts that do not add up to the
+  resolved figure or a hair off -- but three amounts that do not add up to the
   portfolio are not "what each asset class should be worth", which is the function's
   whole contract. About one realistic portfolio in seven tripped this.
 - `TargetDateAllocation` allows the three percentages to sum to 100 ±
   `PERCENT_SUM_TOLERANCE`, because a fact sheet rounds each sleeve to a tenth. Read as
   literal percentages over 100, a fund printed 64.0 / 34.3 / 1.6 leaves a tenth of a
-  percent of its account belonging to no asset class — which the implied row would
+  percent of its account belonging to no asset class -- which the implied row would
   silently dump into bonds. `TargetDateAllocation.fraction_of` divides by the actual
   sum instead, and is the **one** place the three sleeves become fractions:
   `Holding.fraction_of` delegates to it, `Holding.component` is that times the value,
-  and `rebalance._fund_type_coefficient` is `Holding.fraction_of` as a float — so the
+  and `rebalance._fund_type_coefficient` is `Holding.fraction_of` as a float -- so the
   report, `_current_asset_class_dollars` and the solver all read a holding the same
   way by construction rather than by agreement. It normalizes the derived view only;
   the entered percentages are stored and echoed back untouched.
 
-Nothing may assume the normalized fractions sum to exactly 1 — as Decimals they leave
+Nothing may assume the normalized fractions sum to exactly 1 -- as Decimals they leave
 an artifact around 1e-28, as floats around 1e-16, and CPython 3.12's compensated
 `sum()` hides the latter where 3.10's plain addition does not. That is why
 `_resolve_allocation`'s uninvested-cash gate reads `to_cents(...)`: taken literally,
@@ -178,7 +178,7 @@ sit alongside either). `Account.__post_init__` enforces it, `prompts` asks which
 up front instead of offering a fourth yes/no, and `INDIVIDUAL_FUND_TYPES` is the set
 that clashes with `TARGET_DATE`.
 
-**A declared holding is capacity, whatever it is worth — and an account holding
+**A declared holding is capacity, whatever it is worth -- and an account holding
 individual funds declares all three.** A slot exists because the account *can* hold
 that asset class, not because it currently does: `_build_slots` takes every non-cash
 holding regardless of value, its LP bound is `(0, account total)`, and `report`
@@ -187,7 +187,7 @@ long time the only way to reach it was to answer "yes" to "does this account hol
 bond fund?" and then type `0`, so the truthful answer removed the only place an asset
 class could ever go. `prompts._prompt_fund_holdings` now asks for all three outright,
 which also stops it re-asking what the kind question has just answered. The
-assumption that comes with that — every such account can buy all three — is a README
+assumption that comes with that -- every such account can buy all three -- is a README
 limitation: a 401(k) with no international option may be handed an order it cannot
 fill.
 
@@ -199,7 +199,7 @@ missing from the Roth it had to sell there.
 The consequence worth holding onto: **a target-date account has exactly one slot, so
 the per-account budget equality pins it outright.** No objective can reach inside it.
 That is what stops the solver from liquidating a taxable target-date fund to relocate
-the bond sleeve within it — which it used to do even for a portfolio already sitting
+the bond sleeve within it -- which it used to do even for a portfolio already sitting
 on its target. It also means such an account sets a *floor* under every asset class,
 not just a ceiling, which is why `_asset_class_reach` returns both.
 
@@ -209,7 +209,7 @@ Two stages. **`_resolve_allocation` decides what each asset class should be wort
 then six phases decide where to hold it.
 
 **The band is a trigger, not a destination.** The first stage opens with a gate: with
-nothing uninvested it is plain `Decimal` and no solve at all — every class inside its
+nothing uninvested it is plain `Decimal` and no solve at all -- every class inside its
 band returns `dict(current)` outright, "leave it alone" answered with the numbers the
 portfolio already holds rather than with a solver's slack spent drifting a fraction of
 a cent. Anything that trips the gate sends the whole portfolio back to target, all
@@ -217,14 +217,14 @@ three classes, not just the one that breached.
 
 Stopping at the nearest band edge instead is what this did once, and it was worse on
 two counts. It leaves the portfolio *on* the boundary, so the next small drift trips
-the band again — rebalancing to the centre buys a full band's worth of quiet. And it
+the band again -- rebalancing to the centre buys a full band's worth of quiet. And it
 is under-determined: a class one point out of band can be brought back by selling
 either of the other two at identical cost, so which one got sold came down to
 whichever vertex HiGHS happened to return.
 
 **The gate reads the band `_reachable_bounds` has widened**, not the band the user set.
-A class the accounts pin outside its band — a target-date fund's bond sleeve against a
-0% bond target — is outside it forever, and a band that can never be satisfied is a
+A class the accounts pin outside its band -- a target-date fund's bond sleeve against a
+0% bond target -- is outside it forever, and a band that can never be satisfied is a
 band that never says "leave it alone": every later run would drive all three classes
 back to exact target and trade on any drift at all, which is the opposite of what a
 band is for. Widening only ever happens where the band and the reach do not overlap,
@@ -232,10 +232,10 @@ and it cannot wave through a portfolio that could still do better: `reach`'s flo
 valid lower bound on every achievable total, so the only current value inside the
 widened region is one already sitting on that bound. The run that gets a pinned class
 as close as it can go is the last run that trades. The *report* keeps reading the band
-as set — that is the user's policy, and the comparison table still marks the class
+as set -- that is the user's policy, and the comparison table still marks the class
 outside it.
 
-**Cash is handled first, and the band is then asked about what it leaves behind** —
+**Cash is handled first, and the band is then asked about what it leaves behind** --
 not about the portfolio still holding it. That is `_place_cash`: a separate tiny LP
 constrained to `p >= current`, which is what "spend the cash and sell nothing" means,
 since only a sale can shrink a class total. It answers with the resulting totals when
@@ -244,7 +244,7 @@ is `_resolve_allocation`'s signal to rebalance properly.
 
 It is lexicographic too, and the order is the other way round from its caller's: (1)
 minimize how far outside its band each class is left; (2) among the ties, sit as close
-to target as possible. The band comes first because it is what the answer turns on —
+to target as possible. The band comes first because it is what the answer turns on --
 with two classes below target the cash could go to either and be equally close to
 target overall, while only one of those choices might get the laggard back inside its
 band.
@@ -252,7 +252,7 @@ band.
 **Testing the cash itself instead is a bug that shipped and was caught in real use.**
 Treating any uninvested balance as grounds to reopen the question meant a few cents
 swept up from a dividend rebalanced a portfolio that was comfortably inside its band on
-all three classes — thousands of dollars of trades, taxable sales included, over a
+all three classes -- thousands of dollars of trades, taxable sales included, over a
 quarter of a percent of the portfolio.
 `test_cash_alone_does_not_trigger_a_rebalance` is the guard, and it is written on the
 deterministic path: the cash reaches the laggard through a free swap in a shelter, so
@@ -261,30 +261,30 @@ the taxable account only ever buys.
 Past the gate it is a tiny LP over three variables, lexicographic: (1) sit as close to
 target as the accounts allow; (2) among the ties, move as little as possible from where
 the portfolio already sits. (2) runs only when (1) comes back nonzero, i.e. only when
-the exact target is unreachable — an account holding a single fund pins that fund's
+the exact target is unreachable -- an account holding a single fund pins that fund's
 share of the portfolio, and the closest reachable points are then a whole face rather
 than a vertex. With U.S. stock pinned at 60% against a 50/25/25 target, every split of
 the remaining 40% is exactly as far from target as every other;
 `test_an_unreachable_target_settles_nearest_to_where_the_portfolio_sits` fails without
-(2), which is what earns it its keep. Its bounds are `reach` and nothing else — the
+(2), which is what earns it its keep. Its bounds are `reach` and nothing else -- the
 band has had its say at the gate, and constraining these to it as well is what used to
 turn a target the accounts cannot quite reach into a refusal to plan at all.
 
 **Skipping that stage and handing the band to the six phases below is a bug that was
 shipped once and caught in real use.** Given a portfolio inside its band but with
 international parked in a Roth and a taxable account too full to take any, phase 5
-could not relocate — so it satisfied itself by *selling* international and buying U.S.
+could not relocate -- so it satisfied itself by *selling* international and buying U.S.
 stock up to the band ceiling, while phase 4 liquidated a bond fund the portfolio was
 already several points underweight. Both objectives are stated as "minimize this asset
 class in that kind of account", which only means "relocate it" while the class total
 is fixed. `TestAllocationIsSettledBeforeLocation` pins the whole shape.
 
 The six location phases then run over one shared variable layout, against the resolved
-totals as hard equalities — each phase's optimum carried forward as a `<=` bound so
+totals as hard equalities -- each phase's optimum carried forward as a `<=` bound so
 later phases refine but never undo earlier ones:
 
 1. Minimize bonds left in taxable accounts (fill sheltered room first).
-2. Minimize trade volume *within taxable accounts* — the proxy for avoiding capital
+2. Minimize trade volume *within taxable accounts* -- the proxy for avoiding capital
    gains. **No cost-basis data is collected**, so this is an approximation, not a
    gains calculation. Do not describe it as one in user-facing text.
 3. Minimize wash-sale exposure: dollars bought, in a shelter, of a fund also held in
@@ -296,14 +296,14 @@ later phases refine but never undo earlier ones:
 6. Tie-break by minimizing total trade volume everywhere, so the plan
    disturbs the fewest positions.
 
-The variable layout is `[ x (n) | y (n) | w (k) ]` — slot values, their absolute
+The variable layout is `[ x (n) | y (n) | w (k) ]` -- slot values, their absolute
 deviations `|x - current|`, and one-sided purchase amounts for phase 3. It is built
 once, so an objective is a vector over the same columns and a solved optimum is a row
 appended to `A_ub`. An objective with no nonzero coefficient is skipped rather than
 solved: it would only re-find a feasible point and carry a vacuous bound.
 
 The six objectives themselves live in `_location_objectives`, apart from the
-constraint rows — they are pure data (a cost vector and the sentence `_solve` prints
+constraint rows -- they are pure data (a cost vector and the sentence `_solve` prints
 if that phase is infeasible), and the ranking *is* the design, so it reads better as
 a list than as forty lines wedged mid-function. Keep the constraint-row construction
 inside `compute_trades` though: the point of the shared layout is that every phase
@@ -319,7 +319,7 @@ read carefully.
 `_slot_indices_by_account` groups the slots once for the three places that need them
 (the capacity check, the budget rows, the rounding pass). Each of those used to
 rescan the whole slot list per account. Nothing here is ever big enough for that to
-be slow — the LP solve dominates by orders of magnitude — but one of the three
+be slow -- the LP solve dominates by orders of magnitude -- but one of the three
 already grouped properly, and having the other two disagree read as an oversight.
 
 **Everything below phase 2 is free-rearrangement only.** Phases 3, 4 and 5 can decide
@@ -337,7 +337,7 @@ Some finer points that are easy to undo by accident:
   (`test_target_date_international_sleeve_is_left_alone` pins this).
 - **Phase 4 does the opposite, deliberately**, and uses `_fund_type_coefficient`.
   Bonds inside a Roth's target-date fund really are bonds occupying tax-free space,
-  exactly as phase 1 counts them — and a TDF account is pinned by its own budget row
+  exactly as phase 1 counts them -- and a TDF account is pinned by its own budget row
   anyway, so counting them states the truth without giving the solver anything to act
   on.
 - **Phase 3 penalizes only the sheltered *buy* side.** The taxable sale is the leg
@@ -347,44 +347,44 @@ Some finer points that are easy to undo by accident:
 - **A taxable holding of zero creates no wash-sale variable.** You cannot sell what
   you do not own. Without that check an empty taxable slot standing ready to receive a
   fund suppresses the very purchase phase 5 wants to make, over a sale that can never
-  happen — `test_an_empty_taxable_slot_does_not_suppress_a_sheltered_purchase` is the
+  happen -- `test_an_empty_taxable_slot_does_not_suppress_a_sheltered_purchase` is the
   regression guard, and it caught this during implementation.
 
-Phase 3 cannot condition on whether the taxable side is *actually* sold — that is
+Phase 3 cannot condition on whether the taxable side is *actually* sold -- that is
 decided by the same solve, and no linear objective can express it. The residue is a
 mild preference against accumulating, in a shelter, a fund you already hold in
 taxable. It costs nothing and usually points the same way as phases 4 and 5. What the
 LP cannot avoid, `_wash_sale_notes` reports after the fact from the final trades.
 
 A caution when testing placement: this LP is degenerate, so a scenario where the
-preferred placement merely *ties* proves nothing — the old solver often picked it
+preferred placement merely *ties* proves nothing -- the old solver often picked it
 anyway. A test earns its keep only if it fails against the previous ranking; see
 `test_international_is_moved_out_of_tax_advantaged_when_the_trades_are_free` and
 `test_bonds_fill_tax_deferred_space_before_tax_free_space`. Phase 3 is especially
 prone to this: the alternative-fund choice is usually volume-symmetric, so HiGHS
 often picks the non-overlapping vertex on its own. Its tests are therefore built on
-the deterministic paths — an unavoidable overlap that must warn, and the zero-holding
-exclusion — rather than on a tie it happens to win.
+the deterministic paths -- an unavoidable overlap that must warn, and the zero-holding
+exclusion -- rather than on a tie it happens to win.
 
-`_OBJECTIVE_SLACK` exists because HiGHS is not bit-exact — a hard `<=` against a raw
+`_OBJECTIVE_SLACK` exists because HiGHS is not bit-exact -- a hard `<=` against a raw
 optimum can spuriously reject the next phase's true optimum. Don't set it to zero.
 But note that every carried bound is also a *budget a later phase can spend*: giving
 up that much of an earlier priority is permitted, and the volume-minimizing phase at
 the bottom will take it. At the original cent, with five bounds stacked up, that
 surfaced as "sell $5,999.99" where the answer is $6,000.00. It is now a tenth of a
-cent — clear of HiGHS's noise (verified from $100k to $8B) but below the cent grid
+cent -- clear of HiGHS's noise (verified from $100k to $8B) but below the cent grid
 every displayed amount rounds to, so it cannot produce a visible artifact.
 
 **A target the accounts cannot reach is approximated and disclosed, never refused.**
 `_asset_class_reach` bounds each asset class by the smallest and largest coefficient
 among an account's own slots, because the account must spend exactly its own total
-across them — so a single-fund account's floor and ceiling are the same number. Those
+across them -- so a single-fund account's floor and ceiling are the same number. Those
 bounds are the allocation LP's bounds, and the objective aims at target from inside
 them; where the target is out of reach the answer is the nearest point, which is what
 `_resolve_allocation`'s second objective is for.
 
 There is no infeasible case there to reject. Every slot's three coefficients sum to 1,
-so each account's three smallest sum to at most 1 and its three largest to at least 1 —
+so each account's three smallest sum to at most 1 and its three largest to at least 1 --
 which puts the sum of the floors at or below the portfolio and the sum of the ceilings
 at or above it, and a box like that always meets the `sum = total_value` plane. (The
 main LP can still be infeasible: `reach` bounds each class on its own, so it is sound
@@ -394,13 +394,13 @@ for rejecting the impossible, not for certifying the possible. That surfaces thr
 **The band used to be those bounds as well, which made it the arbiter of feasibility.**
 `_check_capacity_feasible` raised when the band and the reach did not overlap, so an
 unreachable target was an error unless the band happened to be wide enough to cover the
-gap — widening a band silently converted a refusal into a plan, and a 0% bond target
+gap -- widening a band silently converted a refusal into a plan, and a 0% bond target
 against a target-date fund's bond sleeve could not be planned at all, which is how it
 was found. Both it and `_band_note` are gone. The band is now the trigger and nothing
 else.
 
 `_capacity_notes` says what the reach costs, and its test is `_reachable_bounds`
-having had to widen that class — the band and what the accounts can hold do not overlap
+having had to widen that class -- the band and what the accounts can hold do not overlap
 at all, so the class is outside its band whatever else the portfolio does. Nothing
 weaker will do: a class can also miss its band because the *other two* pinned the
 dollars it needed, and which class gives way is then a property of the three together,
@@ -409,14 +409,14 @@ marks it outside its band and says no more, because the only available explanati
 would be a false one.
 
 Since an account holding individual funds declares all three, its coefficient for
-every class runs 0 to 1 — floor zero, ceiling its whole value — so **a target-date
+every class runs 0 to 1 -- floor zero, ceiling its whole value -- so **a target-date
 account is now the only thing that can pin one.** Both messages used to say so
 outright, in a second indented paragraph ("an account holding a single fund has to put
 its whole value into that fund, and a target-date fund's mix is fixed"); shortening
 each note to one paragraph cut that, and the remedy now names the same two culprits
-only obliquely — "hold less in single-fund and target-date accounts". Note the bound
-itself is general — `compute_trades` is public and tests call it with partial slot
-sets — so a message may name the likely cause but never asserts it, which is what made
+only obliquely -- "hold less in single-fund and target-date accounts". Note the bound
+itself is general -- `compute_trades` is public and tests call it with partial slot
+sets -- so a message may name the likely cause but never asserts it, which is what made
 the oblique form an acceptable trade rather than a loss of precision.
 
 Ceilings are reported before floors: one account holding one fund breaches both at
@@ -429,26 +429,26 @@ Trades below `MIN_TRADE_DOLLARS` are dropped as impractical.
 ### The rebalancing band (`allocation.effective_band_points`)
 
 Two rules, and a class has to satisfy **both**, so the tighter of the two is what
-binds — **the 5/25 rule**. `band_pct` is the *absolute band*, in points of the whole
+binds -- **the 5/25 rule**. `band_pct` is the *absolute band*, in points of the whole
 portfolio; `relative_band_pct` is the *relative band*, a percentage of the asset
 class's target, so it scales with the target where the absolute one does not. Those
 three names are what the prompts, the report, the saved keys and the README all say,
 so a change to one of them is a change to all five places.
 
 Neither alone works for all three classes. Five points is a quarter of a 20% bond
-sleeve and far too loose for a 5% one — five points below a 5% target is *zero bonds*,
+sleeve and far too loose for a 5% one -- five points below a 5% target is *zero bonds*,
 which is how a portfolio holding barely a percent against a 5% target was reported as
 in-band and left alone. Twenty-five percent of a 58.8% U.S. target is 14.7 points, far
 too loose for the class that dominates the portfolio. Taking the lesser gives small targets the
 relative rule and large ones the absolute cap. The two cross at a 20% target, where
-both come to 5 points — which is why the convention is usually stated as "5 points at
+both come to 5 points -- which is why the convention is usually stated as "5 points at
 20% and above, 25% relative below": one rule, described twice.
 
 `relative_band_pct` of `None` means the rule was never configured and only `band_pct`
 applies. That is **distinct from `0`**, which like a `band_pct` of `0` tolerates no
 drift at all. The distinction is what lets `compute_trades`'s `band_pct`-only default
-keep meaning exactly what it did — every solver test that says nothing about the band
-still asserts exact-target behavior — and it is the same "absent means never chosen"
+keep meaning exactly what it did -- every solver test that says nothing about the band
+still asserts exact-target behavior -- and it is the same "absent means never chosen"
 that `rebalance_band_pct` uses in the config file.
 
 **Both halves are required input, and neither offers a suggested answer.**
@@ -478,16 +478,16 @@ the flow: pressing Enter falls through to "Please enter a number." rather than
 returning anything, which is what "required" means here.
 
 **The relative half is one of the two questions in the flow that get explained before
-they are asked** (the other is the three fund slots — see `prompts.FUND_EXPLANATION`).
+they are asked** (the other is the three fund slots -- see `prompts.FUND_EXPLANATION`).
 Everything else is asked bare and explained where its effect is visible, in the
 report. That does not work here: "or by more than this percentage of its target"
 reads as an alternative when it is a second, tighter limit, and the reason the rule
-exists — five points of drift is the whole of a 5% bond sleeve — is invisible from the
+exists -- five points of drift is the whole of a 5% bond sleeve -- is invisible from the
 prompt. So `prompts.BAND_EXPLANATION` states the policy above the pair, worded the way
-one is written in an investment policy statement — an asset class "drifts from its
+one is written in an investment policy statement -- an asset class "drifts from its
 target" by more than "the smaller of" two bands. That one sentence carries all the
 semantics, which leaves each question below naming only its own unit (`pts` against
-`%`) — the part that was actually ambiguous. It stays one sentence: drafts that also
+`%`) -- the part that was actually ambiguous. It stays one sentence: drafts that also
 named the 5/25 rule, said what the relative band is for and noted that zero turns the
 band off were all cut back to what a reader needs in order to answer the two questions.
 The report's "Rebalancing Bands" section is where the band's effect is visible, and it
@@ -500,7 +500,7 @@ holds this.
 The vocabulary throughout is the Bogleheads wiki's and Larry Swedroe's, because that
 is where a reader checking what to answer ends up: "rebalancing band", "asset class", an
 asset class that "drifts from" its target, and the pair of numbers as **the 5/25
-rule** — absolute 5, relative 25. The rule is named in `config.py` and this file, and
+rule** -- absolute 5, relative 25. The rule is named in `config.py` and this file, and
 nowhere the user can see it: not in the prompt, and no longer in the README. Where the two traditions disagree, precision
 wins: Bogleheads writes the absolute half as "5%", which is 5 percentage *points*, so
 the prompt's unit stays `pts`.
@@ -513,7 +513,7 @@ footnote and the no-trades line both go through it.
 
 **The no-trades line has to survive being read against the starred rows above it.**
 Nothing to trade and a class still outside its band is neither "already matches the
-target allocation" nor "every asset class is within its band" — it is what the accounts
+target allocation" nor "every asset class is within its band" -- it is what the accounts
 can hold that stopped it, so a third line says so. It reads `within_band` off
 `summary.categories` rather than anything the solver reports: the summary describes the
 current holdings, which with no trades are also the final ones, so it is right by
@@ -547,17 +547,17 @@ and not the U.S. share alone with the remainder left as an exercise. The confirm
 below it is "Use these values?", plural, because two values are on screen; see the
 confirmation rule under "Output structure".
 
-The fund page's HTML is deliberately not scraped — client-side rendered behind bot
+The fund page's HTML is deliberately not scraped -- client-side rendered behind bot
 protection. Don't "improve" this by adding a scraper.
 
 **A dead source in this chain is silent, and one was.** The JSON endpoint's URL sat
-under `/investment-products/etfs/profile/`, where the SPA router answers *every* path —
-real or invented — with `200` and the HTML app shell. So the primary source failed on
+under `/investment-products/etfs/profile/`, where the SPA router answers *every* path --
+real or invented -- with `200` and the HTML app shell. So the primary source failed on
 every run for every user, the chain quietly served the quarterly PDF, and the two claims
 that make the chain worth having ("monthly", "two independent sources") were both false
 while the tests stayed green. The URL is now `vmf/api/{ticker}/diversification`, which
 is what the page's own bundle calls. Two things follow. **A URL here is verified against
-a live response body, never a status code** — `curl -sI` cannot tell an endpoint from
+a live response body, never a status code** -- `curl -sI` cannot tell an endpoint from
 the router's catch-all. And **the whole suite mocks the network by design**, so nothing
 in CI can ever notice this. `tests/test_network_sources.py` is the cover for that blind
 spot -- `pytest -m network`, deselected by default -- and it is a manual act, run before
@@ -567,19 +567,19 @@ merely returning something.
 
 **Order `requests.exceptions.JSONDecodeError` before `requests.RequestException`.** It
 subclasses *both* that and `ValueError`, so a decode clause placed after the network
-clause never fires, and a 200 carrying HTML gets reported as "Failed to download" — a
+clause never fires, and a 200 carrying HTML gets reported as "Failed to download" -- a
 parse failure described as an outage, which is most of why the above went unnoticed for
 as long as it did. `test_a_non_json_body_is_not_reported_as_a_download_failure` pins it,
 and the fake response in `tests/test_vt_allocation.py` raises requests' real subclass
-rather than a bare `ValueError` — with a bare one, the mis-ordered version passes.
+rather than a bare `ValueError` -- with a bare one, the mis-ordered version passes.
 
 **`_extract_us_pct_from_diversification` is total: only `VTFetchError` leaves it.**
 `fetch_vt_us_pct` and `resolve_vt_allocation` catch that and nothing else, and `cli.run`
 has no broad handler, so anything else escaping crashes the run over an upstream
-response the user cannot influence — the same standard `persistence.config_from_dict`
+response the user cannot influence -- the same standard `persistence.config_from_dict`
 holds itself to, and it is structured the same way: named errors from
 `_parse_diversification`, then a catch-all that re-raises `VTFetchError` untouched. Three
-shapes used to escape — a non-string `name`, a non-list `item`, and a NaN percentage.
+shapes used to escape -- a non-string `name`, a non-list `item`, and a NaN percentage.
 The NaN is the one to remember: `json.loads` accepts a bare `NaN` literal, `Decimal` then
 builds a NaN happily, and comparing it *signals* `InvalidOperation` instead of returning
 `False`, so the range check itself was the thing that raised. Hence the `is_finite()`
@@ -590,14 +590,14 @@ test in front of it.
 separate host, which is what makes it a good second source and a poor thing to hand a
 person. `VT_FUND_PAGE_URL` is what the manual-entry prompt names, because someone
 reading the number off for themselves wants the page they would reach from a search or
-from their broker — current rather than quarterly, and carrying the same country table
+from their broker -- current rather than quarterly, and carrying the same country table
 the JSON endpoint backs. Being unscrapable is irrelevant to a human.
 
 ### Output structure (`formatting.py`)
 
 Hierarchy uses two devices only: a rule under a heading, and indentation.
 `=` banners the three steps *and the report they produce*, `-` underlines divisions
-within either, and below that nesting is position alone — an account is a plain label,
+within either, and below that nesting is position alone -- an account is a plain label,
 indented, with its contents one level deeper. Resist adding a third rule style; that
 was tried and reverted. `format_result_header` is not a third style: same rule, same
 width, just no step number.
@@ -605,7 +605,7 @@ width, just no step number.
 **Every `-` subheading is Title Case; everything else is a sentence.** "Stock and
 Bond Allocation", "Rebalancing Bands", "Account Holdings", "Current vs. Target
 Allocation", "Orders to Place", "Notes", "Saved Accounts", "Add Accounts", "Save
-Portfolio" —
+Portfolio" --
 the `=` banners above them are upper-cased by `format_section_header` anyway, and
 everything below them is prose. A subheading names a thing rather than saying
 something, which is what the casing marks. Short prepositions and conjunctions stay
@@ -618,7 +618,7 @@ read as it widens, while a table of dollar figures does not. Prose, notes and
 the `=` banners all use prose width; tables are sized to their own contents within the
 table budget.
 
-This replaced a fixed 78, which was fine for prose but squeezed the tables — the
+This replaced a fixed 78, which was fine for prose but squeezed the tables -- the
 comparison table silently passed 78 at a $5M portfolio, because seven-figure dollar
 cells are four characters wider than five-figure ones, and no test covered it.
 `terminal_width()` reads `$COLUMNS` first, which is what makes any of this testable;
@@ -642,8 +642,8 @@ stays aligned. Nicknames are capped at input instead (`MAX_ACCOUNT_NAME_LENGTH`)
 those are labels the user invents, unlike a fund's real name, and they were what
 pushed the headings off the page.
 
-An account heading is always `nickname (type, treatment)` —
-`Vanguard Roth IRA (Roth IRA, tax-free)`, `Vanguard Brokerage (Brokerage, taxable)` —
+An account heading is always `nickname (type, treatment)` --
+`Vanguard Roth IRA (Roth IRA, tax-free)`, `Vanguard Brokerage (Brokerage, taxable)` --
 with the treatment *inside* the parentheses. Inside rather than after a dash because it
 is shorter and safe at the nickname cap: the longest possible heading lands well inside
 the page rather than wrapping and stranding a `--` at the end of a line. Uniform
@@ -652,8 +652,8 @@ because one line shaped like the next is what lets the eye compare them down the
 There used to be a rule suppressing the treatment when the type already named it, for
 the sake of the account type then called `Taxable Brokerage`. Since v4 renamed that to
 plain `Brokerage`, **no account type names its own treatment**, and the branch was
-removed rather than left unreachable. Reintroducing a type that does — a
-`Tax-free Savings Account`, say — is what would bring the question back.
+removed rather than left unreachable. Reintroducing a type that does -- a
+`Tax-free Savings Account`, say -- is what would bring the question back.
 
 ### Wording the output has to keep
 
@@ -662,10 +662,10 @@ loses them is a regression:
 
 - **The report always ends with the disclaimer.** It is the artifact that gets
   screenshotted and acted on days later; a disclaimer that lives only in the README
-  does not travel with it. `report.DISCLAIMER` is the one copy — `--help`'s epilog is
+  does not travel with it. `report.DISCLAIMER` is the one copy -- `--help`'s epilog is
   that same object rather than a second wording of it, so the two cannot drift apart
   (`test_help_carries_the_report_s_own_disclaimer`). It is **two clauses**: not
-  investment, tax or legal advice, and **not a recommendation to buy or sell** — the
+  investment, tax or legal advice, and **not a recommendation to buy or sell** -- the
   Reg BI / FINRA 2111 term of art, and the other half of never using the word above.
 
   **It is two lines, and stays two lines.** A longer draft also disclaimed the advisory
@@ -687,18 +687,18 @@ loses them is a regression:
   and "Place the following orders:". The disclaimer's "not a recommendation to buy or
   sell any security" is the explicit denial that goes with the avoidance.
 
-- **"Order" and "trade" are not synonyms — use the industry split.** An *order* is the
+- **"Order" and "trade" are not synonyms -- use the industry split.** An *order* is the
   instruction you submit to a broker; a *trade* is the transaction that results, and
   the activity in general. So: "Orders to Place", "Review each order before placing
   it", "before placing these orders", "the above orders do not reach the target",
-  "once these orders are filled" — all instructions. And: "no trades needed", "the
-  trades needed to rebalance", "taxable trade volume" — all activity or outcome. The
+  "once these orders are filled" -- all instructions. And: "no trades needed", "the
+  trades needed to rebalance", "taxable trade volume" -- all activity or outcome. The
   giveaway is the verb: you *place*, *submit* and *fill* an order; you *make* a trade
   and live with its result.
 
   Note that "not yet submitted" does **not** make something a third kind of thing.
   Everything under "Orders to Place" is an order that has not been placed, so a
-  sub-minimum one that was dropped is simply an order missing from the list — "One
+  sub-minimum one that was dropped is simply an order missing from the list -- "One
   order smaller than $1.00 was left out", not "one move". A third noun for the same
   object is a vocabulary the reader has to learn for no gain. It does force "so the
   above orders do not reach the target exactly" at the end of that sentence: with a
@@ -740,7 +740,7 @@ loses them is a regression:
   sentence, naming each class in the words the rest of the report uses ("U.S. stocks",
   "international stocks", "bonds") rather than a slash-separated fragment.
 - **The output does not address the reader's holdings in the second person.** Not
-  "your portfolio", "your accounts", "your target" or "the funds you hold" — "the
+  "your portfolio", "your accounts", "your target" or "the funds you hold" -- "the
   portfolio", "these accounts", "the target", "the funds held". It reads as a statement about the
   portfolio in front of you rather than a claim about you, and it is one voice across
   the report, the prompts and the solver's notes, which were written at different
@@ -760,8 +760,8 @@ loses them is a regression:
   They are also printed unwrapped by `prompt_choice`, so each has to fit
   `prose_width()` -- `TestTaxTreatmentChoices` holds both lines.
 - **No claim implies future performance.** Nothing may assert that stocks will
-  out-grow bonds; where the asset-location preference is described at all — the
-  README's "Asset location" entry — it is "a common convention", not a prediction.
+  out-grow bonds; where the asset-location preference is described at all -- the
+  README's "Asset location" entry -- it is "a common convention", not a prediction.
   The onboarding flow used to say this itself, above the cash question, and no longer
   does: it explained a trade the user had not been shown yet, and the program prints
   no other unprompted commentary on its own reasoning.
@@ -778,7 +778,7 @@ loses them is a regression:
   goes as close as the accounts allow and `_capacity_notes` says which class, what it
   can reach, in dollars and as a share of the portfolio, and what the user could change.
   It states the reachable bound rather than where the plan happened to land, so the
-  claim is true of the accounts and not merely of this solve — which is also why it
+  claim is true of the accounts and not merely of this solve -- which is also why it
   fires only where that bound is provably the obstacle; see the solver section.
 
 **Indentation is carried by `Prompter.indented()` and `INDENT_UNIT`, never spelled
@@ -793,14 +793,14 @@ siblings. Every level steps by exactly one `INDENT_UNIT`.
 both in `formatting`, and the difference between them is whether the figure has a
 column to line up with:
 
-- **In prose, every value is written as short as it goes** — `format_percent_prose`,
+- **In prose, every value is written as short as it goes** -- `format_percent_prose`,
   which is `format_percent_at(v, percent_places([v]))`. "Derived from 80% stocks and
   20% bonds", "VT's 62% U.S. allocation". A sentence has nothing to align to, and
   "20.0%" in one is a precision the figure does not have. This *replaced* a rule
   fixing every percentage in the report at one decimal place; the argument for that
   one was that "20% bonds" two lines under "20.0%" reads as an inconsistency, and the
   answer is that the two are in different places doing different jobs.
-- **In a table, every value of one unit shares one precision** — `format_percents`,
+- **In a table, every value of one unit shares one precision** -- `format_percents`,
   which is `percent_places` over the whole set and then each value at that. The
   comparison table's current and target shares are one unit and are read against each
   other across the row, so they share; its drift column is percentage *points* and
@@ -847,8 +847,8 @@ shape one level down: it asks for "U.S. stocks" and "International stocks" and
 confirms "That leaves 1.7% bonds. Use this value?". Questions for every member of
 the set outnumber the degrees of freedom, which invites an answer that cannot be
 honored and turns a typo into a form the user has to re-fill. A denial restarts from
-the *first* question, because the number they want to change is one they typed — the
-derived one is not theirs to edit — and the only remaining way to be wrong is for the
+the *first* question, because the number they want to change is one they typed -- the
+derived one is not theirs to edit -- and the only remaining way to be wrong is for the
 entered values to exceed 100 outright, which the target-date prompt rejects in place.
 
 **A question the answers so far have already settled is not asked.** 100% U.S. stocks
@@ -870,8 +870,8 @@ international one and therefore asks for both.
 One consequence to know: entered target-date sleeves now sum to exactly 100, where a
 fact sheet rounding each to a tenth often does not, so a fund printed 64.0 / 34.3 /
 1.6 is confirmed back as 1.7% bonds. `TargetDateAllocation` keeps
-`PERCENT_SUM_TOLERANCE` and `fraction_of` keeps normalizing — a config written by an
-older version or by hand can still hold a sum of 99.9 — and the tenth of a point would
+`PERCENT_SUM_TOLERANCE` and `fraction_of` keeps normalizing -- a config written by an
+older version or by hand can still hold a sum of 99.9 -- and the tenth of a point would
 have been spread across the three sleeves by `fraction_of` anyway.
 
 A share of the portfolio is `%`; a distance between two percentages is **percentage
@@ -887,7 +887,7 @@ The point of putting figures in rows is to compare them down the page, which rag
 rather than `$0.00`: it is capacity the solver can use, not a holding, and `$0.00`
 gives it a precision it does not have.
 
-**The orders close with where they land** (`_describe_outcome`) — the question the
+**The orders close with where they land** (`_describe_outcome`) -- the question the
 rest of the report only answers by implication. It is computed from the holdings
 rather than the class totals, so a trade in a target-date fund moves all three sleeves
 by their own fractions, and it is stated conditionally ("If these orders fill at the
@@ -896,15 +896,15 @@ the depth of the account blocks above it**, because it belongs to the orders: se
 flush it read as the first of the notes below rather than as the answer to them.
 
 **Everything after that is a `Note`, and they go under one `-` subheading.** The tail
-of the report is where several unrelated findings pile up — a taxable sale, a class the
-accounts cannot reach, a wash-sale overlap, an order too small to place — and it was
+of the report is where several unrelated findings pile up -- a taxable sale, a class the
+accounts cannot reach, a wash-sale overlap, an order too small to place -- and it was
 the one part of the page carrying no structure at all: a run of flush paragraphs of the
 same width and weight, no heading, in an order a reader could not infer, each prefixed
 `Warning:` whether or not it was one. A two-line finding and a seven-line statute
 recital looked identical, and there was no signal for where to stop reading.
 
 `models.Note` is `label`, `summary` and an optional `detail`, and `report._describe_notes`
-is the one place they land on the page — the label leads the summary, so three words say
+is the one place they land on the page -- the label leads the summary, so three words say
 whether the paragraph is the reader's, and a `detail` sits one `INDENT_UNIT` in, where it
 reads as optional.
 
@@ -913,8 +913,8 @@ they were cut to fit in one paragraph: the taxable sale's semicolon became a per
 stranded-bonds note dropped "that can only be held whole", and the capacity note lost
 both the target's own dollar figure (the comparison table two sections up prints it for
 every class, in dollars and as a share) and the sentence explaining *why* the accounts
-are stuck. Three lines is measured at the worst case, not the typical one — the longest
-label ("International stock target out of reach") against a ten-figure amount — because
+are stuck. Three lines is measured at the worst case, not the typical one -- the longest
+label ("International stock target out of reach") against a ten-figure amount -- because
 that is what decides whether a note ever spills to four. `_describe_notes` still renders
 `detail`, and the split is still worth knowing if one earns its way back: **the summary
 reports and the detail explains.**
@@ -928,8 +928,8 @@ accounts"), so a reader who does not already know that a target-date fund's mix 
 be split will not learn it from the note. That was the deliberate trade for one
 paragraph.
 
-The `Warning:` prefix is gone with them: several of these are not warnings — a taxable
-sale is a disclosure, a dropped order a footnote — and under a heading the prefix only
+The `Warning:` prefix is gone with them: several of these are not warnings -- a taxable
+sale is a disclosure, a dropped order a footnote -- and under a heading the prefix only
 repeated what the heading said. Which is also why the field is `RebalanceResult.notes`
 rather than `warnings`: the printed word and the code's name for it agree, as they do
 everywhere else here.
@@ -939,18 +939,18 @@ deliberate: the taxable sale leads, because it is the consequence of placing the
 orders at all; `result.notes` follows in the solver's own order (capacity, then bonds
 stranded in taxable, then wash sales); and the dropped-order footnote trails, because
 it is about the completeness of the list rather than about the portfolio. The
-dropped-order note fires only when there *are* orders — "the above orders" has nothing
+dropped-order note fires only when there *are* orders -- "the above orders" has nothing
 to point at otherwise.
 
-The report restates every answer it was given — target allocation and where it came
-from, the band, the accounts and their holdings — before the current-vs-target summary
+The report restates every answer it was given -- target allocation and where it came
+from, the band, the accounts and their holdings -- before the current-vs-target summary
 and the trades. Read on its own with no scrollback it should still say what was asked
 for and what to do. `RebalanceInputs` carries that set, so recapping one more answer
 does not mean growing `format_report`'s signature again.
 
 `Prompter.indented()` carries depth for interactive output, so indentation is a
 property of where you are in the flow rather than something spelled into each string.
-`_at_depth` intentionally leaves leading blank lines flush — several messages open
+`_at_depth` intentionally leaves leading blank lines flush -- several messages open
 with `\n` as a separator, and padding it would emit trailing whitespace.
 
 **`report.py` must not import `prompts.py`.** Shared presentation constants
@@ -963,16 +963,16 @@ atomically (temp file + `os.replace`). Saved values are re-offered as *editable
 defaults*, never silently trusted.
 
 **The saved accounts are listed before they are asked about, and the instruction is
-said once.** Step 3 lists them vertically under "Saved Accounts" — one name per line,
+said once.** Step 3 lists them vertically under "Saved Accounts" -- one name per line,
 because those names are the headings the questions below arrive in and a list read
-down the page is what lets someone match one to the next — then says how to answer
+down the page is what lets someone match one to the next -- then says how to answer
 them ("For each, press Enter to use its saved value, or type a new value.") **above
 the list rather than at the head of each account**, where it said nothing the previous
 account had not already said. Each account then opens with "Keep this account?", which
 is the one way the flow drops a saved account; answering no says `Removed '<name>'.`
 and moves on. `TestSavedAccountsLine` pins the list and the single instruction.
 
-**Every way a config file can fail to load raises `PersistenceError`** — that is
+**Every way a config file can fail to load raises `PersistenceError`** -- that is
 what `cli.run()` catches to warn and continue blank instead of crashing, so any
 other exception escaping the parse takes the whole run down over a file the user
 can hand-edit. Valid JSON of the wrong shape counts: `"accounts": 7`, a holding
@@ -984,17 +984,17 @@ when a new shape shows up.
 
 A config saved before accounts became one-kind-or-the-other can hold a mix, and no
 longer loads; `Account`'s message names the account, and `cli.run()` warns and starts
-blank as it does for any `PersistenceError`. That is deliberate — splitting such an
+blank as it does for any `PersistenceError`. That is deliberate -- splitting such an
 account automatically would invent an account boundary that is a hard constraint on
 the solver.
 
-The file is at v4, and upgrades run **one hop at a time** — `config_from_dict` chains
+The file is at v4, and upgrades run **one hop at a time** -- `config_from_dict` chains
 `v1 → _upgrade_v1 → v2 → _upgrade_v2 → v3 → _upgrade_v3 → v4`, so a v1 file walks the
 same path a v3 file does. Each upgrade translates without validating: anything still wrong surfaces from
 the normal parse, so a corrupt old file reports what a corrupt current file would.
 Each copies at every level, because a failed load must not leave the caller's parsed
 JSON half-renamed. Any further rename of a persisted name needs another hop, not an
-in-place edit of an existing one — and `_upgrade_v1` must keep returning `2`, not
+in-place edit of an existing one -- and `_upgrade_v1` must keep returning `2`, not
 `SCHEMA_VERSION`, or it will skip every hop added after it.
 
 - **v1 → v2** spelled the fund types after the academic asset classes
@@ -1002,8 +1002,8 @@ in-place edit of an existing one — and `_upgrade_v1` must keep returning `2`, 
   CLI prints (`us_stock`, `target_date`, `value`, `values_as_of`).
 - **v2 → v3** splits the single `tax_advantaged` treatment into `tax_deferred` and
   `tax_free`, re-inferred from the account's own persisted `account_type` via
-  `ACCOUNT_TYPE_TAX_TREATMENT`. An unrecognized type — including `"Other"`, whose v2
-  answer was a yes/no that never recorded the difference — becomes `tax_deferred`:
+  `ACCOUNT_TYPE_TAX_TREATMENT`. An unrecognized type -- including `"Other"`, whose v2
+  answer was a yes/no that never recorded the difference -- becomes `tax_deferred`:
   bonds fill that space first, so guessing this way costs nothing if it is wrong.
 
   Note `_upgrade_v2` looks types up in the *current* `ACCOUNT_TYPE_TAX_TREATMENT`, which
@@ -1015,7 +1015,7 @@ in-place edit of an existing one — and `_upgrade_v1` must keep returning `2`, 
   would make a guess look like the user's own saved answer.
 
 - **v3 → v4** renames the `Taxable Brokerage` account type to `Brokerage`. Every other
-  entry on the list is the account's actual name — Roth IRA, 403(b), HSA — while
+  entry on the list is the account's actual name -- Roth IRA, 403(b), HSA -- while
   "Taxable" is a descriptor, and Title-Casing it put the one word the report otherwise
   always writes lowercase (beside "tax-free" and "tax-deferred") into a proper noun. An
   account type the map does not know, `"Other"` included, is left exactly as it is.
@@ -1024,17 +1024,17 @@ in-place edit of an existing one — and `_upgrade_v1` must keep returning `2`, 
 new optional key translates nothing, and its absence already means "never chosen"
 exactly as an absent `rebalance_band_pct` does. A hop is for a name or a meaning that
 changed. Note that `_upgrade_v2` now writes the literal `3` rather than
-`SCHEMA_VERSION` — same trap as `_upgrade_v1`, harmless only until the next hop
+`SCHEMA_VERSION` -- same trap as `_upgrade_v1`, harmless only until the next hop
 exists.
 
 ## The README
 
 It answers "what will this print, what does it optimize for, and what will it not
-do" — for someone deciding whether to install it and whether to trust the plan. The
+do" -- for someone deciding whether to install it and whether to trust the plan. The
 middle question earns the solver a place there, but only at the altitude of *what is
 being optimized and in what order*: the ranking as six one-line clauses, the two
 stages, and the fact that ranks are lexicographic rather than weighted. **How** any of
-it is computed still lives in this file alone — the variable layout, the carried
+it is computed still lives in this file alone -- the variable layout, the carried
 bounds, `_OBJECTIVE_SLACK`, the implied third equality, which phase reads
 `_fund_type_coefficient` and which reads `slot.fund_type`. A README that starts
 explaining a phase rather than naming it is the failure mode to watch for.
@@ -1044,27 +1044,27 @@ How it works, Limitations, Development, License.
 
 **The Example is real output, pasted verbatim.** It is the first thing a reader sees
 and the reason the README is structured around it, so it may never be hand-edited or
-hand-idealized — re-generate it and paste the result. Any change to `report.py` or
+hand-idealized -- re-generate it and paste the result. Any change to `report.py` or
 `formatting.py` wording means re-generating it. To do that, drive `run()` with a
-scripted prompter as the tests do (never by piping stdin — see "Running the CLI
+scripted prompter as the tests do (never by piping stdin -- see "Running the CLI
 without side effects"), under `COLUMNS=80`, which is what `tests/conftest.py` pins the
 suite to and therefore the width every wrapping assertion in the repo assumes. The
 scenario is 80/20, a 5/25 band, and three accounts, each declaring all three funds:
 a Brokerage holding $60k VTI and $30k VXUS, a Roth IRA holding $20k VTI, and a
 Traditional 401(k) holding $30k VTI and $10k BND. The two empty Roth slots are the
-point of the example — they are what lets the whole bond target land in the shelters,
+point of the example -- they are what lets the whole bond target land in the shelters,
 so the taxable account is left alone and the report carries no taxable-sale
 disclosure.
 
 **One line of the Example cannot come from such a run.** Passing `--vt-us-pct` to skip
 the network stamps the provenance line "manually specified via --vt-us-pct"
-(`cli.py`), where the README shows the fetched form — `formatting.describe_as_of` on a
+(`cli.py`), where the README shows the fetched form -- `formatting.describe_as_of` on a
 real date, e.g. "(as of June 30, 2026)". The README deliberately shows the fetch path,
 because that is what a reader running the CLI normally will see. Substitute that one
 line by hand and leave the other seventy-odd exactly as printed.
 
 **How it works is a list of bolded lead-ins, each followed by at most a short
-paragraph** — two to four lines. It is a summary, not a specification. An entry that
+paragraph** -- two to four lines. It is a summary, not a specification. An entry that
 needs more room is either two entries (the band's definition and the band's trigger
 semantics are split for exactly this reason) or a Limitations bullet. Growing one past
 a short paragraph is the thing that keeps happening; splitting it is the fix.
@@ -1073,7 +1073,7 @@ a short paragraph is the thing that keeps happening; splitting it is the fix.
 paragraph cannot carry: six preferences in prose reads as six things the solver
 balances, which is precisely what lexicographic ordering is not. It is six numbered
 items of one line each, and each has to survive being read against `_location_objectives`
-— the ordering there *is* the list here. It sits *inside* the "Preferences are ranked,
+-- the ordering there *is* the list here. It sits *inside* the "Preferences are ranked,
 not weighted" entry, between that paragraph and the one sentence on what can open a
 taxable trade, rather than under a bolded lead-in of its own. Splitting it out was
 tried: it produced a lead-in that was not a sentence, and stranded the taxable-trade
@@ -1081,12 +1081,12 @@ rule outside the list it qualifies. Two clauses in it are load-bearing beyond
 their length. Item 1's "since their interest is taxed yearly as ordinary income" is the
 only justification given for the whole shelter preference. Item 4's "by common
 convention" is required: saying tax-free space is for stocks *because* stocks grow more
-is a claim about future performance, which nothing here may make — see "No claim implies
+is a claim about future performance, which nothing here may make -- see "No claim implies
 future performance".
 
 **But compressing one until it says something false is the worse failure**, and it has
 happened. An entry read "Only bond placement opens a taxable trade. Trades inside
-sheltered accounts cost nothing" — two false claims in one lead-in. Reaching the
+sheltered accounts cost nothing" -- two false claims in one lead-in. Reaching the
 resolved allocation opens taxable trades too (those are hard equalities; phase 1 is
 merely the highest *preference* that can open one), and a sheltered trade realizes no
 capital gain but still pays spreads and fees, which Limitations already discloses. A
@@ -1097,7 +1097,7 @@ list; when it cannot be made both short and true, it is a Limitations bullet.
 lets How it works stay short. A newly discovered thing the tool cannot see is a bullet
 there, not a qualification bolted onto a paragraph above.
 
-**Both sections run roughly in the order a run meets them** — for Limitations, the
+**Both sections run roughly in the order a run meets them** -- for Limitations, the
 lookup, then the step 3 questions, then the report top to bottom, then what happens at
 the broker; for How it works, step 1, step 2, step 3, then the solve. Nothing says so on
 either page; a lead-in announcing the order was written and cut, because an order either
@@ -1107,7 +1107,7 @@ holder notices, rather than with the question where the ticker was typed.
 
 How it works did not always follow it, and the failure was invisible until the two
 sections were read against each other: the three entries about what you are *asked*
-sat last, with the VT split — the first line of the Example directly above — dead last
+sat last, with the VT split -- the first line of the Example directly above -- dead last
 of all. The objection to fixing it is real and was weighed. Run order opens the section
 on where a number comes from rather than on what the tool does with it, which buries the
 lede by one entry. It wins anyway, because the Example ends on that same VT provenance
@@ -1115,7 +1115,7 @@ line, so the two read continuously; and because the section now closes on the ra
 instead of trailing off into fund-entry rules, which is the stronger place for it.
 
 **A mechanism goes above and its caveat goes below, and neither restates the other.**
-Three pairs are split that way on purpose — "Name a fund you don't own yet" against the
+Three pairs are split that way on purpose -- "Name a fund you don't own yet" against the
 restricted-lineup bullet, ranking 5 against "a rule of thumb", ranking 2 against "No
 cost basis". The failure mode is the caveat re-explaining the mechanism to set up its
 own point: "No cost basis" used to open by re-describing the taxable-volume proxy, which
@@ -1123,13 +1123,13 @@ the ranking now states, and "It knows nothing about" ended on a 401(k)'s fixed f
 which is the whole subject of a bullet two above it.
 
 **The Disclaimer section is `report.DISCLAIMER`'s two clauses plus a pointer to
-Limitations, and nothing else.** The clauses cut from the report — advisory
-relationship, order placement, trademark use — are not restated here either; see the
+Limitations, and nothing else.** The clauses cut from the report -- advisory
+relationship, order placement, trademark use -- are not restated here either; see the
 disclaimer entry under "Wording the output has to keep" for why.
 
 **Every name the README uses for a user-visible concept is the program's own name for
 it.** The two bands, the order/trade split, and the ban on "recommendation" all apply
-here exactly as they do to printed output — the README is one of the places the band
+here exactly as they do to printed output -- the README is one of the places the band
 names have to agree, and a rename is a change to all of them at once. The 5/25 rule is
 the exception in the other direction: it is a name for something the program never
 shows, so the README does not use it either.
@@ -1157,7 +1157,7 @@ The default suite mocks every network call, so a rotted VT source is invisible t
 CI and to every contributor until a user runs the CLI and quietly gets the
 fallback. Cutting a release is the one scheduled moment when someone is paying
 attention, so it is where the check belongs. A failure here is not automatically
-a bug in this repo — Vanguard may just be down — but it must be understood
+a bug in this repo -- Vanguard may just be down -- but it must be understood
 before tagging, not after: the alternative is shipping a version whose primary
 source does not exist, which is exactly what 0.1 through 0.5 did.
 
@@ -1165,12 +1165,12 @@ It is deliberately **not** a step in `publish.yml`. Two reasons, and the second
 is the one that decides it. A third-party outage would block a release for a
 reason that has nothing to do with the release. And the tests would run from a
 GitHub runner's datacenter IP, which is precisely the kind of client the
-interactive site's bot protection treats differently from a laptop — so a
+interactive site's bot protection treats differently from a laptop -- so a
 failure there would be ambiguous in the one place ambiguity is most expensive.
 Run it locally, where a failure means what it says.
 
 `.github/workflows/publish.yml` fires on `v*`, builds an sdist and a wheel, and
-uploads them through **PyPI Trusted Publishing** — PyPI mints a short-lived token
+uploads them through **PyPI Trusted Publishing** -- PyPI mints a short-lived token
 from the workflow's OIDC identity, so there is no API token in the repo or in
 GitHub secrets. What makes that work lives outside the repo and is invisible from
 inside it: a publisher registered on PyPI for owner `melvinrajendran`, repository
@@ -1179,7 +1179,7 @@ environment of that same name. All four have to match or the upload is rejected.
 
 The workflow's first step asserts the tag equals `__version__`, because the version
 otherwise lives in exactly one place (`__init__.py`, read by `pyproject.toml`'s
-`dynamic = ["version"]`) and the tag is a second place to get it wrong — a mismatch
+`dynamic = ["version"]`) and the tag is a second place to get it wrong -- a mismatch
 would publish a version nobody can `git checkout`.
 
 **A version, once uploaded, can never be replaced or reused**, even after a delete.
@@ -1192,37 +1192,37 @@ Test files mirror modules 1:1; tests are grouped in `Test*` classes by the funct
 under test. Names are full sentences describing the behavior.
 
 `Prompter` takes injected `input_func`/`print_func`, so the entire interactive flow is
-driven by a scripted list of canned answers — **no monkeypatching of builtins**.
+driven by a scripted list of canned answers -- **no monkeypatching of builtins**.
 `tests/test_cli.py::ScriptedPrompter` and `new_account_responses()` are the helpers;
 reuse them rather than writing new stdin plumbing. Adding a question to the flow means
-threading one more answer into every scripted list — the band's two answers sit
+threading one more answer into every scripted list -- the band's two answers sit
 between the VT allocation and the first "Add an account?", and existing flows pass
 `"0"` for both so they keep testing exact-target behavior.
 
-Two shapes to know when writing one. A stock/bond target is `"80", "y"` — the stock
-share and then the confirmation of the derived bond share — and a target-date
+Two shapes to know when writing one. A stock/bond target is `"80", "y"` -- the stock
+share and then the confirmation of the derived bond share -- and a target-date
 allocation is `"60", "20", "y"` for the same reason. (`"100", "y"` is the third: a
 first answer of 100 settles both remaining sleeves, so the second question is never
 asked.) An account holding individual funds is a name and a value per asset class with
 no yes/no between them, in the order `_INDIVIDUAL_SLOT_PROMPTS` lists; the update path
 asks the same questions with the saved ticker and value as defaults, so `""` twice
-keeps a holding exactly as it was — behind a leading `"y"` for "Keep this account?",
+keeps a holding exactly as it was -- behind a leading `"y"` for "Keep this account?",
 which every saved account starts with.
 
 `compute_trades`'s `band_pct` defaults to `Decimal(0)`, which is the exact target and
-therefore the pre-band behavior — solver tests that aren't about the band say nothing
+therefore the pre-band behavior -- solver tests that aren't about the band say nothing
 about it and keep asserting the same numbers. `relative_band_pct` defaults to `None`
 for the same reason: `0` there would collapse every one of those tests onto the exact
 target by a different route, and silently.
 
 Every network call is monkeypatched, including failure paths. The suite must stay
-runnable offline — CI depends on it.
+runnable offline -- CI depends on it.
 
 `tests/test_network_sources.py` is the one deliberate exception, and it proves the rule
 rather than bending it: mocks cannot tell you a URL has stopped being a URL, which is how
 the VT endpoint stayed dead through several releases with every test green. Those tests
 carry `pytest.mark.network`, `addopts` in `pyproject.toml` deselects them, and CI runs
-bare `pytest` so it never sees them. Keep it that way — a live source in the default run
+bare `pytest` so it never sees them. Keep it that way -- a live source in the default run
 would fail on a plane and flake in CI. What belongs there is only what a mock cannot
 answer: that each source still responds, that the live payload still has the shape the
 saved fixtures are written against, and that the two sources still agree to within a few
@@ -1233,14 +1233,14 @@ a market that moved.
 
 `pyproject.toml` pins the ruff rule set explicitly: `[tool.ruff.lint] select = ["E",
 "F", "I", "UP", "B", "SIM"]`. It used to select nothing, which left the active set as
-whatever the resolved ruff version enabled by default — so isort (`I001`) and
+whatever the resolved ruff version enabled by default -- so isort (`I001`) and
 flake8-simplify (`SIM117`) were being enforced without anyone choosing them, and a
 `ruff>=0.6` floor meant an upgrade could change what CI accepts in either direction.
 Naming them makes the lint reproducible.
 
 `E` is the half that matters day to day: `E501` is *not* in ruff's default set, so
 `line-length = 100` was advisory and about thirty lines had quietly passed it. It is
-enforced now. `B905` is the other one worth knowing — every `zip()` over two lists
+enforced now. `B905` is the other one worth knowing -- every `zip()` over two lists
 that are the same length by construction says `strict=True`, so a future change that
 breaks that assumption raises instead of silently truncating.
 
