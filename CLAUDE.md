@@ -677,12 +677,35 @@ width, just no step number.
 
 **Every `-` subheading is Title Case; everything else is a sentence.** "Stock and
 Bond Allocation", "Rebalancing Bands", "Account Holdings", "Current vs. Target
-Allocation", "Orders to Place", "Notes", "Saved Accounts", "Add Accounts", "Save
-Portfolio" --
+Allocation", "Orders to Place", "Notes", "Saved Accounts", "Add Accounts", "Update
+an Answer", "Summary File", "Save Portfolio" --
 the `=` banners above them are upper-cased by `format_section_header` anyway, and
 everything below them is prose. A subheading names a thing rather than saying
 something, which is what the casing marks. Short prepositions and conjunctions stay
 lowercase ("and", "to", "vs."), the way a title is set anywhere else.
+
+**The three actions after the report are `-` sections, not a fourth banner.** The
+recompute gate, the summary file and the save each get one -- "Update Answer",
+"Summary File", "Save Portfolio" -- so the tail of the run is shaped like the
+questions above it. Two of them were flush until it was noticed that the first
+thing under the disclaimer was a bare question, which is the exact problem "Save
+Portfolio" had already been given a section to fix.
+
+A `=` banner over the lot was considered and does not work, for two reasons worth
+keeping. The gate is the loop's entry rather than a final action: answer yes and
+the menu, a re-asked step-1 subheading and a second `=` REBALANCING SUMMARY banner
+all arrive underneath it, which is a `=` inside a `=`. And past the loop there is
+usually one thing left -- `--write-summary` is off by default and `--no-save`
+removes the save -- so the banner would head a single yes/no on a normal run and
+nothing at all on some, and a banner that sometimes has no section under it is
+worse than none. The cost of the decision is that the report's banner now visibly
+covers five report sections and three action sections; the summary file, which
+holds only the report, is where the boundary is actually drawn.
+
+The failed-solve path keeps its bare question deliberately. There is no report and
+no disclaimer there, and "Update an answer and try again?" sits directly under the
+one sentence explaining why it is being asked -- a rule between them would separate
+the question from its reason.
 
 **Two widths, both following the terminal.** `formatting.prose_width()` is
 `min(terminal - 2, PROSE_MAX_WIDTH)`; `formatting.table_width()` is `terminal - 2` with
