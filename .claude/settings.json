@@ -1,8 +1,7 @@
 {
   "attribution": {
     "commit": "",
-    "pr": "",
-    "sessionUrl": false
+    "pr": ""
   },
   "hooks": {
     "PostToolUse": [

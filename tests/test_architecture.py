@@ -151,6 +151,22 @@ class TestRuleScoping:
         )
         assert broken == []
 
+    def test_every_relative_link_between_documents_resolves(self):
+        """The documents link to each other and back to `CLAUDE.md` by relative
+        path, which is what makes them readable on GitHub. Splitting one file
+        into ten turned several intra-file "see the solver section" pointers
+        into cross-document ones; a link that rots is how they go back to
+        pointing at nothing."""
+        broken = sorted(
+            {
+                (document.name, target)
+                for document in sorted(self.DOCS_DIR.glob("*.md"))
+                for target in re.findall(r"\]\((?!https?://)([^)#]+)", document.read_text())
+                if not (document.parent / target).resolve().exists()
+            }
+        )
+        assert broken == []
+
     def test_claude_md_points_at_every_document(self):
         """The always-on file is what tells a session that a deep document exists
         at all -- a path-scoped rule only fires once a matching file is read, so

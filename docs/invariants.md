@@ -36,8 +36,8 @@ change phases 1, 2 or 5.
 `_resolve_allocation` settles the three asset-class totals first, honoring the
 rebalancing band; the solver then hits those as hard equalities. Every location
 objective is phrased as "minimize this asset class in that kind of account", which
-means *relocate* only while the class total is fixed -- see the solver section, where
-letting the band reach those phases turned out to be a real bug.
+means *relocate* only while the class total is fixed -- see [`solver.md`](solver.md),
+where letting the band reach those phases turned out to be a real bug.
 
 **`FundType.CASH` has an implicit target of zero** -- cash is always fully invested.
 It is excluded from the tradeable slots and from `_TARGET_FUND_TYPES`.

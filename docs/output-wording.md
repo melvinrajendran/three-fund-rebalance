@@ -140,7 +140,7 @@ loses them is a regression:
   can reach, in dollars and as a share of the portfolio, and what the user could change.
   It states the reachable bound rather than where the plan happened to land, so the
   claim is true of the accounts and not merely of this solve -- which is also why it
-  fires only where that bound is provably the obstacle; see the solver section.
+  fires only where that bound is provably the obstacle; see [`solver.md`](solver.md).
 
 **Indentation is carried by `Prompter.indented()` and `INDENT_UNIT`, never spelled
 into a prompt string.** `_prompt_target_date_allocation` and `_prompt_new_holding` are
@@ -252,7 +252,8 @@ gives it a precision it does not have.
 rest of the report only answers by implication. It is computed from the holdings
 rather than the class totals, so a trade in a target-date fund moves all three sleeves
 by their own fractions, and it is stated conditionally ("If these orders fill at the
-values entered here") for the reason in the wording section below. **It is indented to
+values entered here") for the reason under "The landing allocation is conditional on
+the orders filling" above. **It is indented to
 the depth of the account blocks above it**, because it belongs to the orders: set
 flush it read as the first of the notes below rather than as the answer to them.
 
