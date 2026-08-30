@@ -44,6 +44,7 @@ from three_fund_rebalance.prompts import (
     REBALANCING_BANDS_SUBHEADING,
     SAVE_PORTFOLIO_SUBHEADING,
     STOCK_BOND_SUBHEADING,
+    UPDATE_ANSWER_SUBHEADING,
     VT_SPLIT_SUBHEADING,
     Prompter,
     prompt_accounts,
@@ -68,6 +69,11 @@ _INPUT_STEPS = 3
 #: to. One string, so "rebalancing summary" and "rebalancing-summary-...txt"
 #: cannot come to mean different things.
 _SUMMARY_TITLE = "Rebalancing summary"
+
+#: The `-` subheading the summary file is written under. Here rather than in
+#: `prompts` beside the others because it heads no question -- nothing is
+#: asked about the summary file, the flag already having answered it.
+_SUMMARY_FILE_SUBHEADING = "Summary File"
 
 #: argparse's `const` for a bare --write-summary. A sentinel rather than a
 #: computed path, because the default name carries the instant the report was
@@ -380,9 +386,16 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
             )
             prompter.say("\n" + format_result_header(_SUMMARY_TITLE))
             prompter.say("\n" + format_report(inputs, result))
-            if not prompt_yes_no(
-                prompter, "\nUpdate an answer and recompute?", default=False
-            ):
+            # Under a subheading for the same reason the save is: set flush,
+            # a question one blank line below the disclaimer reads as the
+            # last line of it. The heading covers the menu and the re-asked
+            # question below it too, and those keep their own subheadings --
+            # a correction still looks like the part of the flow it belongs
+            # to. The failed-solve path below stays bare: there is no report
+            # and no disclaimer there, and the question sits directly under
+            # the one sentence that explains it, which a rule would break.
+            prompter.say("\n" + format_subheading(UPDATE_ANSWER_SUBHEADING))
+            if not prompt_yes_no(prompter, "Update an answer and recompute?", default=False):
                 break
 
         # The menu carries the same way out, for a mind changed one question
@@ -440,14 +453,17 @@ def _offer_summary_file(prompter: Prompter, args, inputs, result) -> None:
     with fixed_width(SUMMARY_FILE_WIDTH):
         text = f"{format_result_header(_SUMMARY_TITLE)}\n\n{format_report(inputs, result)}\n"
     path = _summary_path(args.write_summary, inputs.generated_at)
+    # The section exists whichever way the write goes, so the heading is
+    # printed before it is attempted and both outcomes are reported under it.
+    prompter.say("\n" + format_subheading(_SUMMARY_FILE_SUBHEADING))
     try:
         written = _write_summary(
             path, text, generated_name=args.write_summary == _SUMMARY_TO_DEFAULT_DIR
         )
     except OSError as exc:
-        prompter.say_wrapped(f"\nCould not write the summary to {path} ({exc}).")
+        prompter.say_wrapped(f"Could not write the summary to {path} ({exc}).")
         return
-    prompter.say(f"\nSummary written to {written}")
+    prompter.say(f"Summary written to {written}")
 
 
 def main() -> None:

@@ -76,6 +76,7 @@ REBALANCING_BANDS_SUBHEADING = "Rebalancing Bands"
 SAVED_ACCOUNTS_SUBHEADING = "Saved Accounts"
 ADD_ACCOUNTS_SUBHEADING = "Add Accounts"
 ADD_MORE_ACCOUNTS_SUBHEADING = "Add More Accounts"
+UPDATE_ANSWER_SUBHEADING = "Update Answer"
 SAVE_PORTFOLIO_SUBHEADING = "Save Portfolio"
 
 #: The way out of the update menu without touching anything. Last, because
