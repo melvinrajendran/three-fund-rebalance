@@ -32,6 +32,12 @@ class ScriptedPrompter(Prompter):
         return not self._responses
 
 
+#: Answered once the report is on screen: no, nothing to go back and update.
+#: Every flow that reaches a report has to answer it, which is why it is
+#: named rather than being a bare "n" among the account answers.
+NO_REVISION = "n"
+
+
 def new_account_responses(
     account_type_index: str,
     nickname: str,
@@ -102,6 +108,7 @@ class TestEndToEndRun:
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
+            NO_REVISION,
             "n",  # don't save
         ]
         prompter = ScriptedPrompter(responses)
@@ -119,6 +126,7 @@ class TestEndToEndRun:
             "y",  # Add an account?
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",  # Add another account?
+            NO_REVISION,
             "y",  # Save this configuration?
         ]
         prompter = ScriptedPrompter(responses)
@@ -152,6 +160,7 @@ class TestEndToEndRun:
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
+            NO_REVISION,
             "y",
         ]
         prompter = ScriptedPrompter(responses)
@@ -173,6 +182,7 @@ class TestEndToEndRun:
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
+            NO_REVISION,
             "n",  # don't save
         ]
         prompter = ScriptedPrompter(responses)
@@ -192,6 +202,7 @@ class TestEndToEndRun:
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
+            NO_REVISION,
             # no response for a save prompt -- it must not be asked
         ]
         prompter = ScriptedPrompter(responses)
@@ -230,6 +241,7 @@ class TestEndToEndRun:
             "100", "0", "y",  # ...that holds no bonds at all
             "0",
             "n",  # no more accounts
+            NO_REVISION,
             "n",  # ...and don't save
         ]
         prompter = ScriptedPrompter(responses)
@@ -260,6 +272,7 @@ class TestEndToEndRun:
             "80", "y", "0", "0",
             "y", "1", "Roth", "1", "VTI", "10000", "VXUS", "0", "BND", "0", "0",
             "n",
+            "n",  # no, don't change an answer and try again
         ])
         exit_code = run(
             ["--config", str(tmp_path / "config.json"), "--vt-us-pct", "100"], prompter=prompter
@@ -304,7 +317,7 @@ class TestEndToEndRun:
             "0",  # ...and its relative half, which zero already settles
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
-            "n", "y",
+            "n", NO_REVISION, "y",
         ]
         run(
             ["--config", str(config_path), "--vt-us-pct", "100"],
@@ -357,7 +370,7 @@ class TestLongMessagesWrap:
             "All-Stock 2065", "10000",
             "100", "0", "y",
             "0",
-            "n", "n",
+            "n", NO_REVISION, "n",
         ])
         exit_code = run(
             ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "100"], prompter=prompter
@@ -374,3 +387,184 @@ class TestLongMessagesWrap:
         output = prompter.full_output
         assert VT_FUND_PAGE_URL in output, "the URL must survive wrapping intact"
         assert self._unwrapped(prompter) == []
+
+
+
+class TestRevisionLoop:
+    """A typo is noticed in the report, not at the prompt that collected it --
+    so the way back is offered after the report, and it re-asks one answer
+    rather than the whole flow.
+
+    The menu is built in a fixed order -- the step 1 and 2 questions, then
+    each account, then "Add Accounts" -- and the VT split is left out when
+    --vt-us-pct already answered it, which shifts every number below it. The
+    tests spell the numbers out rather than computing them, so a reordering
+    has to be looked at rather than silently absorbed.
+    """
+
+    #: Keep the account, correct the one value, leave everything else.
+    FIX_THE_VALUE = ["", "", "150000", "", "", "", "", ""]
+
+    def _two_accounts(self):
+        return [
+            "y", *new_account_responses("10", "Brokerage", "1500000", "40000", "0"),
+            "y", *new_account_responses("1", "Roth", "60000", "0", "0"),
+            "n",
+        ]
+
+    def test_a_mistyped_value_is_corrected_without_rewalking_the_flow(self, tmp_path):
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            *self._two_accounts(),
+            "y",                    # yes, change an answer
+            "3",                    # -> Brokerage (Brokerage)
+            *self.FIX_THE_VALUE,
+            NO_REVISION,
+            "n",
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "62"], prompter=prompter
+        ) == 0
+        assert prompter.all_consumed()
+        output = prompter.full_output
+        assert "$1,500,000.00" in output          # the first report, with the typo
+        assert "Total                            $190,000.00" in output  # and the corrected one
+        assert output.count("REBALANCING SUMMARY") == 2
+        # `all_consumed` above is what pins "one answer, not the whole flow":
+        # the script holds exactly the questions a single correction asks, so
+        # re-walking step 3 would have run out of responses. (Question text
+        # goes to `input_func`, which the scripted prompter discards, so it
+        # cannot be counted in the output.)
+        # Only the brokerage was re-asked: its heading is printed once more
+        # than the Roth's, which is the revision it went through.
+        assert output.count("Brokerage (Brokerage)") == output.count("Roth (Roth IRA)") + 1
+
+    def test_the_menu_offers_each_question_by_its_step_subheading(self, tmp_path):
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            *self._two_accounts(),
+            "y", "3", *self.FIX_THE_VALUE, NO_REVISION, "n",
+        ])
+        run(["--config", str(tmp_path / "c.json"), "--vt-us-pct", "62"], prompter=prompter)
+        output = prompter.full_output
+        # Numbered menu entries, so this cannot pass on the subheadings the
+        # flow printed above it.
+        for entry in (
+            "1. Stock and Bond Allocation",
+            "2. Rebalancing Bands",
+            "3. Brokerage (Brokerage)",
+            "4. Roth (Roth IRA)",
+            "5. Add Accounts",
+            # Last, because reaching this menu means having already said yes.
+            "6. No Updates, Continue",
+        ):
+            assert entry in output, entry
+        # The menu's own heading is printed rather than asked, so unlike the
+        # yes/no above it this one can be read back.
+        assert "What would you like to update?" in output
+
+    def test_the_vt_split_is_left_out_when_the_flag_already_answered_it(self, tmp_path):
+        """Re-asking a question the invocation settled could only offer to
+        contradict it. The subheading is still printed by step 1 above, so
+        this looks for the menu entry rather than the words."""
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            *self._two_accounts(),
+            "y", "3", *self.FIX_THE_VALUE, NO_REVISION, "n",
+        ])
+        run(["--config", str(tmp_path / "c.json"), "--vt-us-pct", "62"], prompter=prompter)
+        assert ". U.S. and International Stock Allocation" not in prompter.full_output
+
+    def test_the_vt_split_is_offered_when_the_run_asked_for_it(self, tmp_path):
+        """And picking it re-asks the same question step 1 asked, with the
+        answer already given offered back as the default."""
+        prompter = ScriptedPrompter([
+            "80", "y", "62", "0", "0",
+            *self._two_accounts(),
+            "y", "2",       # -> U.S. and International Stock Allocation
+            "n",            # no, don't keep the split already given
+            "70",           # ...this one instead
+            NO_REVISION, "n",
+        ])
+        assert run(["--config", str(tmp_path / "c.json"), "--offline"], prompter=prompter) == 0
+        assert prompter.all_consumed()
+        output = prompter.full_output
+        assert "2. U.S. and International Stock Allocation" in output
+        # The derivation line wraps, so it is read on the words.
+        assert "VT's 70% U.S. allocation" in " ".join(output.split())
+
+    def test_updating_nothing_leaves_the_plan_as_it_was(self, tmp_path):
+        """The way out for a mind changed one question later. It ends the
+        loop rather than asking the yes/no again, so the plan already on
+        screen is the one that stands."""
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            *self._two_accounts(),
+            "y",    # yes, update an answer
+            "6",    # ...on reflection, nothing
+            "n",    # don't save
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "62"], prompter=prompter
+        ) == 0
+        assert prompter.all_consumed()
+        # One report, not two: nothing changed, so nothing was recomputed.
+        assert prompter.full_output.count("REBALANCING SUMMARY") == 1
+
+    def test_updating_nothing_after_a_failed_solve_is_a_decline(self, monkeypatch, tmp_path):
+        """There is no plan to go on to and nothing has changed, so this is
+        the same answer as declining the offer outright."""
+        def _always_fail(*args, **kwargs):
+            raise RebalanceError("nothing works here")
+
+        monkeypatch.setattr(cli, "compute_trades", _always_fail)
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n",
+            "y",    # yes, update an answer and try again
+            "5",    # ...nothing, which is a decline here
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "75"], prompter=prompter
+        ) == 1
+        assert prompter.all_consumed()
+
+    def test_dropping_every_account_from_the_menu_exits_cleanly(self, tmp_path):
+        prompter = ScriptedPrompter([
+            "100", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n",
+            "y", "3", "n",  # revise the one account, and don't keep it
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "100"], prompter=prompter
+        ) == 0
+        assert "nothing to rebalance" in prompter.full_output
+
+    def test_a_rebalance_error_offers_the_same_way_back(self, monkeypatch, tmp_path):
+        """An unplannable portfolio is usually a mistyped answer, so the
+        correction loop is the way out of it rather than a rerun."""
+        real = cli.compute_trades
+        calls = []
+
+        def _fail_the_first_time(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RebalanceError("nothing works here")
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(cli, "compute_trades", _fail_the_first_time)
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n",
+            "y",                                   # yes, change an answer and try again
+            "3", "", "", "", "", "", "", "", "",   # re-ask the account, change nothing
+            NO_REVISION, "n",
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "75"], prompter=prompter
+        ) == 0
+        assert "Could not compute a rebalance: nothing works here" in prompter.full_output
+        assert "Orders to Place" in prompter.full_output

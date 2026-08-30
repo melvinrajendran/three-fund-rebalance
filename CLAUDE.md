@@ -46,10 +46,46 @@ brittle because the prompt sequence branches on answers.
 One linear pipeline, orchestrated end-to-end by `cli.run()`:
 
 ```
-load_config → prompt_stock_bond_allocation → resolve_vt_allocation → compute_target_allocation
-            → prompt_rebalance_band → prompt_accounts → compute_trades
-            → format_report → save_config
+load_config → prompt_stock_bond_allocation → resolve_vt_allocation
+            → prompt_rebalance_band → prompt_accounts
+            → ⟳ compute_target_allocation → compute_trades → format_report → _revise
+            → _offer_summary_file → save_config
 ```
+
+The one loop in it is `⟳`, and it exists because **a typo is noticed in the
+report and nowhere earlier**. A wrong balance surfaces as an implausible order,
+a wrong ticker in Account Holdings, a wrong band as "no trades needed" -- none
+of them visible at the prompt that collected them, so a confirmation gate ahead
+of the solve would be asking "is this right?" before printing the only thing
+that answers it. `_revise` re-asks exactly one answer and the loop recomputes;
+`_Answers` is the mutable carrier that makes "one answer" possible, since
+`RebalanceInputs` is frozen and rebuilt each pass. A `RebalanceError` enters
+the same loop rather than exiting, because an unplannable portfolio is usually
+a mistyped one; declining the offer is what still returns 1.
+
+The menu carries `NOTHING_TO_UPDATE` ("No Updates, Continue") last -- the way out for a mind changed one
+question later. Last rather than first because reaching this menu means having
+already answered yes to updating something, so it is the change of mind and not
+the expected answer; "No Updates" answers "What would you like to update?" in
+the words the question asked it, and the second half says what happens next
+because every other entry visibly leads somewhere. Choosing it ends the loop rather than asking the yes/no
+again. Past a *failed* solve it is a decline instead, and returns 1: there is no
+plan to go on to, and nothing has changed to make the next attempt differ from
+the one that just failed. That path is also why the `except` clause clears
+`inputs` and `result` -- the previous pass's plan does not describe this pass's
+answers, so carrying it forward would report and save a plan for a portfolio
+that no longer exists.
+
+The menu names each question by `prompts`'s subheading constants
+(`STOCK_BOND_SUBHEADING` and friends) rather than by a paraphrase, and `cli`
+prints its headings from the same constants -- so "go back to that question"
+and the heading it goes back to cannot come to disagree. The VT entry is
+omitted when `--vt-us-pct` supplied the split, since re-asking it could only
+offer to contradict the invocation. Everything the menu can reach is re-asked
+by the *same* function step 1, 2 or 3 used: `prompt_add_accounts` and
+`prompt_revise_account` were split out of `prompt_accounts` for that reason,
+and `prompt_accounts` now calls them, so there is one implementation and not
+two that drift.
 
 Modules map to stages: `persistence` ↔ config file, `prompts` ↔ all input,
 `vt_allocation` ↔ the one network call, `allocation` ↔ percentages→dollars,
@@ -1233,7 +1269,14 @@ under test. Names are full sentences describing the behavior.
 driven by a scripted list of canned answers -- **no monkeypatching of builtins**.
 `tests/test_cli.py::ScriptedPrompter` and `new_account_responses()` are the helpers;
 reuse them rather than writing new stdin plumbing. Adding a question to the flow means
-threading one more answer into every scripted list -- the band's two answers sit
+threading one more answer into every scripted list. `NO_REVISION` is the one
+every flow that reaches a report now has to answer ("Update an answer and
+recompute?"), named rather than left as a bare `"n"` among the account answers
+because it is the only one that is not about an account. Note the scripted
+prompter discards question *text* -- it goes to `input_func` -- so a test can
+never assert on a prompt's wording, only on what `say` printed and on
+`all_consumed()`, which is what actually pins "one answer was re-asked and not
+the whole flow". The band's two answers sit
 between the VT allocation and the first "Add an account?", and existing flows pass
 `"0"` for both so they keep testing exact-target behavior.
 

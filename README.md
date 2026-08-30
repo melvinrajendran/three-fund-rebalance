@@ -142,6 +142,15 @@ account holdings -- then the summary above. Run it again and every saved
 account comes back with its last values pre-filled: press Enter to keep one or
 type a new one.
 
+The summary is followed by "Update an answer and recompute?". Answering yes
+lists the questions by the heading each was asked under, re-asks the one
+picked -- an account comes back with its own values pre-filled, as on a second
+run -- and prints the whole summary again. The list ends with "No Updates,
+Continue" for a mind changed one question later. A mistyped balance costs one
+answer rather than the whole session, which matters because a typo is not
+visible at the prompt that took it: it shows up as an implausible order
+further down.
+
 | Flag | Effect |
 | --- | --- |
 | `--config PATH` | Portfolio file to read and write (default `~/.three_fund_rebalance/config.json`) |

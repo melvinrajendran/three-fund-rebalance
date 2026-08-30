@@ -65,6 +65,27 @@ _INDIVIDUAL_FUNDS_CHOICE = "Three individual funds (U.S. stocks, international s
 _TARGET_DATE_CHOICE = "A single target-date fund"
 _HOLDING_KIND_CHOICES = [_INDIVIDUAL_FUNDS_CHOICE, _TARGET_DATE_CHOICE]
 
+#: The `-` subheadings the flow asks its questions under, in one place
+#: because the revision menu offers them back as its own choices -- someone
+#: correcting a typo picks the heading they answered it under, and a menu
+#: that paraphrased those headings would be a second name for each question.
+#: Title Case, like every other `-` subheading; see formatting.py.
+STOCK_BOND_SUBHEADING = "Stock and Bond Allocation"
+VT_SPLIT_SUBHEADING = "U.S. and International Stock Allocation"
+REBALANCING_BANDS_SUBHEADING = "Rebalancing Bands"
+SAVED_ACCOUNTS_SUBHEADING = "Saved Accounts"
+ADD_ACCOUNTS_SUBHEADING = "Add Accounts"
+ADD_MORE_ACCOUNTS_SUBHEADING = "Add More Accounts"
+SAVE_PORTFOLIO_SUBHEADING = "Save Portfolio"
+
+#: The way out of the update menu without touching anything. Last, because
+#: reaching this menu means having already said yes to updating something --
+#: it is the change of mind, not the expected answer. "No Updates" answers
+#: "What would you like to update?" in the words the question asked it; the
+#: second half says what happens next, since every other entry visibly leads
+#: somewhere. Title Case like the subheadings it sits among.
+NOTHING_TO_UPDATE = "No Updates, Continue"
+
 #: Said once, above the three fund questions. The flow otherwise asks bare
 #: questions and lets the report explain, and the labels below do carry their
 #: own meaning -- but nothing in "Bond fund:" says that a fund you own none of
@@ -772,7 +793,7 @@ def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> lis
     """
     accounts: list[Account] = []
     if existing_accounts:
-        prompter.say("\n" + format_subheading("Saved Accounts"))
+        prompter.say("\n" + format_subheading(SAVED_ACCOUNTS_SUBHEADING))
         noun = "account" if len(existing_accounts) == 1 else "accounts"
         # A vertical list, not a sentence: these are the headings the
         # questions below arrive in, and a list read down the page is what
@@ -785,38 +806,87 @@ def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> lis
             "\nFor each, press Enter to use its saved value, or type a new value."
         )
         for existing in existing_accounts:
-            prompter.say("")
-            with prompter.indented():
-                prompter.say(format_account_heading(existing.name, existing.account_type))
-                with prompter.indented():
-                    if prompt_yes_no(prompter, "Keep this account?", default=True):
-                        accounts.append(_prompt_update_existing_account(prompter, existing))
-                    else:
-                        prompter.say(f"Removed '{existing.name}'.")
+            kept = prompt_revise_account(prompter, existing)
+            if kept is not None:
+                accounts.append(kept)
 
+    accounts.extend(prompt_add_accounts(prompter, accounts, had_saved=bool(existing_accounts)))
+    return accounts
+
+
+def prompt_add_accounts(
+    prompter: Prompter, accounts: list[Account], *, had_saved: bool
+) -> list[Account]:
+    """The "add accounts" loop, on its own so step 3 and the revision menu
+    share one implementation rather than two that drift.
+
+    `accounts` is what has been collected so far -- read for the names a new
+    one may not reuse, and for whether the first question defaults to yes.
+    It is never appended to here; the new accounts come back as a list.
+    """
     # Both states of this heading are imperative: it is a section that asks
     # you to do something, unlike "Saved Accounts" above, which names a list.
-    heading = "Add More Accounts" if existing_accounts else "Add Accounts"
+    heading = ADD_MORE_ACCOUNTS_SUBHEADING if had_saved else ADD_ACCOUNTS_SUBHEADING
     prompter.say("\n" + format_subheading(heading))
+    added: list[Account] = []
     is_first_prompt = True
     listed_account_types = False
     while True:
-        label = "Add an account?" if not accounts else "Add another account?"
+        label = "Add an account?" if not accounts and not added else "Add another account?"
         # Only the first question sits directly under the subheading; later
         # ones need a blank line to separate them from the account above.
         question = label if is_first_prompt else f"\n{label}"
-        if not prompt_yes_no(prompter, question, default=not accounts):
+        if not prompt_yes_no(prompter, question, default=not accounts and not added):
             break
         # The eleven account types are worth seeing once. Reprinting them for
         # every account is most of the screen, so later ones ask in one line.
-        accounts.append(
+        added.append(
             _prompt_new_account(
                 prompter,
-                existing_names={a.name for a in accounts},
+                existing_names={a.name for a in (*accounts, *added)},
                 list_account_types=not listed_account_types,
             )
         )
         listed_account_types = True
         is_first_prompt = False
 
-    return accounts
+    return added
+
+
+def prompt_revise_account(prompter: Prompter, existing: Account) -> Account | None:
+    """One saved account re-asked, exactly as step 3 asks it -- the same
+    heading, the same "Keep this account?" gate, the same pre-filled answers.
+    None means the user dropped it."""
+    prompter.say("")
+    with prompter.indented():
+        prompter.say(format_account_heading(existing.name, existing.account_type))
+        with prompter.indented():
+            if not prompt_yes_no(prompter, "Keep this account?", default=True):
+                prompter.say(f"Removed '{existing.name}'.")
+                return None
+            return _prompt_update_existing_account(prompter, existing)
+
+
+def prompt_revision_choice(
+    prompter: Prompter, accounts: list[Account], *, include_vt_split: bool
+) -> str:
+    """Which answer to go back and change, after the report has shown what
+    the answers produced.
+
+    Every choice is the exact `-` subheading the question was asked under, so
+    picking one reads as returning to that part of the flow rather than as
+    opening some new editor. Accounts are named the way step 3 names them,
+    which is also the way the report's Account Holdings names them.
+
+    `include_vt_split` is False when --vt-us-pct fixed the split on the
+    command line -- re-asking a question the invocation has already answered
+    would only offer to contradict it.
+    """
+    choices = [STOCK_BOND_SUBHEADING]
+    if include_vt_split:
+        choices.append(VT_SPLIT_SUBHEADING)
+    choices.append(REBALANCING_BANDS_SUBHEADING)
+    choices += [format_account_heading(a.name, a.account_type) for a in accounts]
+    choices.append(ADD_ACCOUNTS_SUBHEADING)
+    choices.append(NOTHING_TO_UPDATE)
+    return prompt_choice(prompter, "\nWhat would you like to update?", choices)
