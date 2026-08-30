@@ -160,8 +160,10 @@ indexes the same columns, and splitting that across functions hides it.
 
 The two *allocation*-stage LPs (`_resolve_allocation` and `_place_cash`) share their
 own smaller layout, three columns per class: `[ p | first anchor | second anchor ]`
-(plus, in `_resolve_allocation`'s third objective alone, a tenth column widened on
-locally -- see above).
+(plus, in `_resolve_allocation`'s third objective alone, a tenth column `m` holding
+the largest share of the shortfall borne by any class -- see above). Those rows are
+widened locally rather than by raising `_ALLOCATION_WIDTH`, because `_place_cash`
+shares the same nine columns and has no use for a tenth.
 What the anchors measure differs by caller, but the shape does not, which is what
 lets both build rows through `_allocation_row` and `_abs_value_rows` instead of a
 dozen hand-written `row[3 + index]` expressions whose only documentation was being
