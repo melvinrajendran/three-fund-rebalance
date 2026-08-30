@@ -193,9 +193,9 @@ can buy into it. That is often what lets a portfolio reach its bond target
 without selling anything in a taxable account.
 
 **Allocation before location.** Two solves, in order. The first settles what
-each asset class should be worth -- as close to the target as the accounts
-allow, and among equally close answers, the one that moves least. The second
-decides which accounts hold it, and can never revisit the first.
+each asset class should be worth -- as close to target as the accounts allow,
+then moving least, then sharing what they cannot reach in proportion to each
+class's band. The second decides which accounts hold it, never the reverse.
 
 **Both stages are linear programs.** Every variable is a dollar amount -- one
 per asset class in the first solve, one per fund position per account in the

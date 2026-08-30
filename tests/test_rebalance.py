@@ -2,7 +2,12 @@ from decimal import Decimal
 
 import pytest
 
-from three_fund_rebalance.allocation import target_dollar_amounts, target_dollar_bounds
+from three_fund_rebalance.allocation import (
+    ASSET_CLASS_KEYS,
+    effective_band_points,
+    target_dollar_amounts,
+    target_dollar_bounds,
+)
 from three_fund_rebalance.models import (
     Account,
     FundType,
@@ -16,6 +21,7 @@ from three_fund_rebalance.rebalance import (
     _TARGET_FUND_TYPES,
     RebalanceError,
     _resolve_allocation,
+    _unavoidable_drift,
     compute_trades,
 )
 
@@ -1280,6 +1286,24 @@ class TestAllocationIsSettledBeforeLocation:
         assert sold == Decimal(0)
 
 
+class TestUnavoidableDrift:
+    """How far from target an asset class must sit whatever else happens --
+    what the third allocation objective measures each class against, so that
+    a class the accounts pin is not charged for a gap it cannot close."""
+
+    def test_a_target_the_accounts_straddle_is_reachable_and_costs_nothing(self):
+        assert _unavoidable_drift(Decimal(30_000), (10_000.0, 50_000.0)) == 0.0
+
+    def test_a_floor_above_the_target_is_the_distance_up_to_it(self):
+        assert _unavoidable_drift(Decimal(10_000), (25_000.0, 50_000.0)) == 15_000.0
+
+    def test_a_ceiling_below_the_target_is_the_distance_down_to_it(self):
+        assert _unavoidable_drift(Decimal(40_000), (0.0, 25_000.0)) == 15_000.0
+
+    def test_a_target_on_the_bound_itself_costs_nothing(self):
+        assert _unavoidable_drift(Decimal(25_000), (25_000.0, 25_000.0)) == 0.0
+
+
 class TestResolveAllocation:
     """The step that decides what each asset class should be worth, before
     anything decides where to hold it."""
@@ -1292,6 +1316,12 @@ class TestResolveAllocation:
 
     def _unconstrained_reach(self):
         return {fund_type: (0.0, 100_000.0) for fund_type in _TARGET_FUND_TYPES}
+
+    def _band_widths(self, band):
+        return {
+            key: Decimal(band) / Decimal(100) * Decimal(100_000)
+            for key in ASSET_CLASS_KEYS.values()
+        }
 
     def test_an_allocation_inside_the_band_is_left_exactly_where_it_is(self):
         targets, bounds = self._bounds(band=5)
@@ -1396,6 +1426,92 @@ class TestResolveAllocation:
         # 30,000/10,000 moves $16,000; every other tied split moves more.
         assert to_cents(resolved["international_stock"]) == Decimal("30000.00")
         assert to_cents(resolved["bond"]) == Decimal("10000.00")
+
+    def test_an_unreachable_shortfall_is_shared_rather_than_dumped_on_one_class(self):
+        """Both objectives above go flat when every class sits on the same
+        side of its target: a dollar given to any of them closes the total
+        gap by a dollar and moves the portfolio by a dollar, so the whole
+        face ties twice over and the split falls to whichever vertex HiGHS
+        returns. Bonds are stuck $15,000 above target here, and the $15,000
+        that leaves the other two short is split evenly rather than taken
+        out of one of them."""
+        targets, bounds = self._bounds(band=10)
+        reach = dict(self._unconstrained_reach())
+        reach[FundType.US_BOND] = (35_000.0, 100_000.0)  # a floor above target
+        current = {
+            "us_stock": Decimal(40_000),
+            "international_stock": Decimal(20_000),
+            "bond": Decimal(40_000),
+        }
+        resolved = _resolve_allocation(
+            current, targets, bounds, reach, Decimal(100_000), self._band_widths(band=10)
+        )
+        assert to_cents(resolved["bond"]) == Decimal("35000.00")  # as low as it goes
+        # $7,500 short each, not $15,000 short one and on target the other.
+        assert to_cents(resolved["us_stock"]) == Decimal("42500.00")
+        assert to_cents(resolved["international_stock"]) == Decimal("22500.00")
+
+    def test_the_shortfall_is_shared_in_band_widths_and_not_in_dollars(self):
+        """Which is the 5/25 rule's own answer to whether absolute or
+        relative drift is the one that counts: the band is already the
+        tighter of the two, per class, so measuring the shortfall in
+        band-widths inherits that ruling instead of adding a second one.
+
+        The 10% bond target makes the relative half bind, giving bonds a
+        2.5-point band against the 5-point bands either stock class gets.
+        Sharing the $10,000 evenly would leave bonds twice as far outside
+        its own tolerance as international is outside of its; sharing it in
+        band-widths leaves both the same distance out."""
+        allocation = target(60, 30, 10)
+        targets = target_dollar_amounts(allocation, Decimal(100_000))
+        bounds = target_dollar_bounds(allocation, Decimal(100_000), Decimal(5), Decimal(25))
+        widths = {
+            key: pct / Decimal(100) * Decimal(100_000)
+            for key, pct in effective_band_points(
+                allocation, Decimal(5), Decimal(25)
+            ).items()
+        }
+        reach = {
+            FundType.US_STOCK: (72_000.0, 92_000.0),  # pinned well above target
+            FundType.INTERNATIONAL_STOCK: (8_000.0, 28_000.0),
+            FundType.US_BOND: (0.0, 20_000.0),
+        }
+        current = {
+            "us_stock": Decimal(92_000),
+            "international_stock": Decimal(8_000),
+            "bond": Decimal(0),
+        }
+        resolved = _resolve_allocation(
+            current, targets, bounds, reach, Decimal(100_000), widths
+        )
+        assert to_cents(resolved["us_stock"]) == Decimal("72000.00")
+        # Sharing the dollars evenly would be 23,000 and 5,000.
+        assert to_cents(resolved["international_stock"]) == Decimal("21333.33")
+        assert to_cents(resolved["bond"]) == Decimal("6666.67")
+
+    def test_a_class_pinned_away_from_target_does_not_absorb_the_tie_break(self):
+        """The shortfall is measured against the best each class could do,
+        not against target. Measured raw, a pinned class is the largest
+        drift in the portfolio by construction, so it alone would satisfy
+        an objective that only looked at the largest -- leaving the classes
+        that can actually move tied exactly as they were."""
+        targets, bounds = self._bounds(band=10)
+        reach = dict(self._unconstrained_reach())
+        # Bonds cannot come within $30,000 of their 20,000 target either way.
+        reach[FundType.US_BOND] = (50_000.0, 100_000.0)
+        current = {
+            "us_stock": Decimal(30_000),
+            "international_stock": Decimal(10_000),
+            "bond": Decimal(60_000),
+        }
+        resolved = _resolve_allocation(
+            current, targets, bounds, reach, Decimal(100_000), self._band_widths(band=10)
+        )
+        assert to_cents(resolved["bond"]) == Decimal("50000.00")
+        # The remaining $50,000 leaves the two stock classes $30,000 short
+        # between them; bonds' own unavoidable $30,000 does not enter it.
+        assert to_cents(resolved["us_stock"]) == Decimal("35000.00")
+        assert to_cents(resolved["international_stock"]) == Decimal("15000.00")
 
     def test_cash_is_steered_at_whatever_is_furthest_below_target(self):
         """Investing new money is the one way of rebalancing that costs

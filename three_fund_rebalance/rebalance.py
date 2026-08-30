@@ -68,8 +68,13 @@ priority):
     accounts (subject to not giving up phases 1-5). The earlier phases alone
     can have multiple equally-good solutions (e.g. which of several
     tax-advantaged accounts absorbs a shift); phase 6 picks the one that
-    disturbs the fewest existing positions, which reads as the "nicest"
-    plan.
+    moves the fewest dollars, which usually reads as the "nicest" plan.
+
+    Dollars, not positions -- the two come apart. Each account's total is an
+    equality, so within one account buys equal sells and the volume is twice
+    what is sold however many funds the buy side is split across. Splitting
+    one purchase into two costs this objective nothing, which is why the
+    allocation stage's third tie-break is free to it.
 
 All six run *after* `_resolve_allocation` has settled what each asset class
 should be worth, and against that as a hard equality. The order matters:
@@ -102,6 +107,7 @@ to liquidate a target-date fund to relocate the bond sleeve inside it.
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import suppress
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -109,6 +115,7 @@ from scipy.optimize import linprog
 
 from three_fund_rebalance.allocation import (
     ASSET_CLASS_KEYS,
+    effective_band_points,
     target_dollar_amounts,
     target_dollar_bounds,
 )
@@ -627,12 +634,30 @@ def _place_cash(
     return {key: _to_decimal(solution.x[index]) for index, key in enumerate(keys)}
 
 
+def _unavoidable_drift(target: Decimal, reach: tuple[float, float]) -> float:
+    """How far from `target` an asset class must sit however the rest is
+    arranged: the distance from the target to the nearest point the accounts
+    can actually reach, and zero when the target is inside that range.
+
+    This is what makes the third objective in `_resolve_allocation` mean
+    "how much worse is this class than it had to be" rather than "how far
+    from target is it". The difference matters whenever one class is pinned:
+    a 0% bond target against a target-date fund's bond sleeve is stuck a long
+    way out, and measured raw it is the largest drift in the portfolio by
+    construction, so minimizing the largest drift would be satisfied by that
+    class alone and leave the others tied exactly as before.
+    """
+    low, high = reach
+    return max(0.0, low - float(target), float(target) - high)
+
+
 def _resolve_allocation(
     current: dict[str, Decimal],
     dollar_targets: dict[str, Decimal],
     band_bounds: dict[str, tuple[Decimal, Decimal]],
     reach: dict[FundType, tuple[float, float]],
     total_value: Decimal,
+    band_widths: dict[str, Decimal] | None = None,
 ) -> dict[str, Decimal]:
     """Decide what each asset class should be worth, before deciding where to
     hold it.
@@ -654,12 +679,14 @@ def _resolve_allocation(
     back inside its band therefore invests that cash and stops, because the
     only sale that could follow would move it *away* from target.
 
-    Two objectives, lexicographic, and the second one only ever runs when the
+    Three objectives, lexicographic, and the last two only ever run when the
     target is unreachable:
 
       1. Sit as close to target as the accounts allow.
       2. Among the ties, move as little as possible from where the portfolio
          already sits.
+      3. Among *those* ties, share the shortfall the accounts cannot avoid,
+         so no class is left disproportionately far outside its own band.
 
     (2) exists because an account holding a single fund pins that fund's share
     of the portfolio, so the exact target can be out of reach -- and the
@@ -668,6 +695,22 @@ def _resolve_allocation(
     split of the remaining 40% between international and bonds is exactly as
     far from target as every other. Staying near where the portfolio already
     is settles that without trading for nothing.
+
+    (3) exists because (2) can be flat too, and in a way that is easy to miss:
+    when every class sits on the *same* side of its target, moving a dollar to
+    any of them closes the total gap by exactly a dollar and moves the
+    portfolio exactly a dollar, so both objectives above tie across the whole
+    face and the split falls to whichever vertex HiGHS returns. A target-date
+    fund's bond sleeve against a 0% bond target does this on every run. What
+    (3) shares out is the shortfall that is left *after* each class has been
+    brought as close as it can get on its own -- see `_unavoidable_drift` --
+    so a class pinned away from target scores zero and cannot swamp the
+    comparison, and what it measures the rest in is band-widths rather than
+    dollars. That is the 5/25 rule's own answer to "absolute or relative?":
+    the band is already the tighter of the two, per class, so normalizing by
+    it inherits that ruling instead of inventing a second one. Where the
+    bands are equal -- any two targets at or above 20% -- it reduces to
+    sharing the dollars evenly.
 
     "As close as the accounts allow" is the whole answer in that case: an
     unreachable target is approximated, never refused. `band_bounds` is only
@@ -773,6 +816,49 @@ def _resolve_allocation(
             bounds,
             "getting the allocation as close to target as the funds held allow",
         )
+        # Carried like every other rank, so this refines (2) rather than
+        # replacing it. Without the bound the tie-break is free to override
+        # "move as little as possible" outright, which is a different policy
+        # and a visibly worse one -- it trades to even out a shortfall the
+        # portfolio was already sitting closer to.
+        A_ub.append(stay_put)
+        b_ub.append(solution.fun + _OBJECTIVE_SLACK)
+
+        # One more column, `m`, for the largest share of the shortfall borne
+        # by any class -- and only on this LP. `_place_cash` shares the nine
+        # columns above and has no use for a tenth, so the rows are widened
+        # here rather than `_ALLOCATION_WIDTH` being raised under both.
+        A_eq = [row + [0.0] for row in A_eq]
+        A_ub = [row + [0.0] for row in A_ub]
+        bounds = bounds + [(0.0, None)]
+        for index, (key, fund_type) in enumerate(
+            zip(keys, _TARGET_FUND_TYPES, strict=True)
+        ):
+            # `excess_i <= band_i * m`, which is `excess_i / band_i <= m`
+            # multiplied through. Written that way it needs no division, and
+            # a band of zero -- which a 0% target gives -- states exactly what
+            # a band of zero means: `d_i <= floor_i` pins the class to the
+            # best drift it can reach rather than dividing by nothing.
+            width = 1.0 if band_widths is None else float(band_widths[key])
+            row = [0.0] * (_ALLOCATION_WIDTH + 1)
+            row[_SECOND_ANCHOR + index] = 1.0
+            row[_ALLOCATION_WIDTH] = -width
+            A_ub.append(row)
+            b_ub.append(_unavoidable_drift(dollar_targets[key], reach[fund_type]))
+        # A tie-break is a refinement, never a requirement. Pinning a
+        # zero-band class to its floor is the one row here that can be
+        # unsatisfiable alongside the others, and no plan should be lost to
+        # it -- (2)'s answer is already a good one.
+        with suppress(RebalanceError):
+            solution = _solve(
+                [0.0] * _ALLOCATION_WIDTH + [1.0],
+                A_eq,
+                b_eq,
+                A_ub,
+                b_ub,
+                bounds,
+                "sharing what the funds held cannot reach across the asset classes",
+            )
     return _reconcile_to_total(
         {key: _to_decimal(solution.x[index]) for index, key in enumerate(keys)}, total_value
     )
@@ -1083,12 +1169,14 @@ def compute_trades(
     # notes below read the band as the user set it, which is the one that
     # says whether the target was met.
     reachable_bounds = _reachable_bounds(dollar_bounds, reach)
+    band_points = effective_band_points(target, band_pct, relative_band_pct)
     resolved = _resolve_allocation(
         _current_asset_class_dollars(accounts),
         dollar_targets,
         reachable_bounds,
         reach,
         total_value,
+        {key: pct / Decimal(100) * total_value for key, pct in band_points.items()},
     )
     capacity_notes = _capacity_notes(dollar_bounds, reachable_bounds, total_value)
 
