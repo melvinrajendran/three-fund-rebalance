@@ -185,8 +185,8 @@ class TestUnreachableTargets:
         assert result.trades == [], "there is nothing to trade it into"
         assert any(
             "Bond target out of reach" in note
-            and "No combination of the funds held reaches more than $0.00, or 0% of the "
-            "portfolio" in note
+            and "These accounts cannot hold more than $0.00, or 0% of the portfolio"
+            in note
             for note in note_texts(result)
         ), note_texts(result)
 
@@ -511,14 +511,14 @@ class TestInternationalLocationDisclosure:
             self._complaint_scenario(), target("49.6", "30.4", 20), Decimal(5), Decimal(25)
         )
         note = "\n".join(note_texts(result))
-        assert "International in tax-advantaged" in note
+        assert "International stocks in tax-advantaged" in note
         # Both sheltered purchases, not just the larger one.
         assert "$64,660.00" in note
         assert "gives up a foreign tax credit" in note
         # The reason it happened anyway, in the reader's terms rather than the
         # solver's -- without it the order reads as a bug, and "ranks higher"
         # names a phase ordering the reader has never seen.
-        assert "would have meant selling something there" in note
+        assert "would have meant triggering a taxable sale" in note
         assert "ranks higher" not in note
 
     def test_nothing_is_said_when_no_account_is_taxable(self):
@@ -538,7 +538,7 @@ class TestInternationalLocationDisclosure:
         ]
         result = compute_trades(accounts, target("49.6", "30.4", 20))
         assert any(t.action == "buy" and t.fund_name == "VXUS" for t in result.trades)
-        assert not any("International in tax-advantaged" in n for n in note_texts(result))
+        assert not any("International stocks in tax-advantaged" in n for n in note_texts(result))
 
     def test_a_target_date_funds_international_sleeve_is_not_a_disclosed_purchase(self):
         """The same call phase 5 makes: a target-date fund is not
@@ -556,7 +556,7 @@ class TestInternationalLocationDisclosure:
             ]),
         ]
         result = compute_trades(accounts, target("49.6", "30.4", 20))
-        assert not any("International in tax-advantaged" in n for n in note_texts(result))
+        assert not any("International stocks in tax-advantaged" in n for n in note_texts(result))
 
 
 class TestTargetDateFunds:

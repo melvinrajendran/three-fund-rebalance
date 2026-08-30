@@ -261,8 +261,8 @@ class TestEndToEndRun:
         # the one thing to change. The target's own figure is not restated --
         # the comparison table above prints it for every class.
         assert "Bond target out of reach." in output
-        assert "No combination of the funds held reaches more than $0.00, or 0%" in output
-        assert "Hold individual funds in a larger share of the portfolio." in output
+        assert "These accounts cannot hold more than $0.00, or 0%" in output
+        assert "Lower the target, or hold individual funds in a larger percentage" in output
         assert "as close to the target allocation as the funds held allow" in output
 
     def test_a_rebalance_error_is_reported_and_exits_nonzero(self, monkeypatch, tmp_path):
@@ -382,7 +382,7 @@ class TestLongMessagesWrap:
             ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "100"], prompter=prompter
         )
         assert exit_code == 0
-        assert "No combination of the funds held reaches more than" in " ".join(
+        assert "These accounts cannot hold more than" in " ".join(
             prompter.full_output.split()
         )
         assert self._unwrapped(prompter) == []
