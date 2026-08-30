@@ -92,9 +92,6 @@ Notes
 International in tax-advantaged. Buying $15,600.00 of international stocks in
 tax-advantaged accounts gives up a foreign tax credit. Buying them in a
 taxable account would have meant selling something there.
-
-Not investment, tax, or legal advice, and not a recommendation to buy or sell.
-Consult a professional about your situation.
 ```
 
 ## Install
@@ -155,10 +152,18 @@ further down.
 | --- | --- |
 | `--config PATH` | Portfolio file to read and write (default `~/.three_fund_rebalance/config.json`) |
 | `--fresh` | Ignore the saved portfolio and start blank |
-| `--no-save` | Don't offer to save this run's answers |
+| `--no-save` | Don't offer to save this run's answers to the portfolio file |
 | `--offline` | Skip the live VT fetch; use the saved or a manually entered value instead |
 | `--vt-us-pct PCT` | Set VT's U.S. stock allocation % directly, skipping the lookup and the prompt |
+| `--write-summary [PATH]` | Write the summary to PATH, or with no PATH to a timestamped file beside the portfolio file |
 | `--version` | Print the installed version and exit |
+
+`--no-save` and `--write-summary` govern different files and neither implies
+the other. `--no-save` is about the portfolio -- the answers read back on the
+next run. `--write-summary` is about this run's summary, written only when
+asked, and never overwriting an earlier one when it chose the name itself:
+`rebalancing-summary-2026-08-29-2113-edt.txt`, stamped in local time with the
+same instant the summary's own first line names. Nothing prunes those files.
 
 ## How it works
 

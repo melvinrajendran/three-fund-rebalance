@@ -1,15 +1,22 @@
+from datetime import datetime, timedelta, tzinfo
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from three_fund_rebalance.formatting import (
     describe_as_of,
+    fixed_width,
     format_account_heading,
     format_date,
+    format_generated_at,
+    format_generated_at_for_filename,
     format_percent_prose,
     format_percents,
     format_result_header,
     format_section_header,
     format_subheading,
     percent_places,
+    prose_width,
+    table_width,
 )
 
 
@@ -123,3 +130,93 @@ class TestDates:
         """"as of manually entered" is not a sentence."""
         assert describe_as_of("2026-07-31") == "as of July 31, 2026"
         assert describe_as_of("manually entered") == "manually entered"
+
+
+class TestGeneratedAt:
+    """The instant a plan was made, rendered for a sentence and for a file
+    name. Two spellings of one decision -- same clock, same precision, same
+    zone -- so a summary found on disk can be matched to its own contents.
+
+    Every case builds its own zone, so nothing here depends on the machine
+    the suite runs on."""
+
+    def moment(self, zone):
+        return datetime(2026, 8, 29, 21, 3, 33, tzinfo=ZoneInfo(zone))
+
+    def test_it_reads_as_the_local_afternoon_it_was(self):
+        """Not "1:03 AM UTC" -- a stamp nobody can use without arithmetic is
+        a worse answer than no stamp."""
+        moment = self.moment("America/New_York")
+        assert format_generated_at(moment) == "August 29, 2026 at 9:03 PM EDT"
+        assert format_generated_at_for_filename(moment) == "2026-08-29-2103-edt"
+
+    def test_a_zone_with_no_abbreviation_falls_to_its_offset(self):
+        """`tzname()` answers "+0545" for these, which is not a word and must
+        not be printed as one."""
+        moment = self.moment("Asia/Kathmandu")
+        assert format_generated_at(moment) == "August 29, 2026 at 9:03 PM UTC+05:45"
+        assert format_generated_at_for_filename(moment) == "2026-08-29-2103-utc+0545"
+
+    def test_a_zone_behind_utc_keeps_its_sign(self):
+        """Marquesas is the awkward one that is real -- behind UTC, on a half
+        hour, and with no abbreviation, so `tzname()` answers "-0930"."""
+        moment = self.moment("Pacific/Marquesas")
+        assert format_generated_at(moment) == "August 29, 2026 at 9:03 PM UTC-09:30"
+        assert format_generated_at_for_filename(moment) == "2026-08-29-2103-utc-0930"
+
+    def test_a_windows_style_phrase_is_not_printed_as_an_abbreviation(self):
+        """Windows answers "Eastern Daylight Time" -- localized, so on a
+        non-English machine it is not even ASCII. The same rule that catches
+        "+0545" catches this, which is the reason the rule is a shape test
+        rather than a list of known zones."""
+
+        class Phrase(tzinfo):
+            def utcoffset(self, dt): return timedelta(hours=-4)
+            def tzname(self, dt): return "Eastern Daylight Time"
+            def dst(self, dt): return timedelta(0)
+
+        moment = datetime(2026, 8, 29, 21, 3, tzinfo=Phrase())
+        assert format_generated_at(moment).endswith("UTC-04:00")
+        assert format_generated_at_for_filename(moment) == "2026-08-29-2103-utc-0400"
+
+    def test_the_file_name_survives_a_shell_and_windows(self):
+        for zone in ("America/New_York", "Asia/Kathmandu", "Pacific/Marquesas", "UTC"):
+            stamp = format_generated_at_for_filename(self.moment(zone))
+            # A comma, a space or a colon would each break one of those.
+            assert not set(stamp) & set(", :/\\"), stamp
+
+    def test_both_spellings_name_the_same_instant_and_zone(self):
+        """The property that matters -- not the literal strings above, which
+        say what they look like, but that neither can drift from the other's
+        clock, minute or zone."""
+        for zone in (
+                "America/New_York", "Asia/Kolkata", "Asia/Kathmandu",
+                "Pacific/Marquesas", "UTC",
+            ):
+            moment = self.moment(zone)
+            said = format_generated_at(moment)
+            when, _, label = said.rpartition(" ")
+            assert datetime.strptime(when, "%B %d, %Y at %I:%M %p") == moment.replace(
+                second=0, microsecond=0, tzinfo=None
+            )
+            assert format_generated_at_for_filename(moment) == (
+                f"{moment:%Y-%m-%d-%H%M}-{label.lower().replace(':', '')}"
+            )
+
+
+class TestFixedWidth:
+    """Writing to a file pins the layout, because a file is read somewhere
+    other than the terminal that produced it."""
+
+    def test_it_pins_both_widths_and_restores_them(self, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        before = (prose_width(), table_width())
+        with fixed_width(80):
+            assert (prose_width(), table_width()) == (78, 78)
+        assert (prose_width(), table_width()) == before
+
+    def test_it_restores_the_previous_setting_when_nested(self):
+        with fixed_width(120):
+            with fixed_width(80):
+                assert table_width() == 78
+            assert table_width() == 118

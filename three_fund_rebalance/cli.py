@@ -21,7 +21,10 @@ from three_fund_rebalance import __version__
 from three_fund_rebalance.allocation import compute_target_allocation
 from three_fund_rebalance.config import DEFAULT_CONFIG_PATH
 from three_fund_rebalance.formatting import (
+    SUMMARY_FILE_WIDTH,
+    fixed_width,
     format_account_heading,
+    format_generated_at_for_filename,
     format_percent,
     format_result_header,
     format_section_header,
@@ -66,6 +69,23 @@ _INPUT_STEPS = 3
 #: cannot come to mean different things.
 _SUMMARY_TITLE = "Rebalancing summary"
 
+#: argparse's `const` for a bare --write-summary. A sentinel rather than a
+#: computed path, because the default name carries the instant the report was
+#: generated and that is not known until the plan is.
+_SUMMARY_TO_DEFAULT_DIR = "<beside the portfolio file>"
+
+
+def _now_local() -> datetime:
+    """This instant, in the machine's own zone.
+
+    Read through UTC rather than as a naive `datetime.now()`, which is what
+    keeps the result aware and unambiguous across a fall-back hour. Every
+    date and time the program stamps comes from here, so the report's
+    "Generated ..." line, the file name it is written to and the saved
+    `values_as_of` are all the same clock -- the user's.
+    """
+    return datetime.now(tz=timezone.utc).astimezone()
+
 
 def _decimal_arg(raw: str) -> Decimal:
     try:
@@ -102,7 +122,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--fresh", action="store_true", help="Ignore the saved portfolio and start blank"
     )
     parser.add_argument(
-        "--no-save", action="store_true", help="Don't offer to save this run's answers"
+        "--no-save",
+        action="store_true",
+        # Names the file it is about. It sounds like it governs
+        # --write-summary and does not: one is the portfolio this run reads
+        # back next time, the other is a copy of this run's report.
+        help="Don't offer to save this run's answers to the portfolio file",
     )
     parser.add_argument(
         "--offline",
@@ -115,6 +140,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="PCT",
         help="Set VT's U.S. stock allocation %% directly, skipping the lookup and the prompt",
+    )
+    parser.add_argument(
+        "--write-summary",
+        nargs="?",
+        const=_SUMMARY_TO_DEFAULT_DIR,
+        default=None,
+        metavar="PATH",
+        # "write" rather than "save": --no-save is already about the
+        # portfolio file, and a --save-summary beside it would read as its
+        # opposite number when the two govern different files entirely.
+        help=(
+            "Write the rebalancing summary to PATH, or with no PATH to a "
+            "timestamped file beside the portfolio file"
+        ),
     )
     return parser.parse_args(argv)
 
@@ -130,6 +169,39 @@ class _Answers:
     band_pct: Decimal
     relative_band_pct: Decimal | None
     accounts: list[Account]
+
+
+def _summary_path(raw: str, moment: datetime) -> Path:
+    """Where --write-summary writes. An explicit PATH is taken literally; the
+    bare flag names a file beside the portfolio file, stamped with the
+    instant the report says it was generated."""
+    if raw != _SUMMARY_TO_DEFAULT_DIR:
+        return Path(raw)
+    stamp = format_generated_at_for_filename(moment)
+    return DEFAULT_CONFIG_PATH.parent / f"rebalancing-summary-{stamp}.txt"
+
+
+def _write_summary(path: Path, text: str, *, generated_name: bool) -> Path:
+    """Write the summary, returning the path actually used.
+
+    A path the user named is an instruction, so it is overwritten. A name
+    this program generated is a promise that nothing is lost, so it is opened
+    exclusively and a numbered sibling is used if the stamp collides -- which
+    takes two runs inside one minute, but "no collisions" has to mean it.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not generated_name:
+        path.write_text(text, encoding="utf-8")
+        return path
+    candidate, attempt = path, 1
+    while True:
+        try:
+            with open(candidate, "x", encoding="utf-8") as handle:
+                handle.write(text)
+            return candidate
+        except FileExistsError:
+            attempt += 1
+            candidate = path.with_name(f"{path.stem}-{attempt}{path.suffix}")
 
 
 def _ask_vt_split(prompter: Prompter, args, answers: _Answers) -> VTAllocationResult:
@@ -304,6 +376,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
                 relative_band_pct=answers.relative_band_pct,
                 accounts=answers.accounts,
                 values_as_of=config.values_as_of,
+                generated_at=_now_local(),
             )
             prompter.say("\n" + format_result_header(_SUMMARY_TITLE))
             prompter.say("\n" + format_report(inputs, result))
@@ -323,6 +396,9 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
         if not answers.accounts:
             prompter.say("\nNo accounts left -- nothing to rebalance.")
             return 0
+
+    if args.write_summary is not None:
+        _offer_summary_file(prompter, args, inputs, result)
 
     # A section of its own rather than a question tacked onto the end of the
     # report: it is a separate action, and the report now closes with a
@@ -347,6 +423,27 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
             prompter.say("Not saved.")
 
     return 0
+
+
+def _offer_summary_file(prompter: Prompter, args, inputs, result) -> None:
+    """Write the summary the report just printed, at a pinned width.
+
+    Rendered again rather than captured from the screen, because the file is
+    read anywhere and cannot be sized to the window that produced it. Written
+    after the report is on screen, so a path that cannot be written costs a
+    message and not the plan.
+    """
+    with fixed_width(SUMMARY_FILE_WIDTH):
+        text = f"{format_result_header(_SUMMARY_TITLE)}\n\n{format_report(inputs, result)}\n"
+    path = _summary_path(args.write_summary, inputs.generated_at)
+    try:
+        written = _write_summary(
+            path, text, generated_name=args.write_summary == _SUMMARY_TO_DEFAULT_DIR
+        )
+    except OSError as exc:
+        prompter.say_wrapped(f"\nCould not write the summary to {path} ({exc}).")
+        return
+    prompter.say(f"\nSummary written to {written}")
 
 
 def main() -> None:

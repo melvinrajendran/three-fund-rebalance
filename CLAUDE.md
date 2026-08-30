@@ -839,6 +839,22 @@ loses them is a regression:
   does: it explained a trade the user had not been shown yet, and the program prints
   no other unprompted commentary on its own reasoning.
   `test_the_asset_location_note_is_not_said_during_onboarding` holds the line.
+- **The report says when it was made**, as its first line -- "Generated August
+  29, 2026 at 9:03 PM EDT." That is the *document's* provenance and it leads;
+  the figures carry their own further down, which is why the two are not
+  together. It comes from `RebalanceInputs.generated_at` rather than from the
+  clock inside `format_report`, so the same inputs render the same report and
+  the summary file's name is stamped from the same instant the sentence names.
+- **Every date and time the program prints or saves is the user's own local
+  one.** `cli._now_local` is the only clock, and everything -- the line above,
+  the summary file's name, the saved `values_as_of` -- reads from it. UTC is
+  what the machine keeps, not what a person can act on: a stamp that has to be
+  converted before it answers "was this before or after I moved that money" is
+  a worse answer than no stamp. `values_as_of` was UTC's *date* until this
+  rule existed, which put anyone west of Greenwich running an evening session
+  a day into the future -- "Last saved August 30, 2026" for figures typed on
+  the 29th, every evening, silently. `TestSavedDateIsTheUsersOwn` pins it by
+  freezing `_now_local` at a New York evening whose UTC date is the next day.
 - **Figures carry their provenance** -- "Values as entered, not live market prices.",
   plus "Last saved July 31, 2026." as its own sentence when they came from a config
   file. The numbers are the user's, and can be stale. The date is written out in full
@@ -1030,6 +1046,70 @@ with `\n` as a separator, and padding it would emit trailing whitespace.
 **`report.py` must not import `prompts.py`.** Shared presentation constants
 (`INDENT_UNIT`) live in `formatting.py`, which both import.
 
+### The summary file (`--write-summary`)
+
+Off unless asked. The program already asks before writing the portfolio file,
+and a summary carries the user's whole net worth broken out by account, so
+writing one unprompted into a dotdir they never browse is not this program's
+call to make. `--write-summary PATH` writes there; the bare flag writes
+`rebalancing-summary-<stamp>-utc.txt` beside the portfolio file.
+
+**A path the user named is an instruction and is overwritten. A name this
+program generated is a promise and is never overwritten** -- `_write_summary`
+opens it exclusively and falls to a numbered sibling, which takes two runs
+inside one minute but is the only thing that makes "no collisions" true rather
+than merely unlikely.
+
+**The stamp is one decision spelled twice.** `format_generated_at` is the
+sentence at the head of the report ("August 29, 2026 at 9:03 PM EDT") and
+`format_generated_at_for_filename` is the same instant as a file name can carry
+it ("2026-08-29-2103-edt"). Same clock, same precision and same zone by
+construction -- `_zone_labels` returns both spellings at once, because the only
+way to be sure two renderings agree is for one function to decide both -- so a
+file found on disk can be matched to its own first line. The file name is not
+the sentence with its spaces removed: a name has to sort, survive a shell and
+be legal on Windows, which the comma, the spaces and the colon each break.
+Minutes because a plan is re-run within the day constantly, and the collision
+suffix covers the rest.
+
+**The zone is printed as an abbreviation where one exists and as a numeric
+offset otherwise**, and the test is a *shape* -- `^[A-Za-z]{2,5}$` against
+`tzname()` -- rather than a list of known zones, because three different
+problems arrive through that one field. A zone with no abbreviation answers
+"+0545" (Kathmandu, Eucla, Marquesas), which is not a word and must not be
+printed as one. Windows answers a full phrase, "Eastern Daylight Time", and
+answers it *localized*, so a non-English machine would otherwise put spaces and
+non-ASCII into a file name. And an abbreviation is not merely shorter than an
+offset: it is what tells the two 1:30 AMs of a fall-back apart, which a bare
+local time cannot. `datetime.now(tz=timezone.utc).astimezone()` is how the zone
+is found -- no dependency, and converting *from* an aware UTC instant is what
+keeps the fall-back hour unambiguous where a naive `datetime.now()` would not.
+
+Local time costs the chronological sort across a fall-back hour and across a
+change of zone, and both are real. Neither can lose a file: a generated name is
+opened exclusively and falls to a numbered sibling. Every test builds its own
+zone with `zoneinfo` and passes it in, so nothing depends on the machine the
+suite runs on -- `generated_at` is injected for exactly that reason, which
+leaves `_now_local` as the single line the suite cannot cover and does not
+need to.
+
+**The file is rendered again at `SUMMARY_FILE_WIDTH`, not captured from the
+screen.** Width is read globally by `prose_width`/`table_width` on the way down
+through every renderer, so `formatting.fixed_width` pins it for the render
+rather than threading a width through a dozen signatures. A file is read
+somewhere other than the terminal that made it, so the same portfolio must not
+land at 78 columns from one machine and 198 from another;
+`test_the_layout_does_not_follow_the_terminal` writes both and diffs them. It
+is written *after* the report is on screen, so an unwritable path costs a
+message and not the plan.
+
+**`--no-save` and `--write-summary` govern different files**, which is most of
+why the new flag is not called `--save-summary`: beside an existing `--no-save`
+that reads as its opposite number, and it is not. `--no-save`'s help now names
+the portfolio file outright for the same reason, and the README says it in a
+sentence, since a help string is not where someone resolves a confusion they
+have not had yet.
+
 ### Persistence
 
 `~/.three_fund_rebalance/config.json`, versioned by `SCHEMA_VERSION`, written
@@ -1135,7 +1215,26 @@ the network stamps the provenance line "manually specified via --vt-us-pct"
 (`cli.py`), where the README shows the fetched form -- `formatting.describe_as_of` on a
 real date, e.g. "(as of June 30, 2026)". The README deliberately shows the fetch path,
 because that is what a reader running the CLI normally will see. Substitute that one
-line by hand and leave the other seventy-odd exactly as printed.
+line by hand.
+
+**Two things the CLI really prints are cut from the Example**, and a regeneration has
+to cut them again -- they are the first and last things a naive paste puts back:
+
+- **The "Generated ..." line**, which opens the report. It is a wall clock in whatever
+  zone and minute the regeneration happened to run in, so pasting it dates the *README*
+  rather than the example, and every later regeneration shows up as a diff in a line
+  that carries no information about the program. There is nothing to learn from it that
+  the surrounding text does not already say.
+- **The closing disclaimer.** It is two lines the README has already given in full, in
+  its own `## Disclaimer` section directly above the Example. Repeating it inside a
+  fenced block a screen later is the fourth-hand restatement the disclaimer's own entry
+  under "Wording the output has to keep" argues against -- and cutting it here changes
+  nothing about the rule that the *program* always ends on it, which is where it does
+  the work.
+
+Everything between those two is exactly as printed. Note this makes "real output,
+pasted verbatim" mean *a contiguous run of it*: the trim is at the ends only, and
+nothing inside may be touched or idealized.
 
 **How it works is a list of bolded lead-ins, each followed by at most a short
 paragraph** -- two to four lines. It is a summary, not a specification. An entry that

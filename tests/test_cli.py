@@ -1,11 +1,16 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 
 from three_fund_rebalance import __version__, cli
-from three_fund_rebalance.cli import parse_args, run
+from three_fund_rebalance.cli import _write_summary, parse_args, run
 from three_fund_rebalance.config import VT_FUND_PAGE_URL
-from three_fund_rebalance.formatting import prose_width
+from three_fund_rebalance.formatting import (
+    SUMMARY_FILE_WIDTH,
+    format_generated_at,
+    prose_width,
+)
 from three_fund_rebalance.models import FundType
 from three_fund_rebalance.persistence import load_config
 from three_fund_rebalance.prompts import Prompter
@@ -568,3 +573,116 @@ class TestRevisionLoop:
         ) == 0
         assert "Could not compute a rebalance: nothing works here" in prompter.full_output
         assert "Orders to Place" in prompter.full_output
+
+
+class TestSummaryFile:
+    """--write-summary writes the report that was just printed, laid out for
+    a reader who is not at this terminal."""
+
+    def _run(self, tmp_path, *extra, columns=None, monkeypatch=None):
+        if columns is not None:
+            monkeypatch.setenv("COLUMNS", columns)
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n", NO_REVISION, "n",
+        ])
+        code = run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "75", *extra],
+            prompter=prompter,
+        )
+        return code, prompter
+
+    def test_nothing_is_written_unless_asked(self, tmp_path):
+        self._run(tmp_path)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_an_explicit_path_is_written_and_named_on_screen(self, tmp_path):
+        out = tmp_path / "plan.txt"
+        _, prompter = self._run(tmp_path, "--write-summary", str(out))
+        text = out.read_text()
+        assert "REBALANCING SUMMARY" in text
+        assert "Sell $4,000.00 of VTI" in text
+        # The disclaimer travels with the file -- that is what it is for. It
+        # is wrapped to the file's width, so compare on the words.
+        assert " ".join(DISCLAIMER.split()) in " ".join(text.split())
+        assert str(out) in prompter.full_output
+
+    def test_the_file_name_is_stamped_from_the_line_the_summary_opens_with(
+        self, tmp_path, monkeypatch
+    ):
+        """One decision, spelled twice. The sentence and the generated file
+        name carry the same clock, precision and zone, so a summary found on
+        disk can be matched to its own first line without arithmetic."""
+        monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATH", tmp_path / "config.json")
+        self._run(tmp_path, "--write-summary")   # bare: it names the file itself
+
+        written = next(p for p in tmp_path.iterdir() if p.name.startswith("rebalancing-summary-"))
+        stamped = [
+            line for line in written.read_text().splitlines() if line.startswith("Generated ")
+        ]
+        assert len(stamped) == 1, stamped
+
+        said = stamped[0][len("Generated "):].rstrip(".")
+        when, _, zone = said.rpartition(" ")
+        clock = datetime.strptime(when, "%B %d, %Y at %I:%M %p")
+        # "EDT" -> "edt"; "UTC+05:45" -> "utc+0545". Both shapes, one rule.
+        assert written.name == (
+            f"rebalancing-summary-{clock:%Y-%m-%d-%H%M}"
+            f"-{zone.lower().replace(':', '')}.txt"
+        )
+
+    def test_the_stamp_is_the_local_clock_and_not_utc(self, tmp_path):
+        """A reader should not have to convert their own afternoon."""
+        out = tmp_path / "plan.txt"
+        self._run(tmp_path, "--write-summary", str(out))
+        said = next(
+            line for line in out.read_text().splitlines() if line.startswith("Generated ")
+        )
+        expected = format_generated_at(datetime.now(timezone.utc).astimezone())
+        # Same minute unless the run straddled one, so compare on the date
+        # and the zone rather than flaking once in a few thousand runs.
+        assert said.endswith(f"{expected.rsplit(' ', 1)[1]}.")
+        assert expected.split(" at ")[0] in said
+
+    def test_the_layout_does_not_follow_the_terminal(self, tmp_path, monkeypatch):
+        """A file is read anywhere -- another terminal, an editor, a mail
+        client -- so it cannot be sized to the window that produced it."""
+        narrow, wide = tmp_path / "narrow.txt", tmp_path / "wide.txt"
+        self._run(tmp_path, "--write-summary", str(narrow), columns="80", monkeypatch=monkeypatch)
+        self._run(tmp_path, "--write-summary", str(wide), columns="200", monkeypatch=monkeypatch)
+
+        def body(path):
+            return [
+                line for line in path.read_text().splitlines()
+                if not line.startswith("Generated ")
+            ]
+
+        assert body(narrow) == body(wide)
+        assert max(len(line) for line in body(wide)) <= SUMMARY_FILE_WIDTH
+
+    def test_a_generated_name_never_overwrites_an_earlier_summary(self, tmp_path):
+        """Two runs inside one minute share a stamp. "No collisions" has to
+        mean it, so the second becomes a numbered sibling."""
+        base = tmp_path / "rebalancing-summary-2026-08-29-1742-utc.txt"
+        first = _write_summary(base, "first", generated_name=True)
+        second = _write_summary(base, "second", generated_name=True)
+        assert first.name == "rebalancing-summary-2026-08-29-1742-utc.txt"
+        assert second.name == "rebalancing-summary-2026-08-29-1742-utc-2.txt"
+        assert first.read_text() == "first"
+
+    def test_a_path_the_user_named_is_overwritten(self, tmp_path):
+        """An explicit path is an instruction, not a name this program chose."""
+        named = tmp_path / "plan.txt"
+        assert _write_summary(named, "first", generated_name=False) == named
+        assert _write_summary(named, "second", generated_name=False) == named
+        assert named.read_text() == "second"
+
+    def test_an_unwritable_path_costs_a_message_and_not_the_plan(self, tmp_path):
+        # A file where a directory would have to be, so the parent cannot be
+        # created and no retry would fix it.
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")
+        _, prompter = self._run(tmp_path, "--write-summary", str(blocker / "plan.txt"))
+        assert "Orders to Place" in prompter.full_output
+        assert "Could not write the summary" in prompter.full_output
