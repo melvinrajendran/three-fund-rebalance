@@ -9,7 +9,13 @@ htmlcov/
 dist/
 build/
 
-.claude/
+# Claude Code: share the rules, skills, hooks and project settings; keep
+# personal state (settings.local.json, RESUME.md, transcripts) out.
+.claude/*
+!.claude/hooks/
+!.claude/rules/
+!.claude/skills/
+!.claude/settings.json
 .env
 .env.*
 *.local.json
