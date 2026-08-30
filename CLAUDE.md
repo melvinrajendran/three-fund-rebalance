@@ -623,6 +623,15 @@ the JSON endpoint backs. Being unscrapable is irrelevant to a human.
 
 ### Output structure (`formatting.py`)
 
+**A subheading's content starts on the line directly beneath its rule.** No
+blank line between the two, in any section, ever -- the rule already separates
+the heading from what follows, and a gap under one of six subheadings reads as a
+different kind of division rather than the same one spaced differently. "Account
+Holdings" and "Notes" both had one, because each emitted its separator at the
+top of its loop and so put one before the first item as well as between them;
+both now guard on the index. Blank lines still go *between* accounts and between
+notes, which is the job that separator actually has.
+
 Hierarchy uses two devices only: a rule under a heading, and indentation.
 `=` banners the three steps *and the report they produce*, `-` underlines divisions
 within either, and below that nesting is position alone -- an account is a plain label,

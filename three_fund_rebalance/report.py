@@ -389,7 +389,7 @@ def _describe_band(inputs: RebalanceInputs) -> list[str]:
 
 def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
     lines = _subheading("Account Holdings")
-    for account in inputs.accounts:
+    for index, account in enumerate(inputs.accounts):
         # Every account reads `nickname (type, treatment)`, with no exceptions
         # -- one line shaped like the next is what lets the eye compare them
         # down the page. There used to be a rule suppressing the treatment
@@ -419,7 +419,12 @@ def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
         amount_width = max(len(amount) for _, amount in rows)
         body_indent = INDENT_UNIT * 2
 
-        lines.append("")
+        # A blank line *between* accounts, never under the rule: every
+        # subheading in the report starts its content on the line directly
+        # beneath, and one that does not reads as a different kind of
+        # division rather than the same one spaced differently.
+        if index:
+            lines.append("")
         lines.append(wrap(heading, indent=INDENT_UNIT, hanging_indent=INDENT_UNIT * 2))
         for label, amount in rows:
             lines.append(f"{body_indent}{label:<{label_width}}  {amount:>{amount_width}}")
@@ -578,8 +583,10 @@ def _describe_notes(notes: list[Note]) -> list[str]:
     under a heading the prefix only repeated what the heading already said.
     """
     lines = _subheading("Notes")
-    for note in notes:
-        lines.append("")
+    for index, note in enumerate(notes):
+        # Between notes only -- see the same rule in `_describe_accounts`.
+        if index:
+            lines.append("")
         lines.append(wrap(f"{note.label}. {note.summary}"))
         if note.detail:
             lines.append(wrap(note.detail, indent=INDENT_UNIT))

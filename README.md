@@ -42,7 +42,6 @@ drifts outside its band, all three are rebalanced back to target.
 
 Account Holdings
 ----------------
-
   Vanguard Brokerage (Brokerage, taxable)
     VTI (U.S. stock fund)            $60,000.00
     VXUS (international stock fund)  $30,000.00
@@ -90,7 +89,6 @@ Review each order before placing it:
 
 Notes
 -----
-
 International in tax-advantaged. Buying $15,600.00 of international stocks in
 tax-advantaged accounts gives up a foreign tax credit. Buying them in a
 taxable account would have meant selling something there.
