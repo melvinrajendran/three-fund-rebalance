@@ -94,7 +94,7 @@ stocks in tax-advantaged accounts gives up a foreign tax credit. Buying them
 in a taxable account would have meant triggering a taxable sale.
 ```
 
-## Install
+## Installation
 
 ### Prerequisites
 
@@ -156,7 +156,7 @@ type a new one.
 | `--write-summary [PATH]` | Write the summary to PATH, or with no PATH to a timestamped file beside the portfolio file |
 | `--version` | Print the installed version and exit |
 
-## How it works
+## How It Works
 
 **The U.S. and international split** comes from the Vanguard Total World Stock
 ETF (VT): Vanguard's monthly JSON endpoint, falling back to the quarterly fact
