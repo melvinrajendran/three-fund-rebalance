@@ -731,3 +731,41 @@ class TestSummaryFile:
         _, prompter = self._run(tmp_path, "--write-summary", str(blocker / "plan.txt"))
         assert "Orders to Place" in prompter.full_output
         assert "Could not write the summary" in prompter.full_output
+
+
+class TestTheActionsAfterTheReport:
+    """Everything the run does once the summary is on screen -- the recompute
+    gate, the summary file, the save -- is a `-` section like every other
+    question the flow asks. Set flush, the gate read as the last line of the
+    disclaimer above it."""
+
+    def _run(self, tmp_path, *extra):
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n", NO_REVISION, "n",
+        ])
+        run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "75", *extra],
+            prompter=prompter,
+        )
+        return prompter.full_output.splitlines()
+
+    def test_each_action_is_a_ruled_section(self, tmp_path):
+        lines = self._run(tmp_path, "--write-summary", str(tmp_path / "plan.txt"))
+        for heading in ("Update Answer", "Summary File", "Save Portfolio"):
+            assert lines.count(heading) == 1
+            at = lines.index(heading)
+            assert lines[at + 1] == "-" * len(heading)
+
+    def test_a_section_starts_on_the_line_beneath_its_rule(self, tmp_path):
+        """Both questions go to input_func and print nothing, so the summary
+        file is the one of the three whose content this can be read on."""
+        lines = self._run(tmp_path, "--write-summary", str(tmp_path / "plan.txt"))
+        at = lines.index("Summary File")
+        assert lines[at + 2].startswith("Summary written to ")
+
+    def test_the_disclaimer_is_not_followed_by_a_bare_question(self, tmp_path):
+        lines = self._run(tmp_path)
+        closing = next(i for i, line in enumerate(lines) if line.startswith("Consult a"))
+        assert lines[closing + 1:closing + 3] == ["", "Update Answer"]
