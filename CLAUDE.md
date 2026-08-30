@@ -196,6 +196,19 @@ README's own example the added slots are what let the whole bond target be reach
 inside the shelters, so the taxable account is not touched at all; with the bond slot
 missing from the Roth it had to sell there.
 
+**A fund's name is asked immediately above its value, so the name prompt refuses an
+answer the value prompt would have taken** -- `prompt_str`'s `reject_numeric`, passed
+only from `_prompt_holding`. On a saved account the ticker arrives pre-filled and the
+value is the only thing that changed quarter to quarter, which makes typing the new
+value at the name prompt the natural slip; nothing else caught it, so the amount
+became the fund's name, was saved to config.json, and came back in the plan as "Buy
+$29,500.00 of 178000" -- the one path that produced a wrong order that looked right.
+The test is `_parses_as_a_number`, i.e. *what the other question accepts*, rather than
+a pattern of digits, so the two cannot drift apart: a value typed with a comma or a
+dollar sign is not one of these and `prompt_decimal` would have rejected it too. Only
+the fund prompts ask for it -- an account nickname sits next to no value question, and
+no order is placed against it.
+
 The consequence worth holding onto: **a target-date account has exactly one slot, so
 the per-account budget equality pins it outright.** No objective can reach inside it.
 That is what stops the solver from liquidating a taxable target-date fund to relocate

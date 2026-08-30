@@ -150,9 +150,40 @@ class Prompter:
 # --------------------------------------------------------------------------
 
 
+def _parses_as_a_number(raw: str) -> bool:
+    """Whether `prompt_decimal` would have accepted this answer.
+
+    Stated as "what the other question takes" rather than as a pattern of
+    digits, so the two stay in step -- `prompt_decimal` parses with a bare
+    `Decimal`, which is why a value typed with a comma or a dollar sign is
+    not one of these and never reaches the name prompt in the first place.
+    """
+    try:
+        Decimal(raw)
+    except InvalidOperation:
+        return False
+    return True
+
+
 def prompt_str(
-    prompter: Prompter, text: str, *, default: str | None = None, max_length: int | None = None
+    prompter: Prompter,
+    text: str,
+    *,
+    default: str | None = None,
+    max_length: int | None = None,
+    reject_numeric: bool = False,
 ) -> str:
+    """Ask for a line of text.
+
+    `reject_numeric` guards the one pair of adjacent questions that take
+    different kinds of answer. A fund's name is asked immediately above its
+    value, and on a saved account the name arrives pre-filled while the value
+    is the only thing that changed quarter to quarter -- so typing the new
+    value at the name prompt is the natural slip, and nothing else here
+    catches it. The amount becomes the fund's name, is saved to the config
+    file, and comes back in the plan as "Buy $29,500.00 of 178000". No fund
+    name or ticker is a bare number, so refusing one costs nothing.
+    """
     suffix = f" [{default}]" if default else ""
     while True:
         raw = prompter.ask(f"{text}{suffix}: ")
@@ -160,6 +191,13 @@ def prompt_str(
             return default
         if raw and max_length is not None and len(raw) > max_length:
             prompter.say(f"Please keep this to {max_length} characters or fewer.")
+            continue
+        if raw and reject_numeric and _parses_as_a_number(raw):
+            # "a fund name or ticker" is what FUND_EXPLANATION has already
+            # asked for, so the correction reads as the same instruction
+            # again -- and naming the fund is what says which of the two
+            # adjacent questions this one is.
+            prompter.say(f"'{raw}' looks like a number -- please enter a fund name or ticker.")
             continue
         if raw:
             return raw
@@ -565,7 +603,9 @@ def _prompt_holding(
     text: this is called from two places at different depths, and a literal
     indent that lines up in one lands two levels off in the other.
     """
-    name = prompt_str(prompter, label, default=existing.name if existing else None)
+    name = prompt_str(
+        prompter, label, default=existing.name if existing else None, reject_numeric=True
+    )
     with prompter.indented():
         value = prompt_decimal(
             prompter,

@@ -107,6 +107,37 @@ class TestPromptStr:
         p = ScriptedPrompter([""])
         assert prompt_str(p, "Name", default="fallback") == "fallback"
 
+    def test_a_value_typed_at_a_fund_name_prompt_is_refused(self):
+        """The slip this exists for. On a saved account the ticker arrives
+        pre-filled and the value is the only thing that changed, so typing
+        the new value at the name prompt is the natural mistake -- and
+        without this the amount silently becomes the fund's name, is saved,
+        and comes back in the plan as "Buy $29,500.00 of 178000"."""
+        p = ScriptedPrompter(["178000", "VTI"])
+        assert prompt_str(p, "U.S. stock fund", default="VTI", reject_numeric=True) == "VTI"
+        assert "looks like a number" in p.text
+
+    def test_anything_the_value_prompt_would_have_taken_is_refused(self):
+        """Stated as "what the other question accepts" rather than as a
+        pattern of digits, so the two cannot drift apart."""
+        for typed in ("0", "-5", "1234.56", "1.5e5"):
+            p = ScriptedPrompter([typed, "VTI"])
+            assert prompt_str(p, "Bond fund", reject_numeric=True) == "VTI", typed
+
+    def test_a_fund_name_carrying_digits_is_still_accepted(self):
+        """Only a bare number is refused. Real funds are full of digits --
+        a target-date year, an index's number, a share class."""
+        for name in ("Target 2050", "500 Index", "FXAIX", "VTI"):
+            p = ScriptedPrompter([name])
+            assert prompt_str(p, "U.S. stock fund", reject_numeric=True) == name, name
+
+    def test_an_account_nickname_may_still_be_a_number(self):
+        """The guard is asked for at the fund prompts and nowhere else -- a
+        nickname sits next to no value question, and it is a label the user
+        invents rather than one an order is placed against."""
+        p = ScriptedPrompter(["401"])
+        assert prompt_str(p, "Account nickname") == "401"
+
 
 class TestPromptDecimal:
     def test_parses_valid_number(self):
