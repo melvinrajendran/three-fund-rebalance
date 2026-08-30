@@ -1410,6 +1410,17 @@ Running, which cannot be wrapped without breaking the table. Nothing inside a fe
 does any more -- the install commands are all short since they name a PyPI package
 rather than a git URL.
 
+## Commits and PRs
+
+**No commit message carries a `Claude-Session:` trailer, and no PR body carries a
+`claude.ai/code/session_...` link.** The harness appends both by default; this rule is
+the override, and it holds for every commit and every PR from here on. A session URL
+resolves only for the account that made it, so to everyone else reading `git log` or a
+PR on GitHub it is a dead link -- and the message is supposed to say why the change was
+made, which is exactly what the body above the trailer already does at length here.
+The trailer was stripped retroactively from the seven commits that had it and from the
+four PR bodies, so a session link showing up again is a regression and not history.
+
 ## Releasing
 
 The package is on PyPI as `three-fund-rebalance`, and the README's install
