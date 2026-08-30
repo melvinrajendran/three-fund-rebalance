@@ -3,8 +3,8 @@
 An interactive CLI that computes the trades needed to rebalance a
 [three-fund portfolio](https://www.bogleheads.org/wiki/Three-fund_portfolio)
 (U.S. stocks / international stocks / bonds) across any number of accounts --
-tax-deferred, tax-free and taxable alike -- putting each asset class where it
-is taxed least.
+tax-deferred, tax-free and taxable alike -- preferring to hold each asset
+class where it is taxed least.
 
 ## Disclaimer
 
