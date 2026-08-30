@@ -397,8 +397,13 @@ Some finer points that are easy to undo by accident:
   what the alternative would have cost, never where the phase sat**, because a note is
   read by someone holding a plan and not by someone holding this file. It shipped once
   as "Avoiding a taxable sale ranks higher", which names an ordering the reader has
-  never seen; "Buying them in a taxable account would have meant selling something
-  there" is the same fact in the only terms available to them.
+  never seen; "Buying them in a taxable account would have meant triggering a taxable
+  sale" is the same fact in the only terms available to them, and it names the cost as
+  the report's own "Taxable sale" note names it rather than as a vaguer "selling
+  something there". The label is "International stocks in tax-advantaged": the plural
+  is the asset class's name everywhere else on the page, and the note's own first
+  sentence, and a label is worth three lines only if it survives the render -- dropping
+  "there" from the last sentence is what bought the room back at a ten-figure amount.
 - **Phase 4 does the opposite, deliberately**, and uses `_fund_type_coefficient`.
   Bonds inside a Roth's target-date fund really are bonds occupying tax-free space,
   exactly as phase 1 counts them -- and a TDF account is pinned by its own budget row
@@ -477,11 +482,22 @@ every class runs 0 to 1 -- floor zero, ceiling its whole value -- so **a target-
 account is now the only thing that can pin one.** Both messages used to say so
 outright, in a second indented paragraph ("an account holding a single fund has to put
 its whole value into that fund, and a target-date fund's mix is fixed"); shortening
-each note to one paragraph cut that, and the remedy now names the same two culprits
-only obliquely -- "hold less in single-fund and target-date accounts". Note the bound
+each note to one paragraph cut that, and each remedy now names one culprit and stops --
+"hold target-date funds in a smaller percentage of the portfolio" against a floor,
+"hold individual funds in a larger percentage" against a ceiling. Note the bound
 itself is general -- `compute_trades` is public and tests call it with partial slot
-sets -- so a message may name the likely cause but never asserts it, which is what made
-the oblique form an acceptable trade rather than a loss of precision.
+sets -- so a message may name the likely cause but never asserts it, which is what makes
+each of those a remedy to try rather than a diagnosis.
+
+**The two directions are one sentence read twice.** "These accounts cannot hold less
+than $X, or Y% of the portfolio. Raise the target, or ..." and "These accounts cannot
+hold more than $X, or Y% of the portfolio. Lower the target, or ..." -- same verb, same
+clause order, and only the bound, the target's direction and the kind of account that
+causes it flip. The ceiling half used to open "No combination of the funds held reaches
+more than", which is the same fact in a different sentence: two notes a reader meets in
+one report, describing one obstacle from two sides, are read against each other, and a
+difference in wording that carries no difference in meaning reads as a difference in
+kind.
 
 Ceilings are reported before floors: one account holding one fund breaches both at
 once, and "nothing you hold can be bonds" points at the missing piece, while "you are
@@ -1032,13 +1048,16 @@ that is what decides whether a note ever spills to four. `_describe_notes` still
 reports and the detail explains.**
 
 **No colons or semicolons in a note.** Every clause is its own sentence or joins with a
-comma. `TestNoteWording` holds this, the line count and the absence of `detail`.
+comma -- including the wash-sale note's condition, which is "If any of those shares are
+sold at a loss, this may be a wash sale": the comma is what keeps the conditional from
+reading as one run-on clause, and "sold at a loss" rather than "at a loss" is what ties
+the condition to the sale the sentence above it just described. `TestNoteWording` holds
+this, the line count and the absence of `detail`.
 
 What the capacity note gave up is worth knowing before shortening it further. Its remedy
-now names the two culprits only obliquely ("hold less in single-fund and target-date
-accounts"), so a reader who does not already know that a target-date fund's mix cannot
-be split will not learn it from the note. That was the deliberate trade for one
-paragraph.
+names one culprit for its own direction and stops, so a reader who does not already know
+that a target-date fund's mix cannot be split will not learn it from the note. That was
+the deliberate trade for one paragraph.
 
 The `Warning:` prefix is gone with them: several of these are not warnings -- a taxable
 sale is a disclosure, a dropped order a footnote -- and under a heading the prefix only

@@ -89,9 +89,9 @@ Review each order before placing it:
 
 Notes
 -----
-International in tax-advantaged. Buying $15,600.00 of international stocks in
-tax-advantaged accounts gives up a foreign tax credit. Buying them in a
-taxable account would have meant selling something there.
+International stocks in tax-advantaged. Buying $15,600.00 of international
+stocks in tax-advantaged accounts gives up a foreign tax credit. Buying them
+in a taxable account would have meant triggering a taxable sale.
 ```
 
 ## Install

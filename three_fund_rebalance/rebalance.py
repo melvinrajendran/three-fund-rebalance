@@ -430,9 +430,19 @@ def _capacity_notes(
             # dollars *and* as a share, so restating it here was a
             # restatement -- the label says this is about the target, and the
             # verb says which side of it the accounts are stuck on. And the
-            # sentence explaining *why* they are stuck, which the remedy below
-            # now names obliquely: a reader who does not already know that a
-            # target-date fund's mix cannot be split will not learn it here.
+            # sentence explaining *why* they are stuck: the remedy below names
+            # the culprit for its own direction and stops, so a reader who does
+            # not already know that a target-date fund's mix cannot be split
+            # will not learn it here.
+            #
+            # The two directions are one sentence shape read twice -- same
+            # verb, same clause order, only the bound, the target's direction
+            # and the kind of account that causes it flip. A floor is what a
+            # target-date fund pins, since its mix cannot be split; a ceiling
+            # is what too little individual-fund capacity leaves. Neither
+            # asserts that cause -- `compute_trades` is public and tests call
+            # it with partial slot sets -- which is why each is a remedy to try
+            # rather than a diagnosis.
             #
             # The label leads the note on screen, so it is capitalized the way
             # a sentence would be -- sliced rather than .capitalize()d, which
@@ -443,11 +453,11 @@ def _capacity_notes(
                     summary=(
                         f"These accounts cannot hold less than ${edge:,.2f}, or "
                         f"{format_percent_prose(share)}% of the portfolio. Raise the target, "
-                        "or hold less in single-fund and target-date accounts."
+                        "or hold target-date funds in a smaller percentage of the portfolio."
                         if above
-                        else f"No combination of the funds held reaches more than "
-                        f"${edge:,.2f}, or {format_percent_prose(share)}% of the portfolio. "
-                        "Hold individual funds in a larger share of the portfolio."
+                        else f"These accounts cannot hold more than ${edge:,.2f}, or "
+                        f"{format_percent_prose(share)}% of the portfolio. Lower the target, "
+                        "or hold individual funds in a larger percentage of the portfolio."
                     ),
                 )
             )
@@ -903,7 +913,7 @@ def _wash_sale_notes(accounts: list[Account], trades: list[Trade]) -> list[Note]
                 label="Wash sale",
                 summary=f"This plan sells {display[key]} in a taxable account and buys it "
                 f"in a tax-advantaged one, overlapping by ${overlap:,}. If any of those "
-                "shares are at a loss this may be a wash sale.",
+                "shares are sold at a loss, this may be a wash sale.",
             )
         )
     return notes
@@ -948,7 +958,7 @@ def _international_location_notes(accounts: list[Account], trades: list[Trade]) 
         return []
     return [
         Note(
-            label="International in tax-advantaged",
+            label="International stocks in tax-advantaged",
             # What it costs and why it happened anyway, both in the reader's
             # terms. An earlier draft ended "Avoiding a taxable sale ranks
             # higher", which is the solver's vocabulary and not the reader's
@@ -958,7 +968,7 @@ def _international_location_notes(accounts: list[Account], trades: list[Trade]) 
             # one could be claimed is the reader's situation, not ours.
             summary=f"Buying ${bought:,} of international stocks in tax-advantaged "
             "accounts gives up a foreign tax credit. Buying them in a taxable account "
-            "would have meant selling something there.",
+            "would have meant triggering a taxable sale.",
         )
     ]
 
