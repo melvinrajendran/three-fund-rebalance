@@ -114,6 +114,14 @@ own point: "No cost basis" used to open by re-describing the taxable-volume prox
 the ranking now states, and "It knows nothing about" ended on a 401(k)'s fixed fund menu,
 which is the whole subject of a bullet two above it.
 
+**Install is four subsections -- Prerequisites, Install, Update, Uninstall --**
+in the order a reader meets them, each holding the one command it names. Only
+uv is a prerequisite, installed by its own script; no platform package manager
+is named, since one that has to be installed first is a second prerequisite
+hiding inside the first. `uvx` sits under Install as the no-install
+alternative, and the note that the saved portfolio outlives both closes the
+section, because it answers a question Update and Uninstall each raise.
+
 **The Disclaimer section is `report.DISCLAIMER`'s two clauses plus a pointer to
 Limitations, and nothing else.** The clauses cut from the report -- advisory
 relationship, order placement, trademark use -- are not restated here either; see the
