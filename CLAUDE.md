@@ -348,6 +348,21 @@ Some finer points that are easy to undo by accident:
   no credit through from either kind of account, and counting its international sleeve
   makes the solver liquidate half a TDF for nothing
   (`test_target_date_international_sleeve_is_left_alone` pins this).
+- **Phase 5 losing is disclosed, and it is the only phase whose loss is.**
+  `_international_location_notes` fires when the plan *buys* international stock in a
+  tax-advantaged account, which is phase 2 outranking phase 5 -- the one place the plan
+  visibly contradicts what the README says it optimizes for, and it read as a bug in
+  real use. It fires on the buy rather than on the residue for the reason
+  `_taxable_sale_note` fires only on a sale: international already sitting in a shelter
+  is the common case and reports nothing worth reading, so a note that fired on it
+  would fire nearly every run. Silent with no taxable account, where there is no
+  alternative to describe, and it reads `trade.fund_type` for the same reason phase 5
+  reads `slot.fund_type` -- a target-date sleeve is not what it is about. **It says
+  what the alternative would have cost, never where the phase sat**, because a note is
+  read by someone holding a plan and not by someone holding this file. It shipped once
+  as "Avoiding a taxable sale ranks higher", which names an ordering the reader has
+  never seen; "Buying them in a taxable account would have meant selling something
+  there" is the same fact in the only terms available to them.
 - **Phase 4 does the opposite, deliberately**, and uses `_fund_type_coefficient`.
   Bonds inside a Roth's target-date fund really are bonds occupying tax-free space,
   exactly as phase 1 counts them -- and a TDF account is pinned by its own budget row
@@ -950,7 +965,8 @@ everywhere else here.
 **Report-side and solver-side notes interleave in `format_report`**, and the order is
 deliberate: the taxable sale leads, because it is the consequence of placing these
 orders at all; `result.notes` follows in the solver's own order (capacity, then bonds
-stranded in taxable, then wash sales); and the dropped-order footnote trails, because
+stranded in taxable, then international bought in a shelter, then wash sales); and the
+dropped-order footnote trails, because
 it is about the completeness of the list rather than about the portfolio. The
 dropped-order note fires only when there *are* orders -- "the above orders" has nothing
 to point at otherwise.

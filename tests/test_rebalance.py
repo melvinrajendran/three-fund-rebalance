@@ -475,6 +475,90 @@ class TestInternationalPlacement:
         assert result.trades == []
 
 
+class TestInternationalLocationDisclosure:
+    """Phase 5 wants international in taxable; phase 2 outranks it. When that
+    ranking sends international the other way the plan looks contrary to what
+    it optimizes for, so the note says which preference gave way."""
+
+    TARGET_DATE_ALLOCATION = TargetDateAllocation(
+        us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
+    )
+
+    def _complaint_scenario(self):
+        """Taxable is all U.S. stock with gains behind it, so the whole
+        international shortfall has to be made up inside the shelters."""
+        return [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 150_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 40_000),
+                holding(FundType.US_BOND, "BND", 0),
+                holding(FundType.CASH, "", 2_500),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "VTI", 60_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.US_BOND, "BND", 0),
+            ]),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_STOCK, "VTI", 80_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.US_BOND, "BND", 20_000),
+            ]),
+        ]
+
+    def test_international_bought_in_a_shelter_is_disclosed(self):
+        result = compute_trades(
+            self._complaint_scenario(), target("49.6", "30.4", 20), Decimal(5), Decimal(25)
+        )
+        note = "\n".join(note_texts(result))
+        assert "International in tax-advantaged" in note
+        # Both sheltered purchases, not just the larger one.
+        assert "$64,660.00" in note
+        assert "gives up a foreign tax credit" in note
+        # The reason it happened anyway, in the reader's terms rather than the
+        # solver's -- without it the order reads as a bug, and "ranks higher"
+        # names a phase ordering the reader has never seen.
+        assert "would have meant selling something there" in note
+        assert "ranks higher" not in note
+
+    def test_nothing_is_said_when_no_account_is_taxable(self):
+        """There is no alternative placement to describe, so the note would
+        report a preference that was never available."""
+        accounts = [
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "VTI", 90_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.US_BOND, "BND", 10_000),
+            ]),
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.US_STOCK, "VTI", 80_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                holding(FundType.US_BOND, "BND", 20_000),
+            ]),
+        ]
+        result = compute_trades(accounts, target("49.6", "30.4", 20))
+        assert any(t.action == "buy" and t.fund_name == "VXUS" for t in result.trades)
+        assert not any("International in tax-advantaged" in n for n in note_texts(result))
+
+    def test_a_target_date_funds_international_sleeve_is_not_a_disclosed_purchase(self):
+        """The same call phase 5 makes: a target-date fund is not
+        majority-foreign, so buying one passes no credit through from either
+        kind of account and there is nothing here to have given up."""
+        accounts = [
+            account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
+                holding(FundType.TARGET_DATE, "Target 2050", 100_000,
+                        allocation=self.TARGET_DATE_ALLOCATION),
+            ]),
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 60_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 40_000),
+                holding(FundType.US_BOND, "BND", 0),
+            ]),
+        ]
+        result = compute_trades(accounts, target("49.6", "30.4", 20))
+        assert not any("International in tax-advantaged" in n for n in note_texts(result))
+
+
 class TestTargetDateFunds:
     def test_target_date_fund_only_account_already_balanced(self):
         target_date_alloc = TargetDateAllocation(

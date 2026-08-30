@@ -88,6 +88,13 @@ Review each order before placing it:
   If these orders fill at the values entered here, the portfolio will hold
   49.6% U.S. stocks, 30.4% international stocks, and 20% bonds.
 
+Notes
+-----
+
+International in tax-advantaged. Buying $15,600.00 of international stocks in
+tax-advantaged accounts gives up a foreign tax credit. Buying them in a
+taxable account would have meant selling something there.
+
 Not investment, tax, or legal advice, and not a recommendation to buy or sell.
 Consult a professional about your situation.
 ```
