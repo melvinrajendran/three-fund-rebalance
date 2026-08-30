@@ -909,6 +909,60 @@ def _wash_sale_notes(accounts: list[Account], trades: list[Trade]) -> list[Note]
     return notes
 
 
+def _international_location_notes(accounts: list[Account], trades: list[Trade]) -> list[Note]:
+    """Why international stock was bought in a tax-advantaged account.
+
+    Phase 5 prefers international in taxable, where its foreign withholding
+    is claimable as a credit. Phase 2 outranks it, so an order that puts
+    international into a shelter is the visible result of a preference the
+    reader was never shown losing -- the one place the plan looks contrary to
+    what it optimizes for. Saying so is the difference between a deliberate
+    trade-off and an apparent bug.
+
+    Fired on the *buy*, not on the residue. An account that already holds
+    international in a shelter is the common case and reports nothing worth
+    reading -- the note that fires either way is the one a reader learns to
+    skip. What is surprising is the plan moving it there, and that is the
+    only thing this reports.
+
+    Silent when nothing is taxable, where there is no alternative to describe.
+    `fund_type`, not `fraction_of`, for the same reason phase 5 reads
+    `slot.fund_type` directly: a target-date fund is not majority-foreign and
+    passes no credit through from either kind of account, so its
+    international sleeve is not what this is about.
+    """
+    if not any(a.tax_treatment == TaxTreatment.TAXABLE for a in accounts):
+        return []
+    treatment = {a.name: a.tax_treatment for a in accounts}
+    bought = sum(
+        (
+            trade.amount
+            for trade in trades
+            if trade.action == "buy"
+            and trade.fund_type == FundType.INTERNATIONAL_STOCK
+            and treatment[trade.account_name] != TaxTreatment.TAXABLE
+        ),
+        Decimal(0),
+    )
+    if bought <= 0:
+        return []
+    return [
+        Note(
+            label="International in tax-advantaged",
+            # What it costs and why it happened anyway, both in the reader's
+            # terms. An earlier draft ended "Avoiding a taxable sale ranks
+            # higher", which is the solver's vocabulary and not the reader's
+            # -- a phase ranking means nothing to someone reading a plan, and
+            # the concrete alternative it would have taken says the same
+            # thing. "A foreign tax credit" stays indefinite because whether
+            # one could be claimed is the reader's situation, not ours.
+            summary=f"Buying ${bought:,} of international stocks in tax-advantaged "
+            "accounts gives up a foreign tax credit. Buying them in a taxable account "
+            "would have meant selling something there.",
+        )
+    ]
+
+
 def _location_objectives(
     accounts: list[Account], slots: list[_Slot], n: int, k: int
 ) -> list[tuple[list[float], str]]:
@@ -1183,6 +1237,7 @@ def compute_trades(
                 "full, or those bonds sit inside a target-date fund.",
             )
         )
+    notes.extend(_international_location_notes(accounts, trades))
     notes.extend(_wash_sale_notes(accounts, trades))
 
     return RebalanceResult(

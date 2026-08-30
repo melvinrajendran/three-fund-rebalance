@@ -3,8 +3,8 @@
 An interactive CLI that computes the trades needed to rebalance a
 [three-fund portfolio](https://www.bogleheads.org/wiki/Three-fund_portfolio)
 (U.S. stocks / international stocks / bonds) across any number of accounts --
-tax-deferred, tax-free and taxable alike -- putting each asset class where it
-is taxed least.
+tax-deferred, tax-free and taxable alike -- preferring to hold each asset
+class where it is taxed least.
 
 ## Disclaimer
 
@@ -42,7 +42,6 @@ drifts outside its band, all three are rebalanced back to target.
 
 Account Holdings
 ----------------
-
   Vanguard Brokerage (Brokerage, taxable)
     VTI (U.S. stock fund)            $60,000.00
     VXUS (international stock fund)  $30,000.00
@@ -88,8 +87,11 @@ Review each order before placing it:
   If these orders fill at the values entered here, the portfolio will hold
   49.6% U.S. stocks, 30.4% international stocks, and 20% bonds.
 
-Not investment, tax, or legal advice, and not a recommendation to buy or sell.
-Consult a professional about your situation.
+Notes
+-----
+International in tax-advantaged. Buying $15,600.00 of international stocks in
+tax-advantaged accounts gives up a foreign tax credit. Buying them in a
+taxable account would have meant selling something there.
 ```
 
 ## Install
@@ -137,14 +139,31 @@ account holdings -- then the summary above. Run it again and every saved
 account comes back with its last values pre-filled: press Enter to keep one or
 type a new one.
 
+The summary is followed by "Update an answer and recompute?". Answering yes
+lists the questions by the heading each was asked under, re-asks the one
+picked -- an account comes back with its own values pre-filled, as on a second
+run -- and prints the whole summary again. The list ends with "No Updates,
+Continue" for a mind changed one question later. A mistyped balance costs one
+answer rather than the whole session, which matters because a typo is not
+visible at the prompt that took it: it shows up as an implausible order
+further down.
+
 | Flag | Effect |
 | --- | --- |
 | `--config PATH` | Portfolio file to read and write (default `~/.three_fund_rebalance/config.json`) |
 | `--fresh` | Ignore the saved portfolio and start blank |
-| `--no-save` | Don't offer to save this run's answers |
+| `--no-save` | Don't offer to save this run's answers to the portfolio file |
 | `--offline` | Skip the live VT fetch; use the saved or a manually entered value instead |
 | `--vt-us-pct PCT` | Set VT's U.S. stock allocation % directly, skipping the lookup and the prompt |
+| `--write-summary [PATH]` | Write the summary to PATH, or with no PATH to a timestamped file beside the portfolio file |
 | `--version` | Print the installed version and exit |
+
+`--no-save` and `--write-summary` govern different files and neither implies
+the other. `--no-save` is about the portfolio -- the answers read back on the
+next run. `--write-summary` is about this run's summary, written only when
+asked, and never overwriting an earlier one when it chose the name itself:
+`rebalancing-summary-2026-08-29-2113-edt.txt`, stamped in local time with the
+same instant the summary's own first line names. Nothing prunes those files.
 
 ## How it works
 

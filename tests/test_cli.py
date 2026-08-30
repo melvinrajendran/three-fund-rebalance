@@ -1,11 +1,17 @@
+from datetime import datetime, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from three_fund_rebalance import __version__, cli
-from three_fund_rebalance.cli import parse_args, run
+from three_fund_rebalance.cli import _write_summary, parse_args, run
 from three_fund_rebalance.config import VT_FUND_PAGE_URL
-from three_fund_rebalance.formatting import prose_width
+from three_fund_rebalance.formatting import (
+    SUMMARY_FILE_WIDTH,
+    format_generated_at,
+    prose_width,
+)
 from three_fund_rebalance.models import FundType
 from three_fund_rebalance.persistence import load_config
 from three_fund_rebalance.prompts import Prompter
@@ -30,6 +36,12 @@ class ScriptedPrompter(Prompter):
 
     def all_consumed(self) -> bool:
         return not self._responses
+
+
+#: Answered once the report is on screen: no, nothing to go back and update.
+#: Every flow that reaches a report has to answer it, which is why it is
+#: named rather than being a bare "n" among the account answers.
+NO_REVISION = "n"
 
 
 def new_account_responses(
@@ -102,6 +114,7 @@ class TestEndToEndRun:
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
+            NO_REVISION,
             "n",  # don't save
         ]
         prompter = ScriptedPrompter(responses)
@@ -119,6 +132,7 @@ class TestEndToEndRun:
             "y",  # Add an account?
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",  # Add another account?
+            NO_REVISION,
             "y",  # Save this configuration?
         ]
         prompter = ScriptedPrompter(responses)
@@ -152,6 +166,7 @@ class TestEndToEndRun:
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
+            NO_REVISION,
             "y",
         ]
         prompter = ScriptedPrompter(responses)
@@ -173,6 +188,7 @@ class TestEndToEndRun:
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
+            NO_REVISION,
             "n",  # don't save
         ]
         prompter = ScriptedPrompter(responses)
@@ -192,6 +208,7 @@ class TestEndToEndRun:
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
+            NO_REVISION,
             # no response for a save prompt -- it must not be asked
         ]
         prompter = ScriptedPrompter(responses)
@@ -230,6 +247,7 @@ class TestEndToEndRun:
             "100", "0", "y",  # ...that holds no bonds at all
             "0",
             "n",  # no more accounts
+            NO_REVISION,
             "n",  # ...and don't save
         ]
         prompter = ScriptedPrompter(responses)
@@ -260,6 +278,7 @@ class TestEndToEndRun:
             "80", "y", "0", "0",
             "y", "1", "Roth", "1", "VTI", "10000", "VXUS", "0", "BND", "0", "0",
             "n",
+            "n",  # no, don't change an answer and try again
         ])
         exit_code = run(
             ["--config", str(tmp_path / "config.json"), "--vt-us-pct", "100"], prompter=prompter
@@ -304,7 +323,7 @@ class TestEndToEndRun:
             "0",  # ...and its relative half, which zero already settles
             "y",
             *new_account_responses("1", "Roth", "10000", "0", "0"),
-            "n", "y",
+            "n", NO_REVISION, "y",
         ]
         run(
             ["--config", str(config_path), "--vt-us-pct", "100"],
@@ -357,7 +376,7 @@ class TestLongMessagesWrap:
             "All-Stock 2065", "10000",
             "100", "0", "y",
             "0",
-            "n", "n",
+            "n", NO_REVISION, "n",
         ])
         exit_code = run(
             ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "100"], prompter=prompter
@@ -374,3 +393,341 @@ class TestLongMessagesWrap:
         output = prompter.full_output
         assert VT_FUND_PAGE_URL in output, "the URL must survive wrapping intact"
         assert self._unwrapped(prompter) == []
+
+
+
+class TestRevisionLoop:
+    """A typo is noticed in the report, not at the prompt that collected it --
+    so the way back is offered after the report, and it re-asks one answer
+    rather than the whole flow.
+
+    The menu is built in a fixed order -- the step 1 and 2 questions, then
+    each account, then "Add Accounts" -- and the VT split is left out when
+    --vt-us-pct already answered it, which shifts every number below it. The
+    tests spell the numbers out rather than computing them, so a reordering
+    has to be looked at rather than silently absorbed.
+    """
+
+    #: Keep the account, correct the one value, leave everything else.
+    FIX_THE_VALUE = ["", "", "150000", "", "", "", "", ""]
+
+    def _two_accounts(self):
+        return [
+            "y", *new_account_responses("10", "Brokerage", "1500000", "40000", "0"),
+            "y", *new_account_responses("1", "Roth", "60000", "0", "0"),
+            "n",
+        ]
+
+    def test_a_mistyped_value_is_corrected_without_rewalking_the_flow(self, tmp_path):
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            *self._two_accounts(),
+            "y",                    # yes, change an answer
+            "3",                    # -> Brokerage (Brokerage)
+            *self.FIX_THE_VALUE,
+            NO_REVISION,
+            "n",
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "62"], prompter=prompter
+        ) == 0
+        assert prompter.all_consumed()
+        output = prompter.full_output
+        assert "$1,500,000.00" in output          # the first report, with the typo
+        assert "Total                            $190,000.00" in output  # and the corrected one
+        assert output.count("REBALANCING SUMMARY") == 2
+        # `all_consumed` above is what pins "one answer, not the whole flow":
+        # the script holds exactly the questions a single correction asks, so
+        # re-walking step 3 would have run out of responses. (Question text
+        # goes to `input_func`, which the scripted prompter discards, so it
+        # cannot be counted in the output.)
+        # Only the brokerage was re-asked: its heading is printed once more
+        # than the Roth's, which is the revision it went through.
+        assert output.count("Brokerage (Brokerage)") == output.count("Roth (Roth IRA)") + 1
+
+    def test_the_menu_offers_each_question_by_its_step_subheading(self, tmp_path):
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            *self._two_accounts(),
+            "y", "3", *self.FIX_THE_VALUE, NO_REVISION, "n",
+        ])
+        run(["--config", str(tmp_path / "c.json"), "--vt-us-pct", "62"], prompter=prompter)
+        output = prompter.full_output
+        # Numbered menu entries, so this cannot pass on the subheadings the
+        # flow printed above it.
+        for entry in (
+            "1. Stock and Bond Allocation",
+            "2. Rebalancing Bands",
+            "3. Brokerage (Brokerage)",
+            "4. Roth (Roth IRA)",
+            "5. Add Accounts",
+            # Last, because reaching this menu means having already said yes.
+            "6. No Updates, Continue",
+        ):
+            assert entry in output, entry
+        # The menu's own heading is printed rather than asked, so unlike the
+        # yes/no above it this one can be read back.
+        assert "What would you like to update?" in output
+
+    def test_the_vt_split_is_left_out_when_the_flag_already_answered_it(self, tmp_path):
+        """Re-asking a question the invocation settled could only offer to
+        contradict it. The subheading is still printed by step 1 above, so
+        this looks for the menu entry rather than the words."""
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            *self._two_accounts(),
+            "y", "3", *self.FIX_THE_VALUE, NO_REVISION, "n",
+        ])
+        run(["--config", str(tmp_path / "c.json"), "--vt-us-pct", "62"], prompter=prompter)
+        assert ". U.S. and International Stock Allocation" not in prompter.full_output
+
+    def test_the_vt_split_is_offered_when_the_run_asked_for_it(self, tmp_path):
+        """And picking it re-asks the same question step 1 asked, with the
+        answer already given offered back as the default."""
+        prompter = ScriptedPrompter([
+            "80", "y", "62", "0", "0",
+            *self._two_accounts(),
+            "y", "2",       # -> U.S. and International Stock Allocation
+            "n",            # no, don't keep the split already given
+            "70",           # ...this one instead
+            NO_REVISION, "n",
+        ])
+        assert run(["--config", str(tmp_path / "c.json"), "--offline"], prompter=prompter) == 0
+        assert prompter.all_consumed()
+        output = prompter.full_output
+        assert "2. U.S. and International Stock Allocation" in output
+        # The derivation line wraps, so it is read on the words.
+        assert "VT's 70% U.S. allocation" in " ".join(output.split())
+
+    def test_updating_nothing_leaves_the_plan_as_it_was(self, tmp_path):
+        """The way out for a mind changed one question later. It ends the
+        loop rather than asking the yes/no again, so the plan already on
+        screen is the one that stands."""
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            *self._two_accounts(),
+            "y",    # yes, update an answer
+            "6",    # ...on reflection, nothing
+            "n",    # don't save
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "62"], prompter=prompter
+        ) == 0
+        assert prompter.all_consumed()
+        # One report, not two: nothing changed, so nothing was recomputed.
+        assert prompter.full_output.count("REBALANCING SUMMARY") == 1
+
+    def test_updating_nothing_after_a_failed_solve_is_a_decline(self, monkeypatch, tmp_path):
+        """There is no plan to go on to and nothing has changed, so this is
+        the same answer as declining the offer outright."""
+        def _always_fail(*args, **kwargs):
+            raise RebalanceError("nothing works here")
+
+        monkeypatch.setattr(cli, "compute_trades", _always_fail)
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n",
+            "y",    # yes, update an answer and try again
+            "5",    # ...nothing, which is a decline here
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "75"], prompter=prompter
+        ) == 1
+        assert prompter.all_consumed()
+
+    def test_dropping_every_account_from_the_menu_exits_cleanly(self, tmp_path):
+        prompter = ScriptedPrompter([
+            "100", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n",
+            "y", "3", "n",  # revise the one account, and don't keep it
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "100"], prompter=prompter
+        ) == 0
+        assert "nothing to rebalance" in prompter.full_output
+
+    def test_a_rebalance_error_offers_the_same_way_back(self, monkeypatch, tmp_path):
+        """An unplannable portfolio is usually a mistyped answer, so the
+        correction loop is the way out of it rather than a rerun."""
+        real = cli.compute_trades
+        calls = []
+
+        def _fail_the_first_time(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RebalanceError("nothing works here")
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(cli, "compute_trades", _fail_the_first_time)
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n",
+            "y",                                   # yes, change an answer and try again
+            "3", "", "", "", "", "", "", "", "",   # re-ask the account, change nothing
+            NO_REVISION, "n",
+        ])
+        assert run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "75"], prompter=prompter
+        ) == 0
+        assert "Could not compute a rebalance: nothing works here" in prompter.full_output
+        assert "Orders to Place" in prompter.full_output
+
+
+class TestSavedDateIsTheUsersOwn:
+    """`values_as_of` is the date the user would say it was, which is the
+    local one. It used to be UTC's."""
+
+    def test_an_evening_run_west_of_greenwich_saves_todays_date(self, tmp_path, monkeypatch):
+        """9:03 PM in New York is already tomorrow in UTC, so this is the
+        case that was wrong -- every evening, for anyone in the Americas,
+        the report came back next run saying the figures were saved a day
+        after the session that entered them."""
+        evening = datetime(2026, 8, 29, 21, 3, tzinfo=ZoneInfo("America/New_York"))
+        assert evening.astimezone(timezone.utc).date().isoformat() == "2026-08-30"
+        monkeypatch.setattr(cli, "_now_local", lambda: evening)
+
+        config_path = tmp_path / "c.json"
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n", NO_REVISION, "y",
+        ])
+        run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter)
+        assert load_config(config_path).values_as_of == "2026-08-29"
+
+    def test_the_report_reads_it_back_in_full(self, tmp_path, monkeypatch):
+        """And the next run says so, through the same `format_date` every
+        other date goes through."""
+        evening = datetime(2026, 8, 29, 21, 3, tzinfo=ZoneInfo("America/New_York"))
+        monkeypatch.setattr(cli, "_now_local", lambda: evening)
+        config_path = tmp_path / "c.json"
+        run(
+            ["--config", str(config_path), "--vt-us-pct", "75"],
+            prompter=ScriptedPrompter([
+                "80", "y", "0", "0",
+                "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+                "n", NO_REVISION, "y",
+            ]),
+        )
+        # Every saved answer kept: the target and its confirmation, both band
+        # halves, "Keep this account?", then its three tickers, three values
+        # and its cash.
+        prompter = ScriptedPrompter([*[""] * 12, "n", NO_REVISION, "n"])
+        run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter)
+        assert "Last saved August 29, 2026." in prompter.full_output
+
+
+class TestSummaryFile:
+    """--write-summary writes the report that was just printed, laid out for
+    a reader who is not at this terminal."""
+
+    def _run(self, tmp_path, *extra, columns=None, monkeypatch=None):
+        if columns is not None:
+            monkeypatch.setenv("COLUMNS", columns)
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n", NO_REVISION, "n",
+        ])
+        code = run(
+            ["--config", str(tmp_path / "c.json"), "--vt-us-pct", "75", *extra],
+            prompter=prompter,
+        )
+        return code, prompter
+
+    def test_nothing_is_written_unless_asked(self, tmp_path):
+        self._run(tmp_path)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_an_explicit_path_is_written_and_named_on_screen(self, tmp_path):
+        out = tmp_path / "plan.txt"
+        _, prompter = self._run(tmp_path, "--write-summary", str(out))
+        text = out.read_text()
+        assert "REBALANCING SUMMARY" in text
+        assert "Sell $4,000.00 of VTI" in text
+        # The disclaimer travels with the file -- that is what it is for. It
+        # is wrapped to the file's width, so compare on the words.
+        assert " ".join(DISCLAIMER.split()) in " ".join(text.split())
+        assert str(out) in prompter.full_output
+
+    def test_the_file_name_is_stamped_from_the_line_the_summary_opens_with(
+        self, tmp_path, monkeypatch
+    ):
+        """One decision, spelled twice. The sentence and the generated file
+        name carry the same clock, precision and zone, so a summary found on
+        disk can be matched to its own first line without arithmetic."""
+        monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATH", tmp_path / "config.json")
+        self._run(tmp_path, "--write-summary")   # bare: it names the file itself
+
+        written = next(p for p in tmp_path.iterdir() if p.name.startswith("rebalancing-summary-"))
+        stamped = [
+            line for line in written.read_text().splitlines() if line.startswith("Generated ")
+        ]
+        assert len(stamped) == 1, stamped
+
+        said = stamped[0][len("Generated "):].rstrip(".")
+        when, _, zone = said.rpartition(" ")
+        clock = datetime.strptime(when, "%B %d, %Y at %I:%M %p")
+        # "EDT" -> "edt"; "UTC+05:45" -> "utc+0545". Both shapes, one rule.
+        assert written.name == (
+            f"rebalancing-summary-{clock:%Y-%m-%d-%H%M}"
+            f"-{zone.lower().replace(':', '')}.txt"
+        )
+
+    def test_the_stamp_is_the_local_clock_and_not_utc(self, tmp_path):
+        """A reader should not have to convert their own afternoon."""
+        out = tmp_path / "plan.txt"
+        self._run(tmp_path, "--write-summary", str(out))
+        said = next(
+            line for line in out.read_text().splitlines() if line.startswith("Generated ")
+        )
+        expected = format_generated_at(datetime.now(timezone.utc).astimezone())
+        # Same minute unless the run straddled one, so compare on the date
+        # and the zone rather than flaking once in a few thousand runs.
+        assert said.endswith(f"{expected.rsplit(' ', 1)[1]}.")
+        assert expected.split(" at ")[0] in said
+
+    def test_the_layout_does_not_follow_the_terminal(self, tmp_path, monkeypatch):
+        """A file is read anywhere -- another terminal, an editor, a mail
+        client -- so it cannot be sized to the window that produced it."""
+        narrow, wide = tmp_path / "narrow.txt", tmp_path / "wide.txt"
+        self._run(tmp_path, "--write-summary", str(narrow), columns="80", monkeypatch=monkeypatch)
+        self._run(tmp_path, "--write-summary", str(wide), columns="200", monkeypatch=monkeypatch)
+
+        def body(path):
+            return [
+                line for line in path.read_text().splitlines()
+                if not line.startswith("Generated ")
+            ]
+
+        assert body(narrow) == body(wide)
+        assert max(len(line) for line in body(wide)) <= SUMMARY_FILE_WIDTH
+
+    def test_a_generated_name_never_overwrites_an_earlier_summary(self, tmp_path):
+        """Two runs inside one minute share a stamp. "No collisions" has to
+        mean it, so the second becomes a numbered sibling."""
+        base = tmp_path / "rebalancing-summary-2026-08-29-1742-utc.txt"
+        first = _write_summary(base, "first", generated_name=True)
+        second = _write_summary(base, "second", generated_name=True)
+        assert first.name == "rebalancing-summary-2026-08-29-1742-utc.txt"
+        assert second.name == "rebalancing-summary-2026-08-29-1742-utc-2.txt"
+        assert first.read_text() == "first"
+
+    def test_a_path_the_user_named_is_overwritten(self, tmp_path):
+        """An explicit path is an instruction, not a name this program chose."""
+        named = tmp_path / "plan.txt"
+        assert _write_summary(named, "first", generated_name=False) == named
+        assert _write_summary(named, "second", generated_name=False) == named
+        assert named.read_text() == "second"
+
+    def test_an_unwritable_path_costs_a_message_and_not_the_plan(self, tmp_path):
+        # A file where a directory would have to be, so the parent cannot be
+        # created and no retry would fix it.
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")
+        _, prompter = self._run(tmp_path, "--write-summary", str(blocker / "plan.txt"))
+        assert "Orders to Place" in prompter.full_output
+        assert "Could not write the summary" in prompter.full_output
