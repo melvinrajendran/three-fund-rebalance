@@ -8,6 +8,13 @@
 # Exits 2 with the diagnostics on stderr so Claude sees them and can fix them.
 # Any other problem (no ruff, unparseable input, a file outside the two package
 # directories) exits 0 and stays out of the way.
+#
+# This is a net with known holes, not a gate. It fires on the Edit and Write
+# tools, so an edit made through Bash -- sed -i, a heredoc, a script -- never
+# reaches it, and it no-ops silently when python3 or ruff is missing or when the
+# path it is handed does not resolve under $root (a /tmp vs /private/tmp symlink
+# will do it). CI running `ruff check three_fund_rebalance tests` is what
+# actually decides; this only makes the common case fail a few seconds sooner.
 set -uo pipefail
 
 root="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"

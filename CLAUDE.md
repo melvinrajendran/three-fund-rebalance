@@ -186,7 +186,14 @@ that are the same length by construction says `strict=True`, so a future change 
 breaks that assumption raises instead of silently truncating.
 
 Version lives in `three_fund_rebalance/__init__.py`; `pyproject.toml` derives it via
-`dynamic = ["version"]`. Bump it in one place.
+`dynamic = ["version"]`. Bump it in one place. **A version, once uploaded to PyPI,
+can never be replaced or reused**, even after a delete -- a botched release is fixed
+by bumping, never by re-cutting. `/release` has the rest of the procedure.
+
+`.gitignore` ignores `.claude/*` and re-admits `hooks/`, `rules/`, `skills/` and
+`settings.json` by name, so a new directory under `.claude/` needs its own
+un-ignore or it silently stays untracked -- which is how the rules and skills
+themselves nearly failed to ship.
 
 `license-files` in `pyproject.toml` is PEP 639 and requires `setuptools>=77`, which is
 why the build-system floor is set there.
