@@ -309,7 +309,9 @@ the taxable account only ever buys.
 
 Past the gate it is a tiny LP over three variables, lexicographic: (1) sit as close to
 target as the accounts allow; (2) among the ties, move as little as possible from where
-the portfolio already sits. (2) runs only when (1) comes back nonzero, i.e. only when
+the portfolio already sits; (3) among *those* ties, share the shortfall the accounts
+cannot avoid, so no class is left disproportionately far outside its own band. (2) and
+(3) run only when (1) comes back nonzero, i.e. only when
 the exact target is unreachable -- an account holding a single fund pins that fund's
 share of the portfolio, and the closest reachable points are then a whole face rather
 than a vertex. With U.S. stock pinned at 60% against a 50/25/25 target, every split of
@@ -318,6 +320,52 @@ the remaining 40% is exactly as far from target as every other;
 (2), which is what earns it its keep. Its bounds are `reach` and nothing else -- the
 band has had its say at the gate, and constraining these to it as well is what used to
 turn a target the accounts cannot quite reach into a refusal to plan at all.
+
+**(3) exists because (2) goes flat too, and in a way that is easy to miss.** When every
+class sits on the *same* side of its target -- which a target-date fund's bond sleeve
+against a 0% bond target produces on every run -- a dollar given to any class closes the
+total gap by exactly a dollar and moves the portfolio by exactly a dollar, so both
+objectives above tie across the whole face and the split comes down to whichever vertex
+HiGHS returns. That is a plan that can change under a scipy upgrade with nothing in the
+portfolio having moved.
+
+Two things about how it measures, and both are load-bearing:
+
+- **It shares the *excess*, not the drift** -- `_unavoidable_drift` is each class's
+  distance from target after the target is clamped to `reach`, and the objective ranks
+  what is left over. Measured raw, a pinned class is the largest drift in the portfolio
+  by construction, so minimizing the largest drift is satisfied by that class alone and
+  leaves the others tied exactly as they were. That was prototyped and changed nothing
+  whatsoever; `test_a_class_pinned_away_from_target_does_not_absorb_the_tie_break` is
+  the guard.
+- **It measures in band-widths, not dollars**, which is the 5/25 rule's own answer to
+  whether absolute or relative drift is the one that counts. The band is already the
+  tighter of the two, per class, so normalizing by it inherits that ruling rather than
+  adding a second one that could contradict it. Where the bands are equal -- any two
+  targets at or above 20% -- it reduces to sharing the dollars evenly, so the
+  distinction only shows up when a target straddles 20%.
+  `test_the_shortfall_is_shared_in_band_widths_and_not_in_dollars` fails against the
+  dollar version, which is what earns it its keep.
+
+The row is written as `excess <= band * m` rather than `excess / band <= m`: multiplied
+through it needs no division, and **a band of zero states exactly what a band of zero
+means** -- the row collapses to `d <= floor`, pinning that class to the best drift it
+can reach. A 0% target gives one, so this is not a corner case. It is also the one row
+here that could in principle be unsatisfiable alongside the others, which is why the
+solve is wrapped in `suppress(RebalanceError)`: a tie-break is a refinement, never a
+requirement, and (2)'s answer is already a good one.
+
+**(3) carries (2)'s bound like every other rank.** Dropping `A_ub.append(stay_put)` does
+not merely loosen it -- it lets the tie-break *override* "move as little as possible",
+which is a different policy and a visibly worse one, trading to even out a shortfall the
+portfolio was already sitting closer to. Three existing tests fail without that bound,
+`test_an_unreachable_target_stops_at_what_the_accounts_can_hold` among them.
+
+Note the tenth column `m` is added to this LP alone, by widening its rows in the branch
+that needs it, rather than by raising `_ALLOCATION_WIDTH` under both allocation LPs --
+`_place_cash` shares the nine columns and has no use for a tenth. And phase 6 is
+indifferent to the whole thing: sharing a purchase across two funds moves the same
+dollars, which is all that phase measures.
 
 **Skipping that stage and handing the band to the six phases below is a bug that was
 shipped once and caught in real use.** Given a portfolio inside its band but with
@@ -343,7 +391,11 @@ later phases refine but never undo earlier ones:
 5. Minimize the international fund held in *tax-advantaged* accounts, i.e. prefer it
    in taxable, where its foreign withholding is claimable as a credit.
 6. Tie-break by minimizing total trade volume everywhere, so the plan
-   disturbs the fewest positions.
+   moves the fewest dollars. **Dollars, not positions** -- an account's total is
+   an equality, so its buys equal its sells and the volume is twice what is sold
+   however many funds the buy side is split across. Splitting one purchase into
+   two is free here, which is what lets the allocation stage's third objective
+   do it.
 
 The variable layout is `[ x (n) | y (n) | w (k) ]` -- slot values, their absolute
 deviations `|x - current|`, and one-sided purchase amounts for phase 3. It is built
@@ -359,7 +411,9 @@ inside `compute_trades` though: the point of the shared layout is that every pha
 indexes the same columns, and splitting that across functions hides it.
 
 The two *allocation*-stage LPs (`_resolve_allocation` and `_place_cash`) share their
-own smaller layout, three columns per class: `[ p | first anchor | second anchor ]`.
+own smaller layout, three columns per class: `[ p | first anchor | second anchor ]`
+(plus, in `_resolve_allocation`'s third objective alone, a tenth column widened on
+locally -- see above).
 What the anchors measure differs by caller, but the shape does not, which is what
 lets both build rows through `_allocation_row` and `_abs_value_rows` instead of a
 dozen hand-written `row[3 + index]` expressions whose only documentation was being
