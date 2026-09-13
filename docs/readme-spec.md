@@ -22,7 +22,8 @@ hand-idealized -- re-generate it and paste the result. Any change to `report.py`
 scripted prompter as the tests do (never by piping stdin -- see "Running the CLI
 without side effects"), under `COLUMNS=80`, which is what `tests/conftest.py` pins the
 suite to and therefore the width every wrapping assertion in the repo assumes. The
-scenario is 80/20, a 5/25 band, and three accounts, each declaring all three funds:
+scenario is 80/20, a 5/25 band, and three accounts, each declaring a fund per asset
+class:
 a Brokerage holding $60k VTI and $30k VXUS, a Roth IRA holding $20k VTI, and a
 Traditional 401(k) holding $30k VTI and $10k BND. The two empty Roth slots are the
 point of the example -- they are what lets the whole bond target land in the shelters,

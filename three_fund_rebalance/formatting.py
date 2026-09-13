@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from three_fund_rebalance.models import FundType, TaxTreatment
+from three_fund_rebalance.models import FundAllocation, FundType, TaxTreatment
 
 #: Widest a paragraph is allowed to get, however wide the terminal is. Long
 #: prose lines are harder to read, not easier: the comfortable measure runs
@@ -96,7 +96,7 @@ ASSET_CLASS_LABELS: dict[FundType, str] = {
     FundType.US_STOCK: "U.S. stock",
     FundType.INTERNATIONAL_STOCK: "international stock",
     FundType.US_BOND: "bond",
-    FundType.TARGET_DATE: "target-date",
+    FundType.MULTI_ASSET: "multi-asset",
     FundType.CASH: "cash",
 }
 
@@ -351,3 +351,46 @@ def format_account_heading(name: str, account_type: str) -> str:
     for the same account in both the holdings questions and the trade listing,
     so a given account reads the same wherever it appears."""
     return f"{name} ({account_type})"
+
+
+def format_and_list(items: list[str]) -> str:
+    """Join names as running prose rather than as a bare comma list, so the
+    line they sit in is a sentence: "A", "A and B", "A, B, and C".
+
+    Two items take no comma -- the serial comma separates three or more, and
+    "A, and B" reads as a stray one.
+
+    Here rather than in `prompts`, because the report names a multi-asset
+    fund's three sleeves the same way the question that asked for them did,
+    and `report` may not import `prompts`.
+    """
+    if len(items) <= 2:
+        return " and ".join(items)
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+def describe_fund_allocation(allocation: FundAllocation) -> str:
+    """A multi-asset fund's own mix on one line, for the prompt that offers
+    to change it -- so the user is deciding against the numbers rather than
+    from memory.
+
+    A sentence, because it sits inside one ("Currently ..."), and a set of
+    asset classes is named the same way wherever it is named in prose. The
+    report says the same thing as a vertical list instead: it has a page to
+    lay out rather than a line to finish, and three shares under each other
+    can be read against the target table above them. `report._describe_mix`
+    is that one, and the divergence is deliberate.
+
+    The fund's own percentages, exactly as entered -- `percent_of`, not
+    `fraction_of`, which normalizes for the solver's benefit.
+    """
+    return format_and_list(
+        [
+            f"{format_percent(allocation.percent_of(fund_type))}% {label}"
+            for fund_type, label in (
+                (FundType.US_STOCK, "U.S. stocks"),
+                (FundType.INTERNATIONAL_STOCK, "international stocks"),
+                (FundType.US_BOND, "bonds"),
+            )
+        ]
+    )

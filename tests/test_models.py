@@ -4,32 +4,32 @@ import pytest
 
 from three_fund_rebalance.models import (
     Account,
+    FundAllocation,
     FundType,
     Holding,
     TargetAllocation,
-    TargetDateAllocation,
     TaxTreatment,
     Trade,
     to_cents,
 )
 
 
-def make_target_date(
+def make_mix(
     us_stock=Decimal(60), international=Decimal(20), bond=Decimal(20)
-) -> TargetDateAllocation:
-    return TargetDateAllocation(
+) -> FundAllocation:
+    return FundAllocation(
         us_stock_pct=us_stock, international_stock_pct=international, bond_pct=bond
     )
 
 
-class TestTargetDateAllocation:
+class TestFundAllocation:
     def test_valid_allocation(self):
-        allocation = make_target_date()
+        allocation = make_mix()
         assert allocation.us_stock_pct == Decimal(60)
 
     def test_rejects_sum_not_100(self):
         with pytest.raises(ValueError, match="must sum to 100"):
-            TargetDateAllocation(
+            FundAllocation(
                 us_stock_pct=Decimal(50),
                 international_stock_pct=Decimal(20),
                 bond_pct=Decimal(20),
@@ -38,7 +38,7 @@ class TestTargetDateAllocation:
     def test_allows_small_rounding_slack(self):
         # 33.3 + 33.3 + 33.4 = 100.0 exactly, but check a case that's off by
         # a hair due to human-entered one-decimal percentages.
-        allocation = TargetDateAllocation(
+        allocation = FundAllocation(
             us_stock_pct=Decimal("33.4"),
             international_stock_pct=Decimal("33.3"),
             bond_pct=Decimal("33.35"),
@@ -47,7 +47,7 @@ class TestTargetDateAllocation:
 
     def test_rejects_negative_component(self):
         with pytest.raises(ValueError, match="cannot be negative"):
-            TargetDateAllocation(
+            FundAllocation(
                 us_stock_pct=Decimal(-10),
                 international_stock_pct=Decimal(90),
                 bond_pct=Decimal(20),
@@ -59,7 +59,7 @@ class TestTargetDateAllocation:
         account's budget as hard equalities, and any gap between the two
         makes an ordinary portfolio infeasible rather than merely
         imprecise."""
-        allocation = TargetDateAllocation(
+        allocation = FundAllocation(
             us_stock_pct=Decimal("64.0"),
             international_stock_pct=Decimal("34.3"),
             bond_pct=Decimal("1.6"),  # sums to 99.9
@@ -84,7 +84,7 @@ class TestTargetDateAllocation:
     def test_fraction_of_leaves_the_entered_percentages_alone(self):
         """A derived view, not a rewrite: prompts and the report echo the
         fund's own numbers back, so those have to survive as entered."""
-        allocation = TargetDateAllocation(
+        allocation = FundAllocation(
             us_stock_pct=Decimal("64.0"),
             international_stock_pct=Decimal("34.3"),
             bond_pct=Decimal("1.6"),
@@ -92,21 +92,32 @@ class TestTargetDateAllocation:
         assert allocation.us_stock_pct == Decimal("64.0")
 
     def test_fraction_of_a_class_the_fund_does_not_break_out_is_zero(self):
-        assert make_target_date().fraction_of(FundType.CASH) == Decimal(0)
+        assert make_mix().fraction_of(FundType.CASH) == Decimal(0)
+
+    def test_percent_of_returns_the_figure_as_entered(self):
+        """Unrounded and unnormalized, unlike `fraction_of` -- it is what
+        every echo of a mix back to the user prints."""
+        allocation = make_mix(Decimal("64.1"), Decimal("34.34"), Decimal("1.56"))
+        assert allocation.percent_of(FundType.INTERNATIONAL_STOCK) == Decimal("34.34")
+        assert allocation.percent_of(FundType.US_BOND) == Decimal("1.56")
+
+    def test_percent_of_is_zero_for_anything_that_is_not_an_asset_class(self):
+        assert make_mix().percent_of(FundType.CASH) == Decimal(0)
+        assert make_mix().percent_of(FundType.MULTI_ASSET) == Decimal(0)
 
 
 class TestHolding:
-    def test_target_date_fund_requires_allocation(self):
-        with pytest.raises(ValueError, match="requires a target_date_allocation"):
-            Holding(fund_type=FundType.TARGET_DATE, name="Target 2050", value=Decimal(100))
+    def test_multi_asset_fund_requires_an_allocation(self):
+        with pytest.raises(ValueError, match="requires an allocation"):
+            Holding(fund_type=FundType.MULTI_ASSET, name="Target 2050", value=Decimal(100))
 
-    def test_non_target_date_fund_rejects_allocation(self):
-        with pytest.raises(ValueError, match="Only target-date fund holdings"):
+    def test_single_asset_fund_rejects_an_allocation(self):
+        with pytest.raises(ValueError, match="Only multi-asset fund holdings"):
             Holding(
                 fund_type=FundType.US_STOCK,
                 name="VTI",
                 value=Decimal(100),
-                target_date_allocation=make_target_date(),
+                allocation=make_mix(),
             )
 
     def test_negative_value_rejected(self):
@@ -129,10 +140,10 @@ class TestHolding:
 
     def test_components_for_target_date_fund_divide_correctly(self):
         holding = Holding(
-            fund_type=FundType.TARGET_DATE,
+            fund_type=FundType.MULTI_ASSET,
             name="Target 2050",
             value=Decimal(1000),
-            target_date_allocation=make_target_date(
+            allocation=make_mix(
                 us_stock=Decimal(60), international=Decimal(20), bond=Decimal(20)
             ),
         )
@@ -156,27 +167,91 @@ class TestHolding:
         assert holding.fraction_of(FundType.CASH) == Decimal(0)
 
 
-class TestAccountHoldsOneKind:
-    """An account holds either a target-date fund or individual funds."""
+class TestAccountHoldsAnyCombination:
+    """An account holds any mix of funds; what it may not hold is two under
+    one name."""
 
-    def test_mixing_a_target_date_fund_with_individual_funds_is_rejected(self):
-        with pytest.raises(ValueError, match="one or the other"):
+    def test_a_multi_asset_fund_may_sit_beside_single_asset_funds(self):
+        account = Account(
+            account_type="Roth 401(k)",
+            name="401k",
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
+            holdings=[
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
+                Holding(
+                    fund_type=FundType.MULTI_ASSET,
+                    name="Target 2050",
+                    value=Decimal(3000),
+                    allocation=make_mix(),
+                ),
+            ],
+        )
+        assert account.total_value() == Decimal(9000)
+
+    def test_two_funds_of_the_same_asset_class_are_allowed(self):
+        # VTI and VOO are different securities that happen to hold the same
+        # asset class; nothing about the model should care.
+        account = Account(
+            account_type="Brokerage",
+            name="Brokerage",
+            tax_treatment=TaxTreatment.TAXABLE,
+            holdings=[
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(100)),
+                Holding(fund_type=FundType.US_STOCK, name="VOO", value=Decimal(50)),
+            ],
+        )
+        assert [h.name for h in account.funds()] == ["VTI", "VOO"]
+
+    def test_two_multi_asset_funds_are_allowed(self):
+        account = Account(
+            account_type="Brokerage",
+            name="Brokerage",
+            tax_treatment=TaxTreatment.TAXABLE,
+            holdings=[
+                Holding(
+                    fund_type=FundType.MULTI_ASSET,
+                    name="Target 2050",
+                    value=Decimal(100),
+                    allocation=make_mix(),
+                ),
+                Holding(
+                    fund_type=FundType.MULTI_ASSET,
+                    name="Balanced",
+                    value=Decimal(100),
+                    allocation=make_mix(Decimal(40), Decimal(20), Decimal(40)),
+                ),
+            ],
+        )
+        assert len(account.funds()) == 2
+
+    def test_two_funds_under_one_name_are_rejected(self):
+        with pytest.raises(ValueError, match="more than one holding named"):
             Account(
-                account_type="Roth 401(k)",
-                name="401k",
-                tax_treatment=TaxTreatment.TAX_DEFERRED,
+                account_type="Roth IRA",
+                name="My Roth",
+                tax_treatment=TaxTreatment.TAX_FREE,
                 holdings=[
-                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
-                    Holding(
-                        fund_type=FundType.TARGET_DATE,
-                        name="Target 2050",
-                        value=Decimal(3000),
-                        target_date_allocation=make_target_date(),
-                    ),
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(100)),
+                    Holding(fund_type=FundType.US_BOND, name="VTI", value=Decimal(50)),
                 ],
             )
 
-    def test_the_message_names_the_account_and_the_funds_that_clashed(self):
+    def test_a_name_clash_ignores_case_and_surrounding_space(self):
+        # The same comparison `rebalance._normalized_fund_name` makes: the
+        # user should not have to get capitalization right for the tool to
+        # see two positions as one security.
+        with pytest.raises(ValueError, match="more than one holding named"):
+            Account(
+                account_type="Roth IRA",
+                name="My Roth",
+                tax_treatment=TaxTreatment.TAX_FREE,
+                holdings=[
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(100)),
+                    Holding(fund_type=FundType.US_STOCK, name=" vti ", value=Decimal(50)),
+                ],
+            )
+
+    def test_the_name_clash_message_names_the_account_and_the_fund(self):
         with pytest.raises(ValueError) as exc_info:
             Account(
                 account_type="Roth 401(k)",
@@ -184,26 +259,33 @@ class TestAccountHoldsOneKind:
                 tax_treatment=TaxTreatment.TAX_DEFERRED,
                 holdings=[
                     Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1)),
-                    Holding(
-                        fund_type=FundType.TARGET_DATE,
-                        name="Target 2050",
-                        value=Decimal(1),
-                        target_date_allocation=make_target_date(),
-                    ),
+                    Holding(fund_type=FundType.US_STOCK, name="BND", value=Decimal(1)),
                 ],
             )
         message = str(exc_info.value)
         assert "Acme 401k" in message
-        assert "target_date" in message and "us_bond" in message
+        assert "BND" in message
 
-    def test_cash_may_sit_alongside_either_kind(self):
+    def test_two_cash_balances_are_rejected(self):
+        with pytest.raises(ValueError, match="more than one cash balance"):
+            Account(
+                account_type="Brokerage",
+                name="Brokerage",
+                tax_treatment=TaxTreatment.TAXABLE,
+                holdings=[
+                    Holding(fund_type=FundType.CASH, name="", value=Decimal(5)),
+                    Holding(fund_type=FundType.CASH, name="", value=Decimal(7)),
+                ],
+            )
+
+    def test_cash_may_sit_alongside_any_funds(self):
         for funds in (
             [Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1))],
             [Holding(
-                fund_type=FundType.TARGET_DATE,
+                fund_type=FundType.MULTI_ASSET,
                 name="Target 2050",
                 value=Decimal(1),
-                target_date_allocation=make_target_date(),
+                allocation=make_mix(),
             )],
         ):
             built = Account(
@@ -213,6 +295,19 @@ class TestAccountHoldsOneKind:
                 holdings=[*funds, Holding(fund_type=FundType.CASH, name="", value=Decimal(5))],
             )
             assert built.available_cash() == Decimal(5)
+
+    def test_funds_excludes_cash_and_keeps_declared_order(self):
+        account = Account(
+            account_type="Brokerage",
+            name="Brokerage",
+            tax_treatment=TaxTreatment.TAXABLE,
+            holdings=[
+                Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1)),
+                Holding(fund_type=FundType.CASH, name="", value=Decimal(5)),
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1)),
+            ],
+        )
+        assert [h.name for h in account.funds()] == ["BND", "VTI"]
 
 
 class TestAccount:
@@ -227,18 +322,6 @@ class TestAccount:
             ],
         )
         assert account.total_value() == Decimal(150)
-
-    def test_rejects_duplicate_fund_type(self):
-        with pytest.raises(ValueError, match="more than one"):
-            Account(
-                account_type="Roth IRA",
-                name="My Roth",
-                tax_treatment=TaxTreatment.TAX_DEFERRED,
-                holdings=[
-                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(100)),
-                    Holding(fund_type=FundType.US_STOCK, name="VOO", value=Decimal(50)),
-                ],
-            )
 
     def test_rejects_empty_name(self):
         with pytest.raises(ValueError, match="cannot be empty"):

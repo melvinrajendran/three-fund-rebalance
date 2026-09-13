@@ -19,10 +19,14 @@ from three_fund_rebalance.models import TaxTreatment
 # other entry is the account's actual name, and Title-Casing the descriptor
 # "Taxable" put the one word the report otherwise always writes lowercase
 # ("taxable", beside "tax-free" and "tax-deferred") into a proper noun.
-# Older files are still read -- persistence._upgrade_v1 through _upgrade_v3
+# 5 renamed the `target_date` fund type to `multi_asset` and its
+# `target_date_allocation` to `allocation`: an account may now hold any
+# combination of funds, so a fund with a fixed internal mix is no longer
+# necessarily a dated one.
+# Older files are still read -- persistence._upgrade_v1 through _upgrade_v4
 # translate them on load -- and are rewritten at the current version the next
 # time the user saves.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DEFAULT_CONFIG_PATH = Path.home() / ".three_fund_rebalance" / "config.json"
 
 # ---------------------------------------------------------------------------

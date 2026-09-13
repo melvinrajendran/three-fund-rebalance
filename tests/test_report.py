@@ -15,12 +15,12 @@ from three_fund_rebalance.formatting import (
 )
 from three_fund_rebalance.models import (
     Account,
+    FundAllocation,
     FundType,
     Holding,
     Note,
     RebalanceResult,
     TargetAllocation,
-    TargetDateAllocation,
     TaxTreatment,
     Trade,
 )
@@ -495,6 +495,144 @@ class TestReportRecap:
         assert len({len(line) for line in rows}) == 1
 
 
+class TestMultiAssetFundRows:
+    """A multi-asset fund's mix is the user's own answer rather than
+    something the label implies, so the report restates it -- one asset class
+    to a line, one level deeper than the row, and outside the account's
+    column widths."""
+
+    MIX = FundAllocation(
+        us_stock_pct=Decimal(54), international_stock_pct=Decimal(36), bond_pct=Decimal(10)
+    )
+
+    def _holdings_block(self, holdings):
+        accounts = [
+            Account(
+                account_type="Roth IRA",
+                name="Roth",
+                tax_treatment=TaxTreatment.TAX_FREE,
+                holdings=holdings,
+            )
+        ]
+        target = TargetAllocation(
+            us_stock_pct=Decimal(54),
+            international_stock_pct=Decimal(36),
+            bond_pct=Decimal(10),
+        )
+        result = RebalanceResult(trades=[], notes=[], taxable_bond_dollars=Decimal(0))
+        text = format_report(inputs(accounts, target), result)
+        return text.split("Account Holdings")[1].split("Current vs. Target")[0]
+
+    def _default_holdings(self):
+        return [
+            Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(20_000)),
+            Holding(
+                fund_type=FundType.MULTI_ASSET,
+                name="VTTSX",
+                value=Decimal(15_000),
+                allocation=self.MIX,
+            ),
+        ]
+
+    def test_the_fund_is_labelled_a_multi_asset_fund(self):
+        assert "VTTSX (multi-asset fund)" in self._holdings_block(self._default_holdings())
+
+    def test_the_mix_is_a_vertical_list_beneath_the_row(self):
+        """The same shape the Target Asset Allocation block uses, because it
+        is the same content: the three classes and what each comes to."""
+        block = self._holdings_block(self._default_holdings())
+        lines = block.split("\n")
+        row = next(i for i, line in enumerate(lines) if "VTTSX (multi-asset fund)" in line)
+        assert [line.strip() for line in lines[row + 1 : row + 4]] == [
+            "U.S. stocks           54%",
+            "International stocks  36%",
+            "Bonds                 10%",
+        ]
+
+    def test_the_three_classes_are_named_in_the_report_s_own_order(self):
+        block = self._holdings_block(self._default_holdings())
+        lines = block.split("\n")
+        row = next(i for i, line in enumerate(lines) if "VTTSX (multi-asset fund)" in line)
+        named = [line.split()[0] for line in lines[row + 1 : row + 4]]
+        assert named == ["U.S.", "International", "Bonds"]
+
+    def test_the_shares_are_right_aligned_under_each_other(self):
+        """Sleeves entered at different precisions have no decimal point in
+        common, so the percent signs are what line up."""
+        holdings = self._default_holdings()
+        holdings[1] = replace(
+            holdings[1],
+            allocation=FundAllocation(
+                us_stock_pct=Decimal("64.1"),
+                international_stock_pct=Decimal("34.34"),
+                bond_pct=Decimal("1.56"),
+            ),
+        )
+        block = self._holdings_block(holdings)
+        lines = block.split("\n")
+        row = next(i for i, line in enumerate(lines) if "VTTSX (multi-asset fund)" in line)
+        mix = lines[row + 1 : row + 4]
+        assert [line.strip() for line in mix] == [
+            "U.S. stocks            64.1%",
+            "International stocks  34.34%",
+            "Bonds                  1.56%",
+        ]
+        assert len({len(line) for line in mix}) == 1
+
+    def test_the_shares_are_the_funds_own_figures_unrounded(self):
+        """`format_percents` would round 34.34 to 34.3. A fact sheet printing
+        34.34% is entitled to be read back as 34.34%."""
+        holdings = self._default_holdings()
+        holdings[1] = replace(
+            holdings[1],
+            allocation=FundAllocation(
+                us_stock_pct=Decimal("64.1"),
+                international_stock_pct=Decimal("34.34"),
+                bond_pct=Decimal("1.56"),
+            ),
+        )
+        block = self._holdings_block(holdings)
+        assert "34.34%" in block
+        assert "34.3%" not in block
+
+    def test_the_mix_sits_one_level_deeper_than_its_row(self):
+        block = self._holdings_block(self._default_holdings())
+        lines = block.split("\n")
+        row = next(i for i, line in enumerate(lines) if "VTTSX (multi-asset fund)" in line)
+        assert lines[row].startswith(INDENT_UNIT * 2)
+        for line in lines[row + 1 : row + 4]:
+            assert line.startswith(INDENT_UNIT * 3)
+
+    def test_only_a_multi_asset_fund_gets_one(self):
+        """The three single-asset labels say everything there is to say about
+        what those funds hold."""
+        block = self._holdings_block(self._default_holdings())
+        lines = block.split("\n")
+        row = next(i for i, line in enumerate(lines) if "VTI (U.S. stock fund)" in line)
+        assert "%" not in lines[row + 1]
+
+    def test_the_mix_does_not_widen_the_money_column(self):
+        """It is a block of its own with its own two columns, so it is sized
+        out of the account's."""
+        block = self._holdings_block(self._default_holdings())
+        rows = [
+            line for line in block.split("\n")
+            if line.startswith(INDENT_UNIT * 2) and not line.startswith(INDENT_UNIT * 3)
+        ]
+        assert len(rows) == 3, rows  # two funds and the total
+        assert len({len(line) for line in rows}) == 1
+
+    def test_a_multi_asset_fund_holding_nothing_still_shows_its_mix(self):
+        """A declared fund is capacity whatever it is worth, and what the
+        plan would be buying into is exactly the thing the mix says."""
+        holdings = self._default_holdings()
+        holdings[1] = replace(holdings[1], value=Decimal(0))
+        block = self._holdings_block(holdings)
+        assert "VTTSX (multi-asset fund)" in block
+        assert "U.S. stocks           54%" in block
+        assert "$0.00" not in block
+
+
 class TestOutcomeLine:
     def test_says_where_the_trades_land(self):
         account = Account(
@@ -525,7 +663,7 @@ class TestOutcomeLine:
         )
 
     def test_a_target_date_sleeve_moves_by_its_own_fractions(self):
-        allocation = TargetDateAllocation(
+        allocation = FundAllocation(
             us_stock_pct=Decimal(60),
             international_stock_pct=Decimal(20),
             bond_pct=Decimal(20),
@@ -536,16 +674,16 @@ class TestOutcomeLine:
             tax_treatment=TaxTreatment.TAX_FREE,
             holdings=[
                 Holding(
-                    fund_type=FundType.TARGET_DATE,
+                    fund_type=FundType.MULTI_ASSET,
                     name="Target 2050",
                     value=Decimal(900),
-                    target_date_allocation=allocation,
+                    allocation=allocation,
                 ),
                 Holding(fund_type=FundType.CASH, name="", value=Decimal(100)),
             ],
         )
         after = allocation_after_trades(
-            [account], [trade("401k", FundType.TARGET_DATE, "Target 2050", "buy", "100.00")]
+            [account], [trade("401k", FundType.MULTI_ASSET, "Target 2050", "buy", "100.00")]
         )
         assert after["U.S. stocks"] == Decimal(600)
         assert after["International stocks"] == Decimal(200)
@@ -1117,10 +1255,10 @@ class TestNoteWording:
                 fund_type=fund_type,
                 name=name,
                 value=Decimal(value) * scale,
-                target_date_allocation=allocation,
+                allocation=allocation,
             )
 
-        tdf = TargetDateAllocation(
+        tdf = FundAllocation(
             us_stock_pct=Decimal(60),
             international_stock_pct=Decimal(20),
             bond_pct=Decimal(20),
@@ -1146,7 +1284,7 @@ class TestNoteWording:
             (
                 [
                     Account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
-                        h(FundType.TARGET_DATE, "Target 2050", 10_000, tdf),
+                        h(FundType.MULTI_ASSET, "Target 2050", 10_000, tdf),
                     ]),
                     Account(brokerage, "Brokerage", TaxTreatment.TAXABLE, [
                         h(FundType.US_STOCK, "VTI", 10_000),

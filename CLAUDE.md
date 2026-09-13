@@ -92,11 +92,12 @@ session and because a change that breaks one usually looks reasonable up close.
    that shipped once. (`docs/solver.md`)
 6. **`FundType.CASH` has an implicit target of zero**, and cash is not an asset
    class for drift purposes. (`docs/invariants.md`)
-7. **An account holds a target-date fund *or* individual funds, never both** --
-   and one holding individual funds declares all three. (`docs/invariants.md`)
-8. **A declared holding is capacity, whatever it is worth.** A zero one renders
-   as `--`, not `$0.00`. (`docs/invariants.md`)
-9. **A target-date fund is one position holding a fixed internal ratio**, stated
+7. **An account holds any combination of funds**, each name unique within it --
+   that name is what an order is placed against. (`docs/invariants.md`)
+8. **A declared fund is capacity, whatever it is worth, and only a declared fund
+   is ever traded.** A zero one renders as `--`, not `$0.00`.
+   (`docs/invariants.md`)
+9. **A multi-asset fund is one position holding a fixed internal ratio**, stated
    once as `Holding.fraction_of`. (`docs/invariants.md`)
 10. **The LP must never over-determine the portfolio total** -- the third
     asset-class equality is implied, and stating it anyway makes large portfolios

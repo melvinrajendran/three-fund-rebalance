@@ -88,6 +88,15 @@ is shorter and safe at the nickname cap: the longest possible heading lands well
 the page rather than wrapping and stranding a `--` at the end of a line. Uniform
 because one line shaped like the next is what lets the eye compare them down the page.
 
+**A multi-asset fund's mix sits one level deeper than its row, with its own columns.**
+The holdings block is two aligned columns -- label and amount -- and a fund's own mix
+is a second, narrower pair of them belonging to one row: three lines, one per asset
+class, label left and share right-aligned, set in one level further and left out of
+the width computation the rows share. That keeps every amount in a block ending in the
+same column whether or not a multi-asset fund is in it, and it makes the mix the same
+shape as the Target Asset Allocation block, which lists the same three classes. See
+`report._describe_mix` and `TestMultiAssetFundRows`.
+
 There used to be a rule suppressing the treatment when the type already named it, for
 the sake of the account type then called `Taxable Brokerage`. Since v4 renamed that to
 plain `Brokerage`, **no account type names its own treatment**, and the branch was

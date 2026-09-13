@@ -17,9 +17,9 @@ from pathlib import Path
 from three_fund_rebalance.config import ACCOUNT_TYPE_TAX_TREATMENT, SCHEMA_VERSION
 from three_fund_rebalance.models import (
     Account,
+    FundAllocation,
     FundType,
     Holding,
-    TargetDateAllocation,
     TaxTreatment,
 )
 
@@ -58,7 +58,7 @@ def _decimal_from_json(value: str | None, *, field_name: str) -> Decimal | None:
         raise PersistenceError(f"Could not parse {field_name!r} as a number: {value!r}") from exc
 
 
-def _target_date_allocation_to_dict(allocation: TargetDateAllocation) -> dict:
+def _fund_allocation_to_dict(allocation: FundAllocation) -> dict:
     return {
         "us_stock_pct": str(allocation.us_stock_pct),
         "international_stock_pct": str(allocation.international_stock_pct),
@@ -66,23 +66,21 @@ def _target_date_allocation_to_dict(allocation: TargetDateAllocation) -> dict:
     }
 
 
-def _target_date_allocation_from_dict(data: dict) -> TargetDateAllocation:
+def _fund_allocation_from_dict(data: dict) -> FundAllocation:
     try:
-        return TargetDateAllocation(
+        return FundAllocation(
             us_stock_pct=Decimal(data["us_stock_pct"]),
             international_stock_pct=Decimal(data["international_stock_pct"]),
             bond_pct=Decimal(data["bond_pct"]),
         )
     except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
-        raise PersistenceError(f"Invalid target_date_allocation in config: {data!r}") from exc
+        raise PersistenceError(f"Invalid allocation in config: {data!r}") from exc
 
 
 def _holding_to_dict(holding: Holding) -> dict:
     data = {"fund_type": holding.fund_type.value, "name": holding.name, "value": str(holding.value)}
-    if holding.target_date_allocation is not None:
-        data["target_date_allocation"] = _target_date_allocation_to_dict(
-            holding.target_date_allocation
-        )
+    if holding.allocation is not None:
+        data["allocation"] = _fund_allocation_to_dict(holding.allocation)
     return data
 
 
@@ -92,15 +90,13 @@ def _holding_from_dict(data: dict) -> Holding:
         value = Decimal(data["value"])
     except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
         raise PersistenceError(f"Invalid holding in config: {data!r}") from exc
-    allocation_data = data.get("target_date_allocation")
+    allocation_data = data.get("allocation")
     try:
         return Holding(
             fund_type=fund_type,
             name=data.get("name", ""),
             value=value,
-            target_date_allocation=(
-                _target_date_allocation_from_dict(allocation_data) if allocation_data else None
-            ),
+            allocation=(_fund_allocation_from_dict(allocation_data) if allocation_data else None),
         )
     except (AttributeError, TypeError, ValueError) as exc:
         raise PersistenceError(f"Invalid holding in config: {data!r}: {exc}") from exc
@@ -150,7 +146,7 @@ _V1_FUND_TYPES = {
     "domestic_equity": "us_stock",
     "international_equity": "international_stock",
     "domestic_bond": "us_bond",
-    "tdf": "target_date",
+    "tdf": "target_date",  # renamed again to "multi_asset" by _upgrade_v4
     "cash": "cash",
 }
 
@@ -285,6 +281,54 @@ def _upgrade_v3(data: dict) -> dict:
     return upgraded
 
 
+#: What v4 called a fund holding a fixed internal mix, and what v5 calls it.
+#: v4 could only describe one -- an account held a target-date fund or
+#: individual funds and never both, so "target-date" was the only kind of
+#: multi-asset fund that could exist. v5 lets an account hold any combination,
+#: which makes a user-declared 60/40 fund expressible and the dated name
+#: wrong for it.
+_V4_MULTI_ASSET = "target_date"
+_V4_ALLOCATION_KEY = "target_date_allocation"
+
+
+def _upgrade_v4(data: dict) -> dict:
+    """Translate a schema v4 payload into v5's spelling. Same contract as the
+    hops above: translate without validating, and copy at every level.
+
+    Two renames, both per holding: the fund type `target_date` becomes
+    `multi_asset`, and the `target_date_allocation` it carries becomes
+    `allocation`. A v4 target-date account loads as a one-fund multi-asset
+    account, which is exactly what it always was.
+
+    Nothing else moves. v4 refused to load an account mixing a target-date
+    fund with individual funds, so no such file exists to translate -- what
+    changed is that v5's model accepts one, not that old files hold one.
+    """
+    upgraded = dict(data)
+    accounts = []
+    for account in upgraded.get("accounts") or []:
+        if not isinstance(account, dict):
+            accounts.append(account)
+            continue
+        account = dict(account)
+        holdings = []
+        for holding in account.get("holdings") or []:
+            if not isinstance(holding, dict):
+                holdings.append(holding)
+                continue
+            holding = dict(holding)
+            if holding.get("fund_type") == _V4_MULTI_ASSET:
+                holding["fund_type"] = FundType.MULTI_ASSET.value
+            if _V4_ALLOCATION_KEY in holding:
+                holding["allocation"] = holding.pop(_V4_ALLOCATION_KEY)
+            holdings.append(holding)
+        account["holdings"] = holdings
+        accounts.append(account)
+    upgraded["accounts"] = accounts
+    upgraded["schema_version"] = 5  # literal, not SCHEMA_VERSION -- see _upgrade_v1
+    return upgraded
+
+
 def config_from_dict(data: dict) -> PersistedConfig:
     """Parse a decoded config payload. Every way this can fail is reported as
     PersistenceError -- see the catch-all at the bottom for why."""
@@ -299,6 +343,9 @@ def config_from_dict(data: dict) -> PersistedConfig:
             schema_version = data["schema_version"]
         if schema_version == 3:
             data = _upgrade_v3(data)
+            schema_version = data["schema_version"]
+        if schema_version == 4:
+            data = _upgrade_v4(data)
             schema_version = data["schema_version"]
         if schema_version != SCHEMA_VERSION:
             raise PersistenceError(
