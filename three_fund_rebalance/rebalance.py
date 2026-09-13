@@ -39,11 +39,11 @@ priority):
     Bonds belong in the account that will be taxed as ordinary income on the
     way out regardless.
 
-    Unlike phase 5 below, this counts a target-date fund's bond sleeve via
+    Unlike phase 5 below, this counts a multi-asset fund's bond sleeve via
     _fund_type_coefficient. Bonds inside a Roth's target-date fund really
-    are bonds occupying tax-free space, exactly as phase 1 counts them, and
-    such an account is pinned by its own budget row anyway -- so counting
-    them states the truth without giving the solver anything to act on.
+    are bonds occupying tax-free space, exactly as phase 1 counts them, so
+    counting them states the truth -- and where such a fund is the account's
+    only holding, its budget row pins it and there is nothing to act on.
 
   Phase 5 -- minimize the $ of the international fund held in tax-advantaged
     accounts, i.e. prefer it in taxable. A fund that is majority-foreign can
@@ -59,10 +59,13 @@ priority):
     side as much as the buy side -- and never starts a taxable trade of its
     own.
 
-    Only a dedicated international fund counts. A target-date fund is not
-    majority-foreign, so it cannot pass the credit through from either kind
-    of account, and there is nothing to be gained by shuffling it around --
-    hence the direct fund-type test below rather than _fund_type_coefficient.
+    Only a majority-foreign fund counts, and only for its foreign sleeve.
+    A regulated investment company may pass the foreign tax it paid through
+    to its shareholders only when more than half its assets are foreign, so
+    a target-date fund cannot pass the credit through from either kind of
+    account and there is nothing to be gained by shuffling it around --
+    hence _foreign_credit_coefficient below rather than
+    _fund_type_coefficient.
 
   Phase 6 -- tie-break by minimizing total $ trade volume across *all*
     accounts (subject to not giving up phases 1-5). The earlier phases alone
@@ -76,6 +79,14 @@ priority):
     one purchase into two costs this objective nothing, which is why the
     allocation stage's third tie-break is free to it.
 
+    It is also what this objective cannot settle. Two funds with the same
+    asset mix in one account -- VTI beside VOO, or beside a 100%-U.S.
+    multi-asset fund -- leave this and every phase above it exactly tied
+    across every split between them, so which one is bought comes down to
+    whichever vertex HiGHS returns. A seventh phase weighting each slot's
+    movement by its declared position was tried to settle that and reverted;
+    docs/solver.md says why, and what it would take to do properly.
+
 All six run *after* `_resolve_allocation` has settled what each asset class
 should be worth, and against that as a hard equality. The order matters:
 **what to hold is decided before where to hold it, and never by it.**
@@ -83,7 +94,7 @@ should be worth, and against that as a hard equality. The order matters:
 That is what the rebalancing band buys. Trading to an exact target means
 every drift, however small, generates trades, and in a taxable account those
 cost real money to correct a rounding error; inside the band the allocation
-is simply left where it is. But a band stated as a *range* the six phases
+is simply left where it is. But a band stated as a *range* the phases
 below could see would be a range they could spend: every one of them is
 phrased as "minimize this asset class in that kind of account", which only
 means "relocate it" while the class total is fixed. Given slack, they will
@@ -96,12 +107,17 @@ Each account's total value is treated as fixed -- a rebalance only moves
 money between funds *within* an account (including investing any cash
 sitting there); it never moves money between accounts.
 
-One consequence of an account holding either a target-date fund or
-individual funds (never both): a target-date account has exactly one slot,
-so the per-account budget constraint pins it outright. Its only possible
+An account whose only fund is a multi-asset fund has exactly one slot, so
+the per-account budget constraint pins it outright: its only possible
 "trade" is investing its own cash into the fund it already holds, and no
-objective can reach it. That is what keeps the solver from ever proposing
-to liquidate a target-date fund to relocate the bond sleeve inside it.
+objective can reach it. That used to be true of every multi-asset fund,
+because an account could hold nothing beside one. It is not any more -- a
+multi-asset fund declared alongside other funds is tradeable like any of
+them, which is the point of declaring it that way, and phase 1 will sell a
+taxable one to move its bond sleeve into a shelter. What keeps the solver
+from liquidating one to chase the foreign tax credit inside it is no longer
+the budget row but _foreign_credit_coefficient, which scores a fund that is
+not majority-foreign at zero.
 """
 
 from __future__ import annotations
@@ -219,22 +235,55 @@ def _fund_type_coefficient(slot: _Slot, target_type: FundType) -> float:
     """`Holding.fraction_of` as the float the LP needs.
 
     The rule itself -- 1 for a direct match, the fund's own internal share for
-    a target-date slot, 0 otherwise -- is stated once, on the holding. This is
+    a multi-asset slot, 0 otherwise -- is stated once, on the holding. This is
     only the conversion: the LP necessarily works in floats, and this is one
     of the two boundaries where money crosses into them.
 
-    Note `Holding.fraction_of` delegates to `TargetDateAllocation.fraction_of`
+    Note `Holding.fraction_of` delegates to `FundAllocation.fraction_of`
     rather than dividing the raw percentage by 100, because the three sleeves
     have to sum to exactly 1 or this slot's asset-class rows and its account's
-    budget row contradict each other. See TargetDateAllocation.
+    budget row contradict each other. See FundAllocation.
     """
     return float(slot.holding.fraction_of(target_type))
+
+
+#: More than half a fund's assets have to be foreign before it can pass the
+#: foreign tax it paid through to its shareholders. Not a tuning knob -- it
+#: is the threshold in the rule itself.
+_MAJORITY_FOREIGN = Decimal("0.5")
+
+
+def _foreign_credit_coefficient(holding: Holding) -> float:
+    """How much of a dollar held here can pass a foreign tax credit through.
+
+    A regulated investment company may pass the foreign tax withheld on its
+    holdings through to you only when more than half its assets are foreign.
+    A fund at or below that line passes nothing through from either kind of
+    account, so there is nothing to gain by moving it and the coefficient is
+    zero. Above it, what is at stake is the fund's foreign sleeve rather than
+    the whole position.
+
+    This replaces a direct `fund_type == INTERNATIONAL_STOCK` test, which was
+    this same rule stated for the only two kinds of fund that used to exist:
+    a dedicated international fund is majority-foreign, and a target-date
+    fund is not. It keeps what that test was protecting -- a typical
+    target-date fund still scores zero, so no objective can reach inside one
+    to liquidate half of it for a credit it cannot pass on -- while reading a
+    fund declared 80/20 international for what it actually is.
+
+    Deliberately *not* `_fund_type_coefficient`, which phases 1 and 4 use:
+    bonds inside a shelter really are bonds occupying that space whatever
+    fund holds them, while a credit that cannot be claimed is worth nothing
+    wherever it sits.
+    """
+    share = holding.fraction_of(FundType.INTERNATIONAL_STOCK)
+    return float(share) if share > _MAJORITY_FOREIGN else 0.0
 
 
 def _build_slots(accounts: list[Account]) -> list[_Slot]:
     slots = []
     for account_index, account in enumerate(accounts):
-        tradeable = [h for h in account.holdings if h.fund_type != FundType.CASH]
+        tradeable = account.funds()
         if not tradeable and account.total_value() > 0:
             raise RebalanceError(
                 f"Account '{account.name}' has ${account.total_value():,.2f} but no fund holdings "
@@ -332,10 +381,9 @@ def _asset_class_reach(
     Each account has to allocate exactly its own total across its own slots,
     so its contribution to one asset class is bounded by the smallest and the
     largest coefficient among those slots. Both bounds matter. An account
-    holding a single fund -- a target-date fund, or one individual fund --
-    has one coefficient, so its floor and ceiling are the same number:
-    whatever that fund holds, the portfolio holds, and no target below that
-    is reachable.
+    holding a single fund has one coefficient, so its floor and ceiling are
+    the same number: whatever that fund holds, the portfolio holds, and no
+    target below that is reachable.
 
     This is a relaxation -- it bounds each class on its own, ignoring that an
     account has to satisfy all three at once -- so it is sound for rejecting
@@ -361,8 +409,8 @@ def _reachable_bounds(
     widened to the nearest reachable point for any class whose band the
     accounts cannot reach at all.
 
-    A class pinned outside its band by what the accounts hold -- a
-    target-date fund's bond sleeve against a 0% bond target, say -- is
+    A class pinned outside its band by what the accounts hold -- the bond
+    sleeve of an account's only fund against a 0% bond target, say -- is
     outside it forever, and a band that can never be satisfied is a band that
     never says "leave it alone". Every later run would then drive all three
     classes back to exact target and trade on any drift at all, which is the
@@ -444,12 +492,14 @@ def _capacity_notes(
             #
             # The two directions are one sentence shape read twice -- same
             # verb, same clause order, only the bound, the target's direction
-            # and the kind of account that causes it flip. A floor is what a
-            # target-date fund pins, since its mix cannot be split; a ceiling
-            # is what too little individual-fund capacity leaves. Neither
-            # asserts that cause -- `compute_trades` is public and tests call
-            # it with partial slot sets -- which is why each is a remedy to try
-            # rather than a diagnosis.
+            # and the remedy flip. A floor is what a multi-asset fund pins,
+            # since its mix cannot be split. A ceiling is what missing
+            # capacity leaves, and since an account now declares only the
+            # funds it actually holds, the usual cause is that this asset
+            # class has nowhere to go -- so the remedy names the fund to add
+            # rather than a proportion to shift. Neither asserts its cause:
+            # `compute_trades` is public and tests call it with partial slot
+            # sets, which is why each is a remedy to try and not a diagnosis.
             #
             # The label leads the note on screen, so it is capitalized the way
             # a sentence would be -- sliced rather than .capitalize()d, which
@@ -460,11 +510,11 @@ def _capacity_notes(
                     summary=(
                         f"These accounts cannot hold less than ${edge:,.2f}, or "
                         f"{format_percent_prose(share)}% of the portfolio. Raise the target, "
-                        "or hold target-date funds in a smaller percentage of the portfolio."
+                        "or hold multi-asset funds in a smaller percentage of the portfolio."
                         if above
                         else f"These accounts cannot hold more than ${edge:,.2f}, or "
                         f"{format_percent_prose(share)}% of the portfolio. Lower the target, "
-                        "or hold individual funds in a larger percentage of the portfolio."
+                        f"or add a {label} fund to more accounts."
                     ),
                 )
             )
@@ -472,7 +522,7 @@ def _capacity_notes(
 
 
 def _current_asset_class_dollars(accounts: list[Account]) -> dict[str, Decimal]:
-    """What each asset class is worth right now, target-date sleeves included."""
+    """What each asset class is worth right now, multi-asset sleeves included."""
     holdings = [h for account in accounts for h in account.holdings]
     return {
         _TARGET_KEYS[fund_type]: sum((h.component(fund_type) for h in holdings), Decimal(0))
@@ -700,7 +750,7 @@ def _resolve_allocation(
     when every class sits on the *same* side of its target, moving a dollar to
     any of them closes the total gap by exactly a dollar and moves the
     portfolio exactly a dollar, so both objectives above tie across the whole
-    face and the split falls to whichever vertex HiGHS returns. A target-date
+    face and the split falls to whichever vertex HiGHS returns. A multi-asset
     fund's bond sleeve against a 0% bond target does this on every run. What
     (3) shares out is the shortfall that is left *after* each class has been
     brought as close as it can get on its own -- see `_unavoidable_drift` --
@@ -743,7 +793,7 @@ def _resolve_allocation(
     # band wide enough to cover everything answers "inside" for everything,
     # which is what a band that wide means.
     # To the cent, because that is the grid money is entered and traded on.
-    # A target-date fund's sleeves are normalized fractions rather than exact
+    # A multi-asset fund's sleeves are normalized fractions rather than exact
     # decimals, so the components can miss the account's total by a rounding
     # artifact many orders of magnitude below a penny; read literally, that
     # dust would count as cash and send a portfolio sitting on its target
@@ -1022,24 +1072,32 @@ def _international_location_notes(accounts: list[Account], trades: list[Trade]) 
     only thing this reports.
 
     Silent when nothing is taxable, where there is no alternative to describe.
-    `fund_type`, not `fraction_of`, for the same reason phase 5 reads
-    `slot.fund_type` directly: a target-date fund is not majority-foreign and
-    passes no credit through from either kind of account, so its
-    international sleeve is not what this is about.
+    Read through `_foreign_credit_coefficient`, exactly as phase 5 is: a fund
+    that is not majority-foreign passes no credit through from either kind of
+    account, so buying one into a shelter gives up nothing and is not what
+    this is about. What it counts is the foreign sleeve of the funds that do
+    qualify -- the figure the sentence below already claims it is stating.
+
+    The holdings are looked up by `(account, fund name)` because a `Trade`
+    carries no allocation, and that pair is unique by `Account`'s own rule.
     """
     if not any(a.tax_treatment == TaxTreatment.TAXABLE for a in accounts):
         return []
     treatment = {a.name: a.tax_treatment for a in accounts}
-    bought = sum(
-        (
-            trade.amount
-            for trade in trades
-            if trade.action == "buy"
-            and trade.fund_type == FundType.INTERNATIONAL_STOCK
-            and treatment[trade.account_name] != TaxTreatment.TAXABLE
-        ),
-        Decimal(0),
-    )
+    holdings = {
+        (account.name, holding.name): holding
+        for account in accounts
+        for holding in account.funds()
+    }
+    bought = Decimal(0)
+    for trade in trades:
+        if trade.action != "buy" or treatment[trade.account_name] == TaxTreatment.TAXABLE:
+            continue
+        holding = holdings.get((trade.account_name, trade.fund_name))
+        if holding is None or not _foreign_credit_coefficient(holding):
+            continue
+        bought += trade.amount * holding.fraction_of(FundType.INTERNATIONAL_STOCK)
+    bought = to_cents(bought)
     if bought <= 0:
         return []
     return [
@@ -1117,13 +1175,12 @@ def _location_objectives(
         (
             over_slots(
                 [
-                    # slot.fund_type directly, not _fund_type_coefficient: a
-                    # target-date fund is not majority-foreign and passes no
-                    # credit through, so counting its international sleeve
-                    # would have the solver liquidate half a TDF for nothing.
-                    1.0
-                    if slot.fund_type == FundType.INTERNATIONAL_STOCK and not is_taxable
-                    else 0.0
+                    # _foreign_credit_coefficient, not
+                    # _fund_type_coefficient: a fund that is not
+                    # majority-foreign passes no credit through, so counting
+                    # its international sleeve would have the solver
+                    # liquidate half a multi-asset fund for nothing.
+                    0.0 if is_taxable else _foreign_credit_coefficient(slot.holding)
                     for slot, is_taxable in zip(slots, taxable, strict=True)
                 ]
             ),
@@ -1332,7 +1389,7 @@ def compute_trades(
                 # only be held whole" is what the sentence could spare.
                 summary=f"${taxable_bond_dollars:,} in bonds will stay in taxable accounts, "
                 "the least these accounts allow. Either the tax-advantaged accounts are "
-                "full, or those bonds sit inside a target-date fund.",
+                "full, or those bonds sit inside a multi-asset fund.",
             )
         )
     notes.extend(_international_location_notes(accounts, trades))

@@ -44,6 +44,67 @@ class ScriptedPrompter(Prompter):
 NO_REVISION = "n"
 
 
+#: The answers one fund takes: its name, which of the four kinds it is, and
+#: its value. A multi-asset fund adds its two sleeve percentages and the
+#: confirmation of the third between the kind and the value -- see
+#: `multi_asset_fund_responses`.
+US_STOCK_KIND, INTERNATIONAL_KIND, BOND_KIND, MULTI_ASSET_KIND = "1", "2", "3", "4"
+
+
+def fund_responses(name: str, kind: str, value: str) -> list[str]:
+    return [name, kind, value]
+
+
+def multi_asset_fund_responses(
+    name: str, value: str, us_stock: str = "60", international: str = "20"
+) -> list[str]:
+    """One multi-asset fund, its mix asked between the kind and the value.
+    The bond sleeve is derived from the other two and confirmed."""
+    return [name, MULTI_ASSET_KIND, us_stock, international, "y", value]
+
+
+def account_responses(
+    account_type_index: str, nickname: str, funds: list[list[str]], cash: str = "0"
+) -> list[str]:
+    """An account built fund by fund: the type and nickname, then each fund's
+    answers with "Add another fund?" between them, then the cash.
+
+    The loop asks "Add another fund?" after every fund, defaulting to yes, so
+    the answers run `fund, "y", fund, "y", fund, "n"` -- a "y" before each
+    fund after the first and one "n" to close the list.
+    """
+    answers = [account_type_index, nickname]
+    for index, fund in enumerate(funds):
+        if index:
+            answers.append("y")  # Add another fund?
+        answers.extend(fund)
+    answers.append("n")  # no more funds
+    answers.append(cash)
+    return answers
+
+
+def keep_fund_responses(value: str = "") -> list[str]:
+    """Keep one saved fund exactly as it was, or change only its value.
+
+    Four answers, every one of them a default the saved fund supplied: the
+    "Keep this fund?" gate, the name, the kind, and the value. An empty
+    string takes whatever was offered, so this is what "press Enter through
+    it" looks like in a script.
+    """
+    return ["", "", "", value]
+
+
+def keep_account_responses(*values: str) -> list[str]:
+    """Keep a saved account and every one of its funds, changing only the
+    values given. Closes the fund list with "n" and keeps the cash."""
+    answers = [""]  # Keep this account?
+    for value in values:
+        answers.extend(keep_fund_responses(value))
+    answers.append("n")  # no more funds
+    answers.append("")  # cash, unchanged
+    return answers
+
+
 def new_account_responses(
     account_type_index: str,
     nickname: str,
@@ -52,29 +113,32 @@ def new_account_responses(
     bond_value: str,
     cash: str = "0",
 ) -> list[str]:
-    return [
+    """The common account: one fund per asset class, in the order every table
+    in the report lists them."""
+    return account_responses(
         account_type_index,
         nickname,
-        "1",  # three individual funds rather than a target-date fund
-        "VTI", us_stock_value,
-        "VXUS", intl_value,
-        "BND", bond_value,
+        [
+            fund_responses("VTI", US_STOCK_KIND, us_stock_value),
+            fund_responses("VXUS", INTERNATIONAL_KIND, intl_value),
+            fund_responses("BND", BOND_KIND, bond_value),
+        ],
         cash,
-    ]
+    )
 
 
 def target_date_account_responses(
     account_type_index: str, nickname: str, value: str, cash: str = "0"
 ) -> list[str]:
-    """The other kind of account: one target-date fund and nothing else."""
-    return [
+    """An account whose only fund is a multi-asset one -- the shape that used
+    to be the only alternative to three individual funds, and the one whose
+    single slot its own budget row still pins."""
+    return account_responses(
         account_type_index,
         nickname,
-        "2",  # holds a single target-date fund
-        "Target 2050", value,
-        "60", "20", "y",  # its underlying allocation; 20% bonds derived
+        [multi_asset_fund_responses("Target 2050", value)],
         cash,
-    ]
+    )
 
 
 class TestArgParsing:
@@ -230,22 +294,23 @@ class TestEndToEndRun:
         assert "nothing to rebalance" in prompter.full_output
 
     def test_a_target_the_accounts_cannot_reach_is_reported_and_still_planned(self, tmp_path):
-        """A target-date account is the only thing that can still pin an
-        asset class out of reach: an account holding individual funds
-        declares all three, so it can always be traded to any mix. This one
-        holds no bonds at all against a 50% bond target, which is not an
-        error -- the portfolio goes as close as it can and says why."""
+        """An account whose only fund is a multi-asset one is pinned by its
+        own budget row, so its mix is the portfolio's. This one holds no
+        bonds at all against a 50% bond target, which is not an error -- the
+        portfolio goes as close as it can and says why."""
         config_path = tmp_path / "config.json"
         responses = [
             "50", "y",  # a 50% bond target
             "0",  # rebalancing band -- exact target, as before it existed
             "0",  # ...and its relative half, which zero already settles
             "y",
-            "1", "Roth",
-            "2",  # a single target-date fund, held whole
-            "All-Stock 2065", "10000",
-            "100", "0", "y",  # ...that holds no bonds at all
-            "0",
+            *account_responses(
+                "1",
+                "Roth",
+                # 100% U.S. stocks settles both remaining sleeves, so only
+                # one derived value is stated and confirmed.
+                [["All-Stock 2065", MULTI_ASSET_KIND, "100", "y", "10000"]],
+            ),
             "n",  # no more accounts
             NO_REVISION,
             "n",  # ...and don't save
@@ -262,21 +327,22 @@ class TestEndToEndRun:
         # the comparison table above prints it for every class.
         assert "Bond target out of reach." in output
         assert "These accounts cannot hold more than $0.00, or 0%" in output
-        assert "Lower the target, or hold individual funds in a larger percentage" in output
+        assert "Lower the target, or add a bond fund to more accounts." in output
         assert "as close to the target allocation as the funds held allow" in output
 
     def test_a_rebalance_error_is_reported_and_exits_nonzero(self, monkeypatch, tmp_path):
         """The flow itself can no longer produce one -- every account
-        declares a tradeable slot and nicknames are already unique -- but
-        `compute_trades` still raises for a portfolio no arrangement of the
-        funds can satisfy, and that has to reach the user as words."""
+        declares at least one tradeable fund and nicknames are already
+        unique -- but `compute_trades` still raises for a portfolio no
+        arrangement of the funds can satisfy, and that has to reach the user
+        as words."""
         def _raise(*args, **kwargs):
             raise RebalanceError("nothing works here")
 
         monkeypatch.setattr(cli, "compute_trades", _raise)
         prompter = ScriptedPrompter([
             "80", "y", "0", "0",
-            "y", "1", "Roth", "1", "VTI", "10000", "VXUS", "0", "BND", "0", "0",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
             "n",  # no, don't change an answer and try again
         ])
@@ -372,10 +438,10 @@ class TestLongMessagesWrap:
         prompter = ScriptedPrompter([
             "50", "y",  # a bond target the one fund held cannot reach
             "0", "0",
-            "y", "1", "Roth", "2",
-            "All-Stock 2065", "10000",
-            "100", "0", "y",
-            "0",
+            "y",
+            *account_responses(
+                "1", "Roth", [["All-Stock 2065", MULTI_ASSET_KIND, "100", "y", "10000"]]
+            ),
             "n", NO_REVISION, "n",
         ])
         exit_code = run(
@@ -409,7 +475,7 @@ class TestRevisionLoop:
     """
 
     #: Keep the account, correct the one value, leave everything else.
-    FIX_THE_VALUE = ["", "", "150000", "", "", "", "", ""]
+    FIX_THE_VALUE = keep_account_responses("150000", "", "")
 
     def _two_accounts(self):
         return [
@@ -566,7 +632,7 @@ class TestRevisionLoop:
             "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
             "n",
             "y",                                   # yes, change an answer and try again
-            "3", "", "", "", "", "", "", "", "",   # re-ask the account, change nothing
+            "3", *keep_account_responses("", "", ""),  # re-ask the account, change nothing
             NO_REVISION, "n",
         ])
         assert run(
@@ -613,9 +679,13 @@ class TestSavedDateIsTheUsersOwn:
             ]),
         )
         # Every saved answer kept: the target and its confirmation, both band
-        # halves, "Keep this account?", then its three tickers, three values
-        # and its cash.
-        prompter = ScriptedPrompter([*[""] * 12, "n", NO_REVISION, "n"])
+        # halves, then the account with each of its three funds walked
+        # through unchanged.
+        prompter = ScriptedPrompter([
+            *[""] * 4,
+            *keep_account_responses("", "", ""),
+            "n", NO_REVISION, "n",
+        ])
         run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter)
         assert "Last saved August 29, 2026." in prompter.full_output
 

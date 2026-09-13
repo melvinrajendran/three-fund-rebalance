@@ -143,7 +143,7 @@ loses them is a regression:
   fires only where that bound is provably the obstacle; see [`solver.md`](solver.md).
 
 **Indentation is carried by `Prompter.indented()` and `INDENT_UNIT`, never spelled
-into a prompt string.** `_prompt_target_date_allocation` and `_prompt_new_holding` are
+into a prompt string.** `_prompt_fund_allocation` and `_prompt_holding` are
 each called from two places at different depths, so a literal `"    "` that lines up
 in one lands two levels off in the other -- which is exactly what happened, and what
 let a `say_wrapped` conversion silently drop a line four columns out from its own
@@ -203,14 +203,14 @@ left over is stated and confirmed, in the same words the question that derived i
 used.** `prompt_stock_bond_allocation` asks for the "Target stock allocation" and says
 "That leaves a target bond allocation of 20%. Use this value?" -- one noun phrase
 across both halves, so the derived share reads as the other side of the answer rather
-than as a differently-named quantity. `_prompt_target_date_allocation` is the same
+than as a differently-named quantity. `_prompt_fund_allocation` is the same
 shape one level down: it asks for "U.S. stocks" and "International stocks" and
 confirms "That leaves 1.7% bonds. Use this value?". Questions for every member of
 the set outnumber the degrees of freedom, which invites an answer that cannot be
 honored and turns a typo into a form the user has to re-fill. A denial restarts from
 the *first* question, because the number they want to change is one they typed -- the
 derived one is not theirs to edit -- and the only remaining way to be wrong is for the
-entered values to exceed 100 outright, which the target-date prompt rejects in place.
+entered values to exceed 100 outright, which the mix prompt rejects in place.
 
 **A question the answers so far have already settled is not asked.** 100% U.S. stocks
 leaves nothing for either of the other two sleeves, so the international question is
@@ -228,9 +228,9 @@ values are actually on screen**: "Use this value?" for one, "Use these values?" 
 two. The same agreement governs the VT lookup, which shows a U.S. share and an
 international one and therefore asks for both.
 
-One consequence to know: entered target-date sleeves now sum to exactly 100, where a
+One consequence to know: entered sleeves now sum to exactly 100, where a
 fact sheet rounding each to a tenth often does not, so a fund printed 64.0 / 34.3 /
-1.6 is confirmed back as 1.7% bonds. `TargetDateAllocation` keeps
+1.6 is confirmed back as 1.7% bonds. `FundAllocation` keeps
 `PERCENT_SUM_TOLERANCE` and `fraction_of` keeps normalizing -- a config written by an
 older version or by hand can still hold a sum of 99.9 -- and the tenth of a point would
 have been spread across the three sleeves by `fraction_of` anyway.
@@ -248,9 +248,38 @@ The point of putting figures in rows is to compare them down the page, which rag
 rather than `$0.00`: it is capacity the solver can use, not a holding, and `$0.00`
 gives it a precision it does not have.
 
+**A multi-asset fund states its own mix beneath its row, one asset class to a line.**
+The three single-asset labels say everything there is to say about what those funds
+hold; a multi-asset fund's mix is the user's answer to a question, and a plan read
+days later cannot be checked against the fact sheet it came from without it. It is a
+block of its own -- `report._describe_mix` -- set one level deeper than the row, with
+its own label and share columns, and sized out of the two the account's rows align in.
+
+**It is the Target Asset Allocation block's shape, because it is that block's
+content**: the three classes in the order every table here names them, label left and
+share right-aligned. Run together on one line the three read as a sentence about the
+fund, which is not what they are -- down the page each sits under the one above it and
+can be read against the target table without unpicking a clause first.
+
+The figures are the fund's own, as entered, which is why they do **not** go through
+`format_percents`: that rounds to `PERCENT_MAX_PLACES`, and a fact sheet printing
+34.34% is entitled to be read back as 34.34%. It is also why they are right-aligned
+rather than aligned on the decimal point -- sleeves entered at different precisions
+have no common point to align on, so the percent signs are what line up.
+`FundAllocation.percent_of` is the entered figure and `fraction_of` the normalized one
+the solver needs; everything that echoes a mix to a user prints the first.
+`TestMultiAssetFundRows` pins the order, the depth, the alignment and that the
+account's columns do not widen.
+
+**The prompt says the same mix as a sentence, and that divergence is deliberate.**
+`formatting.describe_fund_allocation` is the one-line form, used where it sits inside
+a sentence ("Currently 60% U.S. stocks, ..."), which is a line to finish rather than a
+page to lay out. It and `format_and_list` live in `formatting` rather than `prompts`
+for the rule at the bottom of this file: **`report.py` must not import `prompts.py`**.
+
 **The orders close with where they land** (`_describe_outcome`) -- the question the
 rest of the report only answers by implication. It is computed from the holdings
-rather than the class totals, so a trade in a target-date fund moves all three sleeves
+rather than the class totals, so a trade in a multi-asset fund moves all three sleeves
 by their own fractions, and it is stated conditionally ("If these orders fill at the
 values entered here") for the reason under "The landing allocation is conditional on
 the orders filling" above. **It is indented to
@@ -290,7 +319,7 @@ this, the line count and the absence of `detail`.
 
 What the capacity note gave up is worth knowing before shortening it further. Its remedy
 names one culprit for its own direction and stops, so a reader who does not already know
-that a target-date fund's mix cannot be split will not learn it from the note. That was
+that a multi-asset fund's mix cannot be split will not learn it from the note. That was
 the deliberate trade for one paragraph.
 
 The `Warning:` prefix is gone with them: several of these are not warnings -- a taxable

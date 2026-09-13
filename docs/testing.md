@@ -21,14 +21,25 @@ between the VT allocation and the first "Add an account?", and existing flows pa
 `"0"` for both so they keep testing exact-target behavior.
 
 Two shapes to know when writing one. A stock/bond target is `"80", "y"` -- the stock
-share and then the confirmation of the derived bond share -- and a target-date
-allocation is `"60", "20", "y"` for the same reason. (`"100", "y"` is the third: a
-first answer of 100 settles both remaining sleeves, so the second question is never
-asked.) An account holding individual funds is a name and a value per asset class with
-no yes/no between them, in the order `_INDIVIDUAL_SLOT_PROMPTS` lists; the update path
-asks the same questions with the saved ticker and value as defaults, so `""` twice
-keeps a holding exactly as it was -- behind a leading `"y"` for "Keep this account?",
-which every saved account starts with.
+share and then the confirmation of the derived bond share -- and a multi-asset fund's
+mix is `"60", "20", "y"` for the same reason. (`"100", "y"` is the third: a first
+answer of 100 settles both remaining sleeves, so the second question is never asked.)
+
+An account's funds are a **list the user builds**, so its answers are a loop rather
+than a fixed run of slots. One fund is `name, kind, value`, where kind is `"1"`–`"4"`
+for U.S. stocks / international stocks / bonds / a mix, and a mix inserts its two
+sleeve percentages and the confirmation between the kind and the value. Between funds
+comes `"Add another fund?"`, which defaults to **yes** -- so a list reads
+`fund, "y", fund, "y", fund, "n"`, one `"y"` before each fund after the first and one
+`"n"` to close it. Then the cash.
+
+The helpers are `fund_responses`, `multi_asset_fund_responses` and (in `test_cli.py`)
+`account_responses` / `new_account_responses`; reuse them rather than spelling a list
+out. On the update path every saved fund arrives behind its own `"Keep this fund?"`
+and then offers name, kind and value as defaults, so `keep_fund_responses()` -- four
+empty strings -- walks one fund through unchanged, and `keep_account_responses(*values)`
+walks a whole account. All of that still sits behind the leading `"y"` for
+"Keep this account?" that every saved account starts with.
 
 `compute_trades`'s `band_pct` defaults to `Decimal(0)`, which is the exact target and
 therefore the pre-band behavior -- solver tests that aren't about the band say nothing

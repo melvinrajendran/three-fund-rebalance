@@ -6,9 +6,9 @@ import pytest
 from three_fund_rebalance.config import SCHEMA_VERSION
 from three_fund_rebalance.models import (
     Account,
+    FundAllocation,
     FundType,
     Holding,
-    TargetDateAllocation,
     TaxTreatment,
 )
 from three_fund_rebalance.persistence import (
@@ -16,6 +16,7 @@ from three_fund_rebalance.persistence import (
     PersistenceError,
     _upgrade_v1,
     _upgrade_v2,
+    _upgrade_v4,
     config_from_dict,
     load_config,
     save_config,
@@ -23,7 +24,7 @@ from three_fund_rebalance.persistence import (
 
 
 def sample_config() -> PersistedConfig:
-    allocation = TargetDateAllocation(
+    allocation = FundAllocation(
         us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
     )
     target_date_account = Account(
@@ -32,10 +33,10 @@ def sample_config() -> PersistedConfig:
         tax_treatment=TaxTreatment.TAX_DEFERRED,
         holdings=[
             Holding(
-                fund_type=FundType.TARGET_DATE,
+                fund_type=FundType.MULTI_ASSET,
                 name="Target 2050",
                 value=Decimal(0),
-                target_date_allocation=allocation,
+                allocation=allocation,
             ),
             Holding(fund_type=FundType.CASH, name="", value=Decimal("125.50")),
         ],
@@ -80,8 +81,8 @@ class TestRoundTrip:
         assert loaded_account.tax_treatment == original_account.tax_treatment
         assert loaded_account.total_value() == original_account.total_value()
 
-        loaded_target_date_holding = loaded_account.get_holding(FundType.TARGET_DATE)
-        assert loaded_target_date_holding.target_date_allocation == target_date_allocation_of(
+        loaded_target_date_holding = loaded_account.get_holding(FundType.MULTI_ASSET)
+        assert loaded_target_date_holding.allocation == allocation_of(
             original_account
         )
 
@@ -100,8 +101,8 @@ class TestRoundTrip:
         assert parsed["accounts"][0]["name"] == "Acme 401k"
 
 
-def target_date_allocation_of(account: Account) -> TargetDateAllocation:
-    return account.get_holding(FundType.TARGET_DATE).target_date_allocation
+def allocation_of(account: Account) -> FundAllocation:
+    return account.get_holding(FundType.MULTI_ASSET).allocation
 
 
 MALFORMED = {
@@ -240,24 +241,22 @@ MIXED = {
 }
 
 
-class TestMixedAccountsAreNoLongerLoadable:
-    """Accounts used to be allowed to hold a target-date fund alongside
-    individual funds. A config saved back then is now invalid, and the point
-    of these tests is that it says so clearly instead of failing obscurely --
-    cli.run() surfaces the message and starts blank."""
+class TestMixedAccountsLoad:
+    """An account holding a multi-asset fund alongside single-asset funds was
+    refused for as long as the model forbade the mix. It is an ordinary
+    account now, and a file saved under either rule loads the same way."""
 
-
-    def test_message_names_the_account_and_the_rule(self, tmp_path):
+    def test_a_mixed_account_loads(self, tmp_path):
         path = tmp_path / "config.json"
         path.write_text(json.dumps(MIXED))
-        with pytest.raises(PersistenceError, match="one or the other"):
-            load_config(path)
-        with pytest.raises(PersistenceError, match="Acme 401k"):
-            load_config(path)
+        config = load_config(path)
+        account = config.accounts[0]
+        assert [h.name for h in account.funds()] == ["VTI", "Target 2050"]
+        assert account.total_value() == Decimal(9000)
 
-    def test_a_v1_file_with_a_mixed_account_fails_the_same_way(self, tmp_path):
-        """The upgrade renames without validating, so a v1 mix reaches the
-        same check rather than dying somewhere less legible."""
+    def test_a_v1_file_with_a_mixed_account_loads_the_same_way(self, tmp_path):
+        """The upgrades rename without validating, so a v1 mix walks every
+        hop and arrives as the same account a current file would."""
         payload = json.loads(json.dumps(MIXED))
         payload["schema_version"] = 1
         holdings = payload["accounts"][0]["holdings"]
@@ -274,8 +273,12 @@ class TestMixedAccountsAreNoLongerLoadable:
         }
         path = tmp_path / "config.json"
         path.write_text(json.dumps(payload))
-        with pytest.raises(PersistenceError, match="one or the other"):
-            load_config(path)
+        account = load_config(path).accounts[0]
+        assert [h.fund_type for h in account.funds()] == [
+            FundType.US_STOCK,
+            FundType.MULTI_ASSET,
+        ]
+        assert account.funds()[1].allocation.us_stock_pct == Decimal(60)
 
 
 class TestSchemaV1Migration:
@@ -337,7 +340,7 @@ class TestSchemaV1Migration:
         assert account.get_holding(FundType.US_STOCK).value == Decimal(6000)
         assert account.get_holding(FundType.INTERNATIONAL_STOCK).name == "VXUS"
         assert account.get_holding(FundType.US_BOND).value == Decimal(1000)
-        allocation = target_date_account.get_holding(FundType.TARGET_DATE).target_date_allocation
+        allocation = target_date_account.get_holding(FundType.MULTI_ASSET).allocation
         assert allocation.us_stock_pct == Decimal(60)
         assert allocation.international_stock_pct == Decimal(20)
 
@@ -353,9 +356,10 @@ class TestSchemaV1Migration:
         holdings = {h["fund_type"]: h for h in written["accounts"][0]["holdings"]}
         assert set(holdings) == {"us_stock", "international_stock", "us_bond", "cash"}
         assert holdings["us_stock"]["value"] == "6000"
-        target_date = written["accounts"][1]["holdings"][0]
-        assert target_date["fund_type"] == "target_date"
-        assert "target_date_allocation" in target_date
+        multi_asset = written["accounts"][1]["holdings"][0]
+        assert multi_asset["fund_type"] == "multi_asset"
+        assert "allocation" in multi_asset
+        assert "target_date_allocation" not in multi_asset
 
     def test_migration_does_not_mutate_the_callers_dict(self):
         payload = self._v1_payload()
@@ -440,7 +444,7 @@ class TestErrorHandling:
         with pytest.raises(PersistenceError, match="Could not parse 'stock_pct'"):
             load_config(path)
 
-    def test_incomplete_target_date_allocation_raises(self, tmp_path):
+    def test_incomplete_allocation_raises(self, tmp_path):
         path = tmp_path / "config.json"
         path.write_text(
             json.dumps(
@@ -468,7 +472,7 @@ class TestErrorHandling:
                 }
             )
         )
-        with pytest.raises(PersistenceError, match="Invalid target_date_allocation"):
+        with pytest.raises(PersistenceError, match="Invalid allocation"):
             load_config(path)
 
     def test_holding_failing_model_validation_raises(self, tmp_path):
@@ -576,13 +580,13 @@ class TestSchemaV2Migration:
         }
 
     def test_a_v2_file_walks_every_hop_to_the_current_version(self, tmp_path):
-        """One hop at a time: v2 -> _upgrade_v2 -> v3 -> _upgrade_v3 -> v4.
-        The taxable account carries the v3 spelling of its type, so this
-        fails if the chain stops early."""
+        """One hop at a time, v2 through to the current version. The taxable
+        account carries the v3 spelling of its type, so this fails if the
+        chain stops early."""
         path = tmp_path / "config.json"
         path.write_text(json.dumps(self._v2_payload("Roth IRA")))
         config = load_config(path)
-        assert config.schema_version == SCHEMA_VERSION == 4
+        assert config.schema_version == SCHEMA_VERSION == 5
         assert config.accounts[1].account_type == "Brokerage"
         assert config.accounts[1].tax_treatment == TaxTreatment.TAXABLE
 
@@ -655,6 +659,7 @@ class TestSchemaV2Migration:
         path.write_text(json.dumps(self._v2_payload()))
         assert load_config(path).accounts[1].tax_treatment == TaxTreatment.TAXABLE
 
+
     def test_a_v2_file_has_no_band_so_none_is_reported(self, tmp_path):
         """Absent means "never chosen", so the prompt offers its own default
         rather than a guess dressed up as the user's saved answer."""
@@ -685,6 +690,92 @@ class TestSchemaV2Migration:
         assert config.schema_version == SCHEMA_VERSION
         assert config.accounts[0].tax_treatment == TaxTreatment.TAX_FREE
         assert config.accounts[0].get_holding(FundType.US_STOCK).value == Decimal(6000)
+
+
+class TestSchemaV4Migration:
+    """v4 could only describe one kind of fund with a fixed internal mix, and
+    called it a target-date fund, because an account could hold nothing
+    beside one. v5 lets an account hold any combination, which makes a
+    user-declared 60/40 fund expressible and the dated name wrong for it."""
+
+    def _v4_payload(self) -> dict:
+        return {
+            "schema_version": 4,
+            "accounts": [
+                {
+                    "account_type": "Roth 401(k)",
+                    "name": "Acme 401k",
+                    "tax_treatment": "tax_free",
+                    "holdings": [
+                        {
+                            "fund_type": "target_date",
+                            "name": "Target 2050",
+                            "value": "3000",
+                            "target_date_allocation": {
+                                "us_stock_pct": "60",
+                                "international_stock_pct": "20",
+                                "bond_pct": "20",
+                            },
+                        },
+                        {"fund_type": "cash", "name": "", "value": "100"},
+                    ],
+                }
+            ],
+        }
+
+    def test_a_target_date_holding_becomes_a_multi_asset_one(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v4_payload()))
+        holding = load_config(path).accounts[0].funds()[0]
+        assert holding.fund_type == FundType.MULTI_ASSET
+        assert holding.allocation.international_stock_pct == Decimal(20)
+
+    def test_the_saved_mix_survives_the_rename(self, tmp_path):
+        """The key moves; the percentages do not. A fund's mix read back a
+        point off what the fact sheet said would be worse than not saving
+        it."""
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v4_payload()))
+        save_config(path, load_config(path))
+        holding = json.loads(path.read_text())["accounts"][0]["holdings"][0]
+        assert holding["fund_type"] == "multi_asset"
+        assert holding["allocation"] == {
+            "us_stock_pct": "60",
+            "international_stock_pct": "20",
+            "bond_pct": "20",
+        }
+
+    def test_holdings_that_are_not_multi_asset_are_left_alone(self, tmp_path):
+        path = tmp_path / "config.json"
+        payload = self._v4_payload()
+        payload["accounts"][0]["holdings"][0] = {
+            "fund_type": "us_stock",
+            "name": "VTI",
+            "value": "10",
+        }
+        path.write_text(json.dumps(payload))
+        assert load_config(path).accounts[0].funds()[0].fund_type == FundType.US_STOCK
+
+    def test_the_hop_stops_at_five(self):
+        """Each upgrade knows one hop and config_from_dict chains them, so
+        this returns the literal next version rather than SCHEMA_VERSION."""
+        assert _upgrade_v4({"schema_version": 4})["schema_version"] == 5
+
+    def test_the_hop_does_not_mutate_the_callers_payload(self):
+        payload = self._v4_payload()
+        config_from_dict(payload)
+        assert payload["schema_version"] == 4
+        assert payload["accounts"][0]["holdings"][0]["fund_type"] == "target_date"
+        assert "target_date_allocation" in payload["accounts"][0]["holdings"][0]
+
+    def test_a_holding_that_is_not_an_object_is_passed_through(self):
+        """Translate without validating: whatever is still wrong is caught by
+        the normal parse, so a corrupt v4 file reports what a corrupt current
+        file would."""
+        payload = self._v4_payload()
+        payload["accounts"][0]["holdings"] = ["not a holding"]
+        with pytest.raises(PersistenceError, match="Invalid holding in config"):
+            config_from_dict(payload)
 
 
 class TestRebalanceBandPersistence:

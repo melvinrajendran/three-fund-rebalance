@@ -27,24 +27,25 @@ def to_cents(amount: Decimal) -> Decimal:
 
 
 class FundType(Enum):
-    """The kinds of holdings a slot in an account can be. TARGET_DATE is a
+    """The kinds of holdings a slot in an account can be. MULTI_ASSET is a
     single position that internally bundles U.S. stocks, international
     stocks, and bonds in a fixed ratio the user supplies via
-    TargetDateAllocation. CASH is cash sitting available in the account,
+    FundAllocation -- a target-date fund is one example, a balanced or
+    lifestrategy fund another. CASH is cash sitting available in the account,
     which the rebalance engine always targets down to zero (i.e. "invest all
     of it")."""
 
     US_STOCK = "us_stock"
     INTERNATIONAL_STOCK = "international_stock"
     US_BOND = "us_bond"
-    TARGET_DATE = "target_date"
+    MULTI_ASSET = "multi_asset"
     CASH = "cash"
 
 
-# The three asset classes held as separate funds. An account holds some
-# combination of these *or* a single target-date fund, never both -- see
-# Account.__post_init__.
-INDIVIDUAL_FUND_TYPES = (
+# The three asset classes held as a fund of their own. An account may hold
+# any combination of these and of multi-asset funds -- see
+# Account.__post_init__, which no longer keeps the two apart.
+SINGLE_ASSET_FUND_TYPES = (
     FundType.US_STOCK,
     FundType.INTERNATIONAL_STOCK,
     FundType.US_BOND,
@@ -52,7 +53,7 @@ INDIVIDUAL_FUND_TYPES = (
 
 # Fund types that represent a single, directly tradeable fund with its own
 # name/ticker (as opposed to CASH, which is not a security).
-TRADEABLE_FUND_TYPES = (*INDIVIDUAL_FUND_TYPES, FundType.TARGET_DATE)
+TRADEABLE_FUND_TYPES = (*SINGLE_ASSET_FUND_TYPES, FundType.MULTI_ASSET)
 
 
 class TaxTreatment(Enum):
@@ -79,10 +80,10 @@ class TaxTreatment(Enum):
 
 
 @dataclass(frozen=True)
-class TargetDateAllocation:
+class FundAllocation:
     """The mix of U.S. stocks, international stocks, and bonds held inside a
-    target-date fund, as reported by the fund's fact sheet. Percentages must
-    sum to ~100."""
+    single multi-asset fund, as reported by the fund's fact sheet.
+    Percentages must sum to ~100."""
 
     us_stock_pct: Decimal
     international_stock_pct: Decimal
@@ -92,14 +93,34 @@ class TargetDateAllocation:
         for field_name in ("us_stock_pct", "international_stock_pct", "bond_pct"):
             value = getattr(self, field_name)
             if value < 0:
-                raise ValueError(f"TargetDateAllocation.{field_name} cannot be negative: {value}")
+                raise ValueError(f"FundAllocation.{field_name} cannot be negative: {value}")
         total = self.us_stock_pct + self.international_stock_pct + self.bond_pct
         if abs(total - Decimal(100)) > PERCENT_SUM_TOLERANCE:
             raise ValueError(
-                "TargetDateAllocation percentages must sum to 100 "
+                "FundAllocation percentages must sum to 100 "
                 f"(got {total}: us_stock={self.us_stock_pct}, "
                 f"international_stock={self.international_stock_pct}, bond={self.bond_pct})"
             )
+
+    def percent_of(self, fund_type: FundType) -> Decimal:
+        """This fund's share of one asset class as the user entered it, in
+        percent -- 0 for anything that is not one of the three.
+
+        The one place the three fields are mapped to the asset classes they
+        stand for, which is why `fraction_of` below goes through it rather
+        than repeating the mapping, and why the report asks for a sleeve by
+        `FundType` instead of by attribute name.
+
+        Exactly what was entered, unrounded and unnormalized: a fact sheet
+        printing 34.34% is read back as 34.34%. `fraction_of` is the derived
+        view the solver needs; this is the fund's own number, and everything
+        that echoes a mix to the user prints this one.
+        """
+        return {
+            FundType.US_STOCK: self.us_stock_pct,
+            FundType.INTERNATIONAL_STOCK: self.international_stock_pct,
+            FundType.US_BOND: self.bond_pct,
+        }.get(fund_type, Decimal(0))
 
     def fraction_of(self, fund_type: FundType) -> Decimal:
         """This fund's share of one asset class, as a fraction of the whole
@@ -109,9 +130,9 @@ class TargetDateAllocation:
         and are only required to sum to 100 within PERCENT_SUM_TOLERANCE, so
         a fund printed as 64.0 / 34.3 / 1.6 sums to 99.9. Dividing by 100
         would leave a tenth of a percent of the position belonging to no
-        asset class at all, which contradicts the plainer fact that the
-        account holds this fund and nothing else. The solver states both as
-        hard equalities -- each account spends exactly its own total, each
+        asset class at all, which contradicts the plainer fact that every
+        dollar in the fund is invested in something. The solver states both
+        as hard equalities -- each account spends exactly its own total, each
         asset class hits exactly its resolved figure -- so the contradiction
         does not degrade an answer, it makes an ordinary portfolio
         infeasible. Dividing by the actual sum spreads the fact sheet's
@@ -120,18 +141,15 @@ class TargetDateAllocation:
 
         The percentages themselves are stored exactly as entered; this is a
         derived view, so prompts and the report still echo the fund's own
-        numbers back.
+        numbers back -- see `percent_of`, which this is built on so the three
+        fields are mapped to their asset classes in one place.
         """
-        pct = {
-            FundType.US_STOCK: self.us_stock_pct,
-            FundType.INTERNATIONAL_STOCK: self.international_stock_pct,
-            FundType.US_BOND: self.bond_pct,
-        }.get(fund_type)
-        if pct is None:
-            return Decimal(0)
         # __post_init__ has already pinned the sum near 100, so this is never
-        # a division by zero.
-        return pct / (self.us_stock_pct + self.international_stock_pct + self.bond_pct)
+        # a division by zero -- and a fund type that is not one of the three
+        # divides 0 by it, which is the 0 it should be.
+        return self.percent_of(fund_type) / (
+            self.us_stock_pct + self.international_stock_pct + self.bond_pct
+        )
 
 
 @dataclass(frozen=True)
@@ -141,25 +159,24 @@ class Holding:
     fund_type: FundType
     name: str
     value: Decimal
-    # Required if and only if fund_type is TARGET_DATE.
-    target_date_allocation: TargetDateAllocation | None = None
+    # Required if and only if fund_type is MULTI_ASSET.
+    allocation: FundAllocation | None = None
 
     def __post_init__(self) -> None:
         if self.value < 0:
             raise ValueError(f"Holding value cannot be negative: {self.value}")
-        if self.fund_type == FundType.TARGET_DATE and self.target_date_allocation is None:
-            raise ValueError("A target-date fund holding requires a target_date_allocation")
-        if self.fund_type != FundType.TARGET_DATE and self.target_date_allocation is not None:
+        if self.fund_type == FundType.MULTI_ASSET and self.allocation is None:
+            raise ValueError("A multi-asset fund holding requires an allocation")
+        if self.fund_type != FundType.MULTI_ASSET and self.allocation is not None:
             raise ValueError(
-                f"Only target-date fund holdings may carry a target_date_allocation, "
-                f"got {self.fund_type}"
+                f"Only multi-asset fund holdings may carry an allocation, got {self.fund_type}"
             )
         if self.fund_type != FundType.CASH and not self.name.strip():
             raise ValueError("A fund holding must have a non-empty name/ticker")
 
     def fraction_of(self, asset_class: FundType) -> Decimal:
         """How much of one dollar held here counts toward `asset_class`: 1 for
-        a direct match, the fund's own internal share for a target-date fund,
+        a direct match, the fund's own internal share for a multi-asset fund,
         0 otherwise.
 
         The single statement of that rule. It used to be written out four
@@ -170,13 +187,13 @@ class Holding:
         from the report is the exact disagreement that makes a portfolio
         infeasible rather than merely misreported.
 
-        Named to match `TargetDateAllocation.fraction_of`, which answers the
-        same question one level down and which this delegates to.
+        Named to match `FundAllocation.fraction_of`, which answers the same
+        question one level down and which this delegates to.
         """
         if self.fund_type == asset_class:
             return Decimal(1)
-        if self.fund_type == FundType.TARGET_DATE:
-            return self.target_date_allocation.fraction_of(asset_class)
+        if self.fund_type == FundType.MULTI_ASSET:
+            return self.allocation.fraction_of(asset_class)
         return Decimal(0)
 
     def component(self, asset_class: FundType) -> Decimal:
@@ -191,9 +208,11 @@ class Account:
     whole portfolio (this is how multiple accounts of the same type, e.g.
     two 401(k)s from different employers, are distinguished).
 
-    An account holds *either* a single target-date fund or some combination
-    of the three individual funds -- never a mix of the two. Cash is allowed
-    alongside either.
+    An account holds any combination of funds -- any number dedicated to a
+    single asset class, any number of multi-asset funds, in any mix -- with
+    cash alongside. What it may *not* hold is two funds under one name: that
+    is the identity a trade is placed against, so two positions sharing it
+    is a data-entry mistake rather than a lineup.
     """
 
     account_type: str
@@ -204,29 +223,51 @@ class Account:
     def __post_init__(self) -> None:
         if not self.name.strip():
             raise ValueError("Account name cannot be empty")
-        fund_types = {h.fund_type for h in self.holdings}
-        if FundType.TARGET_DATE in fund_types and fund_types & set(INDIVIDUAL_FUND_TYPES):
-            mixed = ", ".join(
-                sorted(f.value for f in fund_types & {FundType.TARGET_DATE, *INDIVIDUAL_FUND_TYPES})
-            )
-            raise ValueError(
-                f"Account {self.name!r} holds both a target-date fund and individual "
-                f"funds ({mixed}); an account holds one or the other, not a mix"
-            )
 
-        seen_types = set()
+        # One cash balance, because `available_cash` reads a single holding
+        # and two would be silently half-counted everywhere it is used.
+        if sum(1 for h in self.holdings if h.fund_type == FundType.CASH) > 1:
+            raise ValueError(f"Account {self.name!r} has more than one cash balance")
+
+        # Fund names unique within the account, compared the way
+        # `rebalance._normalized_fund_name` compares them -- case and
+        # surrounding space are noise a user shouldn't have to get right.
+        # This is the key an order is placed against, the key
+        # `report.allocation_after_trades` applies a trade by, and the label
+        # the report's own rows are read by; two holdings sharing it make
+        # all three ambiguous at once.
+        seen_names: set[str] = set()
         for holding in self.holdings:
-            if holding.fund_type in seen_types:
+            if holding.fund_type == FundType.CASH:
+                continue
+            key = holding.name.strip().casefold()
+            if key in seen_names:
                 raise ValueError(
-                    f"Account {self.name!r} has more than one "
-                    f"{holding.fund_type.value} holding; only one per fund type is supported"
+                    f"Account {self.name!r} has more than one holding named "
+                    f"{holding.name.strip()!r}; each fund in an account needs its own "
+                    "name or ticker"
                 )
-            seen_types.add(holding.fund_type)
+            seen_names.add(key)
 
     def total_value(self) -> Decimal:
         return sum((h.value for h in self.holdings), Decimal(0))
 
+    def funds(self) -> list[Holding]:
+        """Everything in the account that is a security, in declared order.
+
+        Cash is the one holding that is not: it has no name, no trade of its
+        own, and an implicit target of zero. Three callers want exactly this
+        list, and each used to filter for it inline.
+        """
+        return [h for h in self.holdings if h.fund_type != FundType.CASH]
+
     def get_holding(self, fund_type: FundType) -> Holding | None:
+        """The *first* holding of this fund type, or None.
+
+        An account may now hold several funds of one type, so this answers a
+        question only CASH still has a single answer to. Anything wanting
+        every fund of a type should iterate `funds()` itself.
+        """
         return next((h for h in self.holdings if h.fund_type == fund_type), None)
 
     def available_cash(self) -> Decimal:

@@ -4,8 +4,10 @@ from zoneinfo import ZoneInfo
 
 from three_fund_rebalance.formatting import (
     describe_as_of,
+    describe_fund_allocation,
     fixed_width,
     format_account_heading,
+    format_and_list,
     format_date,
     format_generated_at,
     format_generated_at_for_filename,
@@ -18,6 +20,7 @@ from three_fund_rebalance.formatting import (
     prose_width,
     table_width,
 )
+from three_fund_rebalance.models import FundAllocation
 
 
 class TestSectionHeader:
@@ -220,3 +223,58 @@ class TestFixedWidth:
             with fixed_width(80):
                 assert table_width() == 78
             assert table_width() == 118
+
+
+class TestFormatAndList:
+    """A set of names is joined as prose rather than as a bare comma list,
+    because every line one appears in is a sentence."""
+
+    def test_one_name_stands_alone(self):
+        assert format_and_list(["A"]) == "A"
+
+    def test_two_names_take_no_comma(self):
+        """The serial comma separates three or more; "A, and B" reads as a
+        stray one."""
+        assert format_and_list(["A", "B"]) == "A and B"
+
+    def test_three_or_more_take_the_serial_comma(self):
+        assert format_and_list(["A", "B", "C"]) == "A, B, and C"
+        assert format_and_list(["A", "B", "C", "D"]) == "A, B, C, and D"
+
+
+class TestDescribeFundAllocation:
+    """A multi-asset fund's mix, said the same way in the prompt that asks
+    for it and in the report that restates it. Here rather than in `prompts`
+    because `report` may not import `prompts`."""
+
+    def test_it_names_all_three_sleeves_as_a_sentence(self):
+        assert describe_fund_allocation(
+            FundAllocation(
+                us_stock_pct=Decimal(54),
+                international_stock_pct=Decimal(36),
+                bond_pct=Decimal(10),
+            )
+        ) == "54% U.S. stocks, 36% international stocks, and 10% bonds"
+
+    def test_a_zero_sleeve_is_still_named(self):
+        """All three, always: "60% U.S. stocks and 40% bonds" leaves the
+        reader to work out that the fund holds no international at all."""
+        assert describe_fund_allocation(
+            FundAllocation(
+                us_stock_pct=Decimal(60),
+                international_stock_pct=Decimal(0),
+                bond_pct=Decimal(40),
+            )
+        ) == "60% U.S. stocks, 0% international stocks, and 40% bonds"
+
+    def test_percentages_are_written_as_a_person_would_type_them(self):
+        """The fund's own figures, trailing zeros trimmed -- and not the
+        normalized fractions `FundAllocation.fraction_of` derives for the
+        solver."""
+        assert describe_fund_allocation(
+            FundAllocation(
+                us_stock_pct=Decimal("64.0"),
+                international_stock_pct=Decimal("34.3"),
+                bond_pct=Decimal("1.6"),
+            )
+        ) == "64% U.S. stocks, 34.3% international stocks, and 1.6% bonds"

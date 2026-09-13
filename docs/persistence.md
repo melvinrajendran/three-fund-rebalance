@@ -26,15 +26,16 @@ anything unanticipated (re-raising `PersistenceError` untouched so specific
 messages survive). `tests/test_persistence.py::MALFORMED` is the table to extend
 when a new shape shows up.
 
-A config saved before accounts became one-kind-or-the-other can hold a mix, and no
-longer loads; `Account`'s message names the account, and `cli.run()` warns and starts
-blank as it does for any `PersistenceError`. That is deliberate -- splitting such an
-account automatically would invent an account boundary that is a hard constraint on
-the solver.
+An account holding a multi-asset fund alongside single-asset ones used to be refused
+on load, because the model forbade the mix. It is an ordinary account now, and both a
+file written before the rule and one written under it load the same way. What
+`Account` still refuses is two funds in one account sharing a name -- that name is the
+key an order is placed against -- and that reaches the user the way any
+`PersistenceError` does: `cli.run()` warns and starts blank.
 
-The file is at v4, and upgrades run **one hop at a time** -- `config_from_dict` chains
-`v1 → _upgrade_v1 → v2 → _upgrade_v2 → v3 → _upgrade_v3 → v4`, so a v1 file walks the
-same path a v3 file does. Each upgrade translates without validating: anything still wrong surfaces from
+The file is at v5, and upgrades run **one hop at a time** -- `config_from_dict` chains
+`v1 → _upgrade_v1 → v2 → … → _upgrade_v4 → v5`, so a v1 file walks the
+same path a v4 file does. Each upgrade translates without validating: anything still wrong surfaces from
 the normal parse, so a corrupt old file reports what a corrupt current file would.
 Each copies at every level, because a failed load must not leave the caller's parsed
 JSON half-renamed. Any further rename of a persisted name needs another hop, not an
@@ -43,7 +44,9 @@ in-place edit of an existing one -- and `_upgrade_v1` must keep returning `2`, n
 
 - **v1 → v2** spelled the fund types after the academic asset classes
   (`domestic_equity`, `tdf`, `balance`, `balances_as_of`); v2 uses the same words the
-  CLI prints (`us_stock`, `target_date`, `value`, `values_as_of`).
+  CLI prints (`us_stock`, `target_date`, `value`, `values_as_of`) -- `target_date`
+  being renamed again by `_upgrade_v4`, which is why this hop keeps writing the
+  spelling that was current when it was written rather than the spelling of the day.
 - **v2 → v3** splits the single `tax_advantaged` treatment into `tax_deferred` and
   `tax_free`, re-inferred from the account's own persisted `account_type` via
   `ACCOUNT_TYPE_TAX_TREATMENT`. An unrecognized type -- including `"Other"`, whose v2
@@ -63,6 +66,15 @@ in-place edit of an existing one -- and `_upgrade_v1` must keep returning `2`, n
   "Taxable" is a descriptor, and Title-Casing it put the one word the report otherwise
   always writes lowercase (beside "tax-free" and "tax-deferred") into a proper noun. An
   account type the map does not know, `"Other"` included, is left exactly as it is.
+
+- **v4 → v5** renames the `target_date` fund type to `multi_asset` and the
+  `target_date_allocation` it carries to `allocation`. v4 could describe only one kind
+  of fund with a fixed internal mix and called it a target-date fund, because an
+  account could hold nothing beside one; v5 lets an account hold any combination,
+  which makes a user-declared 60/40 fund expressible and the dated name wrong for it.
+  A v4 target-date account loads as a one-fund multi-asset account, which is exactly
+  what it always was. No account structure moves: v4 refused to load a mixed account,
+  so no such file exists to translate -- what changed is that v5's model accepts one.
 
 `rebalance_relative_band_pct` was added later **without a hop**, and deliberately: a
 new optional key translates nothing, and its absence already means "never chosen"

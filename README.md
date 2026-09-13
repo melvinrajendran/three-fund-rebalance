@@ -173,15 +173,16 @@ stays within its band; if any drifts outside, all three are rebalanced back to
 target. Cash is invested first, and the band is judged on what it leaves
 behind.
 
-**An account holds one target-date fund or all three individual funds, never
-both** -- a U.S. stock fund, an international stock fund and a bond fund --
-with cash alongside either. A target-date fund is then the account's only
-holding, pinned by its total: it can only invest its cash.
+**An account holds any combination of funds.** Each one either holds a single
+asset class or is a *multi-asset fund* -- a target-date, balanced or
+lifestrategy fund -- whose mix of the three you enter from its fact sheet. A
+2050 fund beside an index fund, two bond funds, cash alongside: all ordinary.
 
-**Name a fund you don't own yet.** All three individual funds are asked for
-whether or not you hold any today, and one entered at $0 is capacity: the plan
-can buy into it. That is often what lets a portfolio reach its bond target
-without selling anything in a taxable account.
+**Enter every fund the account can trade, including ones you hold none of.**
+Only the funds you enter can be bought or sold, so one entered at $0 is
+capacity the plan can buy into -- often what lets a portfolio reach its bond
+target without selling anything in a taxable account -- and one left out is a
+place the plan cannot put an asset class.
 
 **Allocation before location.** Two solves, in order. The first settles what
 each asset class should be worth -- as close to target as the accounts allow,
@@ -209,8 +210,10 @@ one. The second solve ranks six:
 3. Avoid buying, in a sheltered account, a fund being sold in a taxable one.
 4. Among shelters, hold bonds in tax-deferred space, which by common
    convention leaves tax-free accounts for stocks.
-5. Hold the international fund in taxable, where the foreign tax withheld on
-   it is claimable as a credit a sheltered account forfeits.
+5. Hold a mostly-foreign fund in taxable, where the foreign tax withheld on
+   it is claimable as a credit a sheltered account forfeits. A fund has to be
+   more than half foreign to pass that credit on at all, so a target-date fund
+   does not count.
 6. Trade as little as possible everywhere else.
 
 Reaching the settled allocation is a hard constraint, so it will sell in a
@@ -223,21 +226,25 @@ fund an account already being traded ends up in.
 **VT's allocation may be stale**, or the fetch may fail and fall back to a
 saved or manually entered value.
 
-**Every account holding individual funds is assumed able to buy all three.**
-A plan with a restricted fund lineup -- a 401(k) with no international option,
-say -- may be given an order it cannot fill.
+**A fund you don't enter is one the plan cannot use.** Leaving a fund out of
+an account -- or not naming one you could buy but don't hold yet -- gives that
+account less room than it really has, and the plan works around capacity it
+was never told about.
 
 **All the cash you enter is invested.** There is no reserve: keep an
 emergency fund or a spending reserve out of the amounts you enter.
 
-**The orders may not hit the target exactly.** A target-date fund's mix is
-fixed, so its bond sleeve counts against even a 0% bond target -- the plan
-gets as close as the accounts allow, and says which asset class fell short and
-by how much. Orders under $1.00 are also left out as impractical, and counted.
+**The orders may not hit the target exactly.** A multi-asset fund's mix is
+fixed, so an account holding one and nothing else is pinned to that mix -- its
+bond sleeve counts against even a 0% bond target. The plan gets as close as
+the accounts allow, and says which asset class fell short and by how much.
+Orders under $1.00 are also left out as impractical, and counted.
 
 **Preferring international in taxable is a rule of thumb.** The credit is
 worth a couple of basis points and is partly offset by those funds' higher,
-less-qualified dividends; the tool weighs neither.
+less-qualified dividends; the tool weighs neither. Whether a fund actually
+passes the credit through depends on its holdings at year end, which the mix
+you enter only approximates.
 
 **It cannot tell a municipal bond fund from a taxable one.** Bonds are moved
 into sheltered accounts on the assumption their interest is taxed as

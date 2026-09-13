@@ -52,7 +52,7 @@ available to invest", and every dollar of it is spent, so a reserve the user doe
 not intend to invest must simply not be entered -- a README limitation, not
 something the solver can see.
 
-**A target-date fund is one position holding a fixed internal ratio,** not three
+**A multi-asset fund is one position holding a fixed internal ratio,** not three
 positions. `Holding.fraction_of` is what lets a single slot contribute fractionally
 to all three targets, and it is stated once: `Holding.component` is it times the
 value, and `rebalance._fund_type_coefficient` is it as the float the LP needs. It
@@ -60,6 +60,12 @@ used to be written out four times -- once per asset class as
 `Holding.us_stock_component()` and friends, and again for the solver -- which is four
 copies of one invariant and three chances for the report and the solver to disagree
 about what an account holds.
+
+It is called *multi-asset* and not *target-date* because the mix is the user's, not
+the fund's dated glide path: a 60/40 balanced fund, a LifeStrategy fund and a 2050
+fund are all one position with three sleeves, and only the last of them is dated. A
+target-date fund is still the commonest example, which is why it is the one the
+cautions below reach for.
 
 **The LP must never over-determine the portfolio total.** Each account spends
 exactly its own total, and each asset class hits exactly the figure
@@ -85,11 +91,11 @@ Two things feed it, and both shipped as infeasible portfolios reported to the us
   resolved figure or a hair off -- but three amounts that do not add up to the
   portfolio are not "what each asset class should be worth", which is the function's
   whole contract. About one realistic portfolio in seven tripped this.
-- `TargetDateAllocation` allows the three percentages to sum to 100 ±
+- `FundAllocation` allows the three percentages to sum to 100 ±
   `PERCENT_SUM_TOLERANCE`, because a fact sheet rounds each sleeve to a tenth. Read as
   literal percentages over 100, a fund printed 64.0 / 34.3 / 1.6 leaves a tenth of a
   percent of its account belonging to no asset class -- which the implied row would
-  silently dump into bonds. `TargetDateAllocation.fraction_of` divides by the actual
+  silently dump into bonds. `FundAllocation.fraction_of` divides by the actual
   sum instead, and is the **one** place the three sleeves become fractions:
   `Holding.fraction_of` delegates to it, `Holding.component` is that times the value,
   and `rebalance._fund_type_coefficient` is `Holding.fraction_of` as a float -- so the
@@ -105,32 +111,61 @@ Decimal dust would count as cash and send a portfolio sitting on its target thro
 `_place_cash` for nothing. Cents are the grid money is entered and traded on, and
 sub-cent cash is under `MIN_TRADE_DOLLARS` regardless.
 
-**An account holds a target-date fund *or* individual funds, never both** (cash may
-sit alongside either). `Account.__post_init__` enforces it, `prompts` asks which kind
-up front instead of offering a fourth yes/no, and `INDIVIDUAL_FUND_TYPES` is the set
-that clashes with `TARGET_DATE`.
+**An account holds any combination of funds.** Any number dedicated to a single
+asset class, any number of multi-asset funds, in any mix, with cash alongside.
+`Account.__post_init__` enforces only what is left: one cash balance, and fund names
+unique within the account.
 
-**A declared holding is capacity, whatever it is worth -- and an account holding
-individual funds declares all three.** A slot exists because the account *can* hold
-that asset class, not because it currently does: `_build_slots` takes every non-cash
-holding regardless of value, its LP bound is `(0, account total)`, and `report`
-renders a zero one as `--` rather than `$0.00`. The model always allowed this; for a
-long time the only way to reach it was to answer "yes" to "does this account hold a
-bond fund?" and then type `0`, so the truthful answer removed the only place an asset
-class could ever go. `prompts._prompt_fund_holdings` now asks for all three outright,
-which also stops it re-asking what the kind question has just answered. The
-assumption that comes with that -- every such account can buy all three -- is a README
-limitation: a 401(k) with no international option may be handed an order it cannot
-fill.
+It used to hold *either* one target-date fund *or* all three individual funds, and
+`prompts` asked which up front. That was never a fact about portfolios -- a 401(k)
+holding a 2050 fund beside an S&P 500 fund is an ordinary lineup and was unenterable
+-- it was what made a target-date account's single slot pinned by its own budget row,
+which is what stopped the solver liquidating one to relocate the sleeves inside it.
+That guarantee is gone, deliberately: a multi-asset fund declared beside other funds
+*is* tradeable, which is the point of declaring it that way, and phase 1 will sell a
+taxable one to move its bond sleeve into a shelter. What survives of the old
+protection is `rebalance._foreign_credit_coefficient`, which scores a fund that is
+not majority-foreign at zero so no objective can reach inside one chasing a credit it
+cannot pass on. See [`solver.md`](solver.md).
+
+**A fund's name is unique within its account**, compared the way
+`rebalance._normalized_fund_name` compares them -- case and surrounding space are
+noise a user shouldn't have to get right. That name is the key an order is placed
+against, the key `report.allocation_after_trades` applies a trade by, and the label
+the report's rows are read by; two holdings sharing it make all three ambiguous at
+once. Two funds of the *same asset class* under different names are fine and
+ordinary: VTI beside VOO is two securities. Two with the same asset mix leave every
+location phase tied across every split between them, and which one a purchase lands
+in is deliberately unspecified -- see [`solver.md`](solver.md).
+
+**A declared fund is capacity, whatever it is worth -- and only a declared fund is
+ever traded.** A slot exists because the account *can* hold that fund, not because it
+currently does: `_build_slots` takes every non-cash holding regardless of value, its
+LP bound is `(0, account total)`, and `report` renders a zero one as `--` rather than
+`$0.00`. The model always allowed this; for a long time the only way to reach it was
+to answer "yes" to "does this account hold a bond fund?" and then type `0`, so the
+truthful answer removed the only place an asset class could ever go.
+
+The fix was once to ask for all three outright. With the fund list now the user's
+own, it is `prompts.FUND_EXPLANATION` instead: "Enter every fund this account can buy
+or sell -- only these can be traded. A $0 position is fine." Both halves are
+load-bearing. The first says what a fund left out costs, which is no longer merely a
+missing row; the second grants permission to name a fund not yet bought, which is the
+thing a reader hesitates over.
+
+The old rule's assumption -- that every such account can buy all three -- is gone with
+it, and so is the README limitation it carried. The exposure runs the other way now:
+an account whose funds the user under-declares has less capacity than it really has,
+and `_capacity_notes` is what says so.
 
 The reason it matters is that capacity is what the solver is short of. In the
-README's own example the added slots are what let the whole bond target be reached
-inside the shelters, so the taxable account is not touched at all; with the bond slot
-missing from the Roth it had to sell there.
+README's own example the declared-but-empty slots are what let the whole bond target
+be reached inside the shelters, so the taxable account is not touched at all; with
+the bond slot missing from the Roth it had to sell there.
 
-**A fund's name is asked immediately above its value, so the name prompt refuses an
+**A fund's name opens the block its value closes, so the name prompt refuses an
 answer the value prompt would have taken** -- `prompt_str`'s `reject_numeric`, passed
-only from `_prompt_holding`. On a saved account the ticker arrives pre-filled and the
+only from `_prompt_holding`. On a saved fund the ticker arrives pre-filled and the
 value is the only thing that changed quarter to quarter, which makes typing the new
 value at the name prompt the natural slip; nothing else caught it, so the amount
 became the fund's name, was saved to config.json, and came back in the plan as "Buy
@@ -139,11 +174,16 @@ The test is `_parses_as_a_number`, i.e. *what the other question accepts*, rathe
 a pattern of digits, so the two cannot drift apart: a value typed with a comma or a
 dollar sign is not one of these and `prompt_decimal` would have rejected it too. Only
 the fund prompts ask for it -- an account nickname sits next to no value question, and
-no order is placed against it.
+no order is placed against it. The kind question now sits between the name and the
+value, which makes the slip less likely and the check no less worth having.
 
-The consequence worth holding onto: **a target-date account has exactly one slot, so
-the per-account budget equality pins it outright.** No objective can reach inside it.
-That is what stops the solver from liquidating a taxable target-date fund to relocate
-the bond sleeve within it -- which it used to do even for a portfolio already sitting
-on its target. It also means such an account sets a *floor* under every asset class,
-not just a ceiling, which is why `_asset_class_reach` returns both.
+The consequence worth holding onto: **an account holding exactly one fund has exactly
+one slot, so the per-account budget equality pins it outright.** No objective can
+reach inside it. An account whose only holding is a multi-asset fund therefore sets a
+*floor* under every asset class and not just a ceiling, which is why
+`_asset_class_reach` returns both -- and it is the only thing that can still set a
+non-zero one, since an account holding two or more funds has a coefficient running
+down to whatever its smallest is.
+
+Note this is a property of the *account* now, not of the fund. The same multi-asset
+fund with a second fund beside it is traded like anything else.

@@ -10,10 +10,10 @@ from three_fund_rebalance.allocation import (
 )
 from three_fund_rebalance.models import (
     Account,
+    FundAllocation,
     FundType,
     Holding,
     TargetAllocation,
-    TargetDateAllocation,
     TaxTreatment,
     to_cents,
 )
@@ -28,7 +28,7 @@ from three_fund_rebalance.rebalance import (
 
 def holding(fund_type, name, value, allocation=None):
     return Holding(
-        fund_type=fund_type, name=name, value=Decimal(value), target_date_allocation=allocation
+        fund_type=fund_type, name=name, value=Decimal(value), allocation=allocation
     )
 
 
@@ -200,7 +200,7 @@ class TestUnreachableTargets:
         """A pinned account sets a floor as well as a ceiling: this fund is
         20% bonds and the account holds nothing else, so the portfolio cannot
         hold less than $2,000 of bonds however the rest is arranged."""
-        target_date_alloc = TargetDateAllocation(
+        target_date_alloc = FundAllocation(
             us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
@@ -208,7 +208,7 @@ class TestUnreachableTargets:
                 "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(
-                        FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc
+                        FundType.MULTI_ASSET, "Target 2050", 10_000, allocation=target_date_alloc
                     )
                 ],
             ),
@@ -234,7 +234,7 @@ class TestUnreachableTargets:
         of bonds against a 0% bond target, and U.S. stock still lands exactly
         on its $10,000 target -- international absorbs the whole shortfall,
         because it is the only class with anywhere left to give."""
-        target_date_alloc = TargetDateAllocation(
+        target_date_alloc = FundAllocation(
             us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
@@ -242,7 +242,7 @@ class TestUnreachableTargets:
                 "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(
-                        FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc
+                        FundType.MULTI_ASSET, "Target 2050", 10_000, allocation=target_date_alloc
                     )
                 ],
             ),
@@ -264,7 +264,7 @@ class TestUnreachableTargets:
         with no band at all -- can miss the edge by a billionth of a dollar.
         Reporting that as a target out of reach would be reporting solver
         noise."""
-        target_date_alloc = TargetDateAllocation(
+        target_date_alloc = FundAllocation(
             us_stock_pct=Decimal("34.98"),
             international_stock_pct=Decimal("32.73"),
             bond_pct=Decimal("32.29"),
@@ -272,7 +272,7 @@ class TestUnreachableTargets:
         accounts = [
             account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
                 holding(
-                    FundType.TARGET_DATE, "Target 2065", "958489.36", allocation=target_date_alloc
+                    FundType.MULTI_ASSET, "Target 2065", "958489.36", allocation=target_date_alloc
                 ),
             ]),
         ]
@@ -365,7 +365,7 @@ class TestInternationalPlacement:
     taxable-trading objective, so it is a tie-break and never a reason to
     trade."""
 
-    TARGET_DATE_ALLOCATION = TargetDateAllocation(
+    TARGET_DATE_ALLOCATION = FundAllocation(
         us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
     )
 
@@ -473,7 +473,7 @@ class TestInternationalPlacement:
                 holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
             ]),
             account("Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED, [
-                holding(FundType.TARGET_DATE, "Target 2050", 10_000,
+                holding(FundType.MULTI_ASSET, "Target 2050", 10_000,
                         allocation=self.TARGET_DATE_ALLOCATION),
             ]),
         ]
@@ -481,12 +481,107 @@ class TestInternationalPlacement:
         assert result.trades == []
 
 
+class TestForeignTaxCreditIsReadByMajority:
+    """Phase 5 counts a fund when more than half of it is foreign, and then
+    at its foreign share. That is the rule a fund actually passes the credit
+    through under, and it replaces a `fund_type == INTERNATIONAL_STOCK` test
+    that was the same rule stated for the only two kinds of fund that used to
+    exist.
+
+    `test_the_disclosure_counts_the_foreign_sleeve_and_not_the_whole_order`
+    is the one that earns its keep against the old rule -- it is arithmetic
+    rather than placement. The two placement tests pass under either rule, as
+    `docs/solver.md` warns placement tests in a degenerate LP tend to: HiGHS
+    already picks the preferred vertex on its own. They are here to pin the
+    outcome against a future re-ranking, not as evidence the ranking works."""
+
+    def _free_placement(self, sheltered_fund, taxable_fund):
+        """Both accounts hold only cash, so every placement costs the same
+        trading and phase 5 is the first objective with anything to say."""
+        return [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                taxable_fund,
+                holding(FundType.CASH, "", 10_000),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "VTI", 0),
+                sheltered_fund,
+                holding(FundType.CASH, "", 10_000),
+            ]),
+        ]
+
+    def test_a_mostly_foreign_fund_is_preferred_in_taxable(self):
+        """An 80/20 international fund is majority-foreign in fact, and the
+        old fund-type test would have scored it zero and left its placement
+        to the solver."""
+        mostly_foreign = FundAllocation(
+            us_stock_pct=Decimal(20), international_stock_pct=Decimal(80), bond_pct=Decimal(0)
+        )
+        accounts = self._free_placement(
+            holding(FundType.MULTI_ASSET, "FTIHX", 0, mostly_foreign),
+            holding(FundType.MULTI_ASSET, "FTIHX", 0, mostly_foreign),
+        )
+        # A 60/40 target on $20,000 wants $8,000 of international, which is
+        # $10,000 of this fund -- exactly one account's worth, so where it
+        # goes is free and phase 5 is the first objective with a view.
+        trades = trades_by_key(compute_trades(accounts, target(60, 40, 0)))
+        assert trades[("Brokerage", "FTIHX")] == ("buy", Decimal("10000.00"))
+        assert trades[("Roth", "VTI")] == ("buy", Decimal("10000.00"))
+        assert ("Roth", "FTIHX") not in trades
+
+    def test_a_target_date_fund_passes_no_credit_through_so_it_is_left_alone(self):
+        """The guard the fund-type test used to provide, now provided by the
+        majority threshold: a 20%-international target-date fund scores zero,
+        so no objective can reach inside one to liquidate half of it chasing
+        a credit that fund cannot pass on."""
+        accounts = [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 6_000),
+                holding(FundType.INTERNATIONAL_STOCK, "VXUS", 2_000),
+                holding(FundType.US_BOND, "BND", 2_000),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.MULTI_ASSET, "Target 2050", 10_000, MIX_60_20_20),
+                holding(FundType.US_STOCK, "VTI", 0),
+            ]),
+        ]
+        # The portfolio already sits on target, and the Roth's second slot
+        # means its multi-asset fund is no longer pinned -- so if phase 5
+        # counted the fund's 20% sleeve it would have something to chase.
+        result = compute_trades(accounts, target(60, 20, 20))
+        assert result.trades == []
+
+    def test_the_disclosure_counts_the_foreign_sleeve_and_not_the_whole_order(self):
+        """The note says "$X of international stocks", so X has to be the
+        international part of what was bought."""
+        mostly_foreign = FundAllocation(
+            us_stock_pct=Decimal(20), international_stock_pct=Decimal(80), bond_pct=Decimal(0)
+        )
+        accounts = [
+            account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
+                holding(FundType.US_STOCK, "VTI", 10_000),
+            ]),
+            account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
+                holding(FundType.US_STOCK, "VTI", 10_000),
+                holding(FundType.MULTI_ASSET, "FTIHX", 0, mostly_foreign),
+            ]),
+        ]
+        result = compute_trades(accounts, target(60, 40, 0))
+        bought = trades_by_key(result)[("Roth", "FTIHX")][1]
+        note = "\n".join(note_texts(result))
+        assert "International stocks in tax-advantaged" in note
+        # 80% of the order, not the order.
+        assert f"${bought * Decimal('0.8'):,.2f}" in note
+        assert f"Buying ${bought:,.2f} of international" not in note
+
+
 class TestInternationalLocationDisclosure:
     """Phase 5 wants international in taxable; phase 2 outranks it. When that
     ranking sends international the other way the plan looks contrary to what
     it optimizes for, so the note says which preference gave way."""
 
-    TARGET_DATE_ALLOCATION = TargetDateAllocation(
+    TARGET_DATE_ALLOCATION = FundAllocation(
         us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
     )
 
@@ -552,7 +647,7 @@ class TestInternationalLocationDisclosure:
         kind of account and there is nothing here to have given up."""
         accounts = [
             account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
-                holding(FundType.TARGET_DATE, "Target 2050", 100_000,
+                holding(FundType.MULTI_ASSET, "Target 2050", 100_000,
                         allocation=self.TARGET_DATE_ALLOCATION),
             ]),
             account("Brokerage", "Brokerage", TaxTreatment.TAXABLE, [
@@ -565,9 +660,138 @@ class TestInternationalLocationDisclosure:
         assert not any("International stocks in tax-advantaged" in n for n in note_texts(result))
 
 
+MIX_60_20_20 = FundAllocation(
+    us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
+)
+
+
+class TestMultiAssetFundsBesideOthers:
+    """An account may hold a multi-asset fund alongside funds dedicated to a
+    single asset class. That is the point of the change, and it undoes the one
+    structural guarantee the old rule bought: such a fund is tradeable rather
+    than pinned by its account's own budget row."""
+
+    def test_a_multi_asset_fund_beside_other_funds_can_be_traded(self):
+        """With a second fund in the account the budget row no longer pins
+        it, so phase 1 can reach the bond sleeve it used to have to leave
+        alone. $10,000 of the fund is $2,000 of bonds sitting in a taxable
+        account, and the Roth has room to hold them instead."""
+        accounts = [
+            account(
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                [
+                    holding(FundType.MULTI_ASSET, "Target 2050", 10_000, MIX_60_20_20),
+                    holding(FundType.US_STOCK, "VTI", 0),
+                    holding(FundType.INTERNATIONAL_STOCK, "VXUS", 0),
+                ],
+            ),
+            account(
+                "Roth IRA", "Roth", TaxTreatment.TAX_FREE,
+                [
+                    holding(FundType.US_STOCK, "VTI", 10_000),
+                    holding(FundType.US_BOND, "BND", 0),
+                ],
+            ),
+        ]
+        result = compute_trades(accounts, target(60, 20, 20))
+        trades = trades_by_key(result)
+        assert trades[("Brokerage", "Target 2050")][0] == "sell"
+        assert result.taxable_bond_dollars == Decimal(0)
+
+    def test_the_same_fund_alone_in_its_account_is_still_pinned(self):
+        """The contrast that makes the test above mean something. Nothing
+        about the fund changed -- what changed is whether its account has a
+        second slot for the budget row to move money into."""
+        accounts = [
+            account(
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                [holding(FundType.MULTI_ASSET, "Target 2050", 10_000, MIX_60_20_20)],
+            ),
+            account(
+                "Roth IRA", "Roth", TaxTreatment.TAX_FREE,
+                [
+                    holding(FundType.US_STOCK, "VTI", 10_000),
+                    holding(FundType.US_BOND, "BND", 0),
+                ],
+            ),
+        ]
+        result = compute_trades(accounts, target(60, 20, 20))
+        assert ("Brokerage", "Target 2050") not in trades_by_key(result)
+        assert result.taxable_bond_dollars == Decimal("2000.00")
+
+    def test_two_multi_asset_funds_in_one_account_are_solved_together(self):
+        """Each contributes its own sleeves, and the account still spends
+        exactly its own total across the two."""
+        sixty_forty = FundAllocation(
+            us_stock_pct=Decimal(36), international_stock_pct=Decimal(24), bond_pct=Decimal(40)
+        )
+        accounts = [
+            account(
+                "Roth IRA", "Roth", TaxTreatment.TAX_FREE,
+                [
+                    holding(FundType.MULTI_ASSET, "Target 2050", 10_000, MIX_60_20_20),
+                    holding(FundType.MULTI_ASSET, "LifeStrategy", 0, sixty_forty),
+                ],
+            )
+        ]
+        # The two mixes differ in all three sleeves, so what the account can
+        # reach is the line between them -- 48/22/30 is its midpoint.
+        result = compute_trades(accounts, target(48, 22, 30))
+        trades = trades_by_key(result)
+        assert trades[("Roth", "Target 2050")][0] == "sell"
+        assert trades[("Roth", "LifeStrategy")][0] == "buy"
+        assert (
+            trades[("Roth", "Target 2050")][1] == trades[("Roth", "LifeStrategy")][1]
+        ), "the account spends exactly its own total"
+
+
+class TestInterchangeableFunds:
+    """Two funds with the same asset mix in one account are allowed, and the
+    portfolio solves. Which of the two a purchase lands in is **not
+    specified**: they leave every location phase exactly tied across every
+    split between them, so the answer is whichever vertex HiGHS returns.
+
+    A seventh phase settling that by declared order was written and reverted
+    -- weighting every slot's movement by its position reaches far beyond the
+    tied slots and became a preference for trading in earlier-declared
+    accounts, visible as a reshuffle of the README's own example. See
+    `docs/solver.md`. So these tests pin what is actually promised: the
+    portfolio is solvable, the totals are right, and one run matches the
+    next."""
+
+    def _two_us_funds(self):
+        return [
+            account(
+                "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
+                [
+                    holding(FundType.US_STOCK, "VTI", 0),
+                    holding(FundType.US_STOCK, "VOO", 0),
+                    holding(FundType.US_BOND, "BND", 10_000),
+                ],
+            )
+        ]
+
+    def test_the_purchase_is_solved_across_the_two(self):
+        result = compute_trades(self._two_us_funds(), target(60, 0, 40))
+        trades = trades_by_key(result)
+        bought = sum(
+            amount for (_, fund), (action, amount) in trades.items()
+            if fund in ("VTI", "VOO") and action == "buy"
+        )
+        assert bought == Decimal("6000.00")
+        assert trades[("Brokerage", "BND")] == ("sell", Decimal("6000.00"))
+
+    def test_the_same_portfolio_plans_the_same_way_twice(self):
+        """What determinism the program does offer: nothing about a solve
+        depends on anything outside the accounts it was given."""
+        first = trades_by_key(compute_trades(self._two_us_funds(), target(60, 0, 40)))
+        second = trades_by_key(compute_trades(self._two_us_funds(), target(60, 0, 40)))
+        assert first == second
+
+
 class TestTargetDateFunds:
     def test_target_date_fund_only_account_already_balanced(self):
-        target_date_alloc = TargetDateAllocation(
+        target_date_alloc = FundAllocation(
             us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
@@ -575,7 +799,7 @@ class TestTargetDateFunds:
                 "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
                 [
                     holding(
-                        FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc
+                        FundType.MULTI_ASSET, "Target 2050", 10_000, allocation=target_date_alloc
                     )
                 ],
             )
@@ -587,13 +811,13 @@ class TestTargetDateFunds:
         """A target-date account has one slot, so its budget constraint fixes
         it outright. Its sleeves still count toward the aggregate targets --
         the individual-fund account has to work around them."""
-        target_date_alloc = TargetDateAllocation(
+        target_date_alloc = FundAllocation(
             us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
             account(
                 "Roth 401(k)", "401k", TaxTreatment.TAX_DEFERRED,
-                [holding(FundType.TARGET_DATE, "TargetFund", 5000, allocation=target_date_alloc)],
+                [holding(FundType.MULTI_ASSET, "TargetFund", 5000, allocation=target_date_alloc)],
             ),
             account(
                 "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
@@ -619,13 +843,13 @@ class TestTargetDateFunds:
         to relocate $1,000, in a portfolio already sitting on its target.
         Pinning the account makes that unreachable rather than merely
         undesirable."""
-        target_date_alloc = TargetDateAllocation(
+        target_date_alloc = FundAllocation(
             us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
             account(
                 "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
-                [holding(FundType.TARGET_DATE, "Target 2050", 5000, allocation=target_date_alloc)],
+                [holding(FundType.MULTI_ASSET, "Target 2050", 5000, allocation=target_date_alloc)],
             ),
             account(
                 "Roth IRA", "Roth", TaxTreatment.TAX_DEFERRED,
@@ -642,7 +866,7 @@ class TestTargetDateFunds:
         assert result.notes
 
     def test_target_date_fund_in_taxable_account_counts_toward_taxable_bonds(self):
-        target_date_alloc = TargetDateAllocation(
+        target_date_alloc = FundAllocation(
             us_stock_pct=Decimal(60), international_stock_pct=Decimal(20), bond_pct=Decimal(20)
         )
         accounts = [
@@ -650,7 +874,7 @@ class TestTargetDateFunds:
                 "Brokerage", "Brokerage", TaxTreatment.TAXABLE,
                 [
                     holding(
-                        FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc
+                        FundType.MULTI_ASSET, "Target 2050", 10_000, allocation=target_date_alloc
                     )
                 ],
             )
@@ -1163,14 +1387,14 @@ class TestRebalancingBand:
         target on every run and trade on any drift at all. The trigger reads
         the band widened to what the accounts can hold, so the run that gets
         a pinned class as close as it can go is the last run that trades."""
-        target_date_alloc = TargetDateAllocation(
+        target_date_alloc = FundAllocation(
             us_stock_pct=Decimal(80), international_stock_pct=Decimal(0), bond_pct=Decimal(20)
         )
         # The 401(k) pins $2,000 of bonds against a 0% bond target; the Roth
         # holds $1,000 more, and those are the only ones that can be sold.
         accounts = [
             account("Traditional 401(k)", "401k", TaxTreatment.TAX_DEFERRED, [
-                holding(FundType.TARGET_DATE, "Target 2050", 10_000, allocation=target_date_alloc),
+                holding(FundType.MULTI_ASSET, "Target 2050", 10_000, allocation=target_date_alloc),
             ]),
             account("Roth IRA", "Roth", TaxTreatment.TAX_FREE, [
                 holding(FundType.US_STOCK, "VTI", 9_000),
@@ -1237,17 +1461,17 @@ class TestAllocationIsSettledBeforeLocation:
         # international parked in a Roth and a taxable account that has no
         # room to take it -- so phase 5 has no legal way to relocate, and
         # phase 4 has nowhere to move the Roth's bonds to.
-        target_date = TargetDateAllocation(
+        target_date = FundAllocation(
             us_stock_pct=Decimal("63.2"),
             international_stock_pct=Decimal("34.9"),
             bond_pct=Decimal("1.9"),
         )
         return [
             account("Traditional 401(k)", "Trad 401k", TaxTreatment.TAX_DEFERRED, [
-                holding(FundType.TARGET_DATE, "Target 2065", "48086.90", target_date),
+                holding(FundType.MULTI_ASSET, "Target 2065", "48086.90", target_date),
             ]),
             account("Roth 401(k)", "Roth 401k", TaxTreatment.TAX_FREE, [
-                holding(FundType.TARGET_DATE, "Target 2065", "16717.72", target_date),
+                holding(FundType.MULTI_ASSET, "Target 2065", "16717.72", target_date),
             ]),
             account("Roth IRA", "Roth IRA", TaxTreatment.TAX_FREE, [
                 holding(FundType.US_STOCK, "VTSAX", "19381.57"),
@@ -1556,7 +1780,7 @@ class TestClassTotalsSumToThePortfolio:
     it is infeasible. These are the ways it got broken.
     """
 
-    TARGET_DATE_ALLOCATION = TargetDateAllocation(
+    TARGET_DATE_ALLOCATION = FundAllocation(
         us_stock_pct=Decimal("63.2"),
         international_stock_pct=Decimal("34.9"),
         bond_pct=Decimal("1.9"),
@@ -1576,7 +1800,7 @@ class TestClassTotalsSumToThePortfolio:
                 TaxTreatment.TAX_DEFERRED,
                 [
                     holding(
-                        FundType.TARGET_DATE,
+                        FundType.MULTI_ASSET,
                         "Target Date 2065 Fund",
                         "31908.17",
                         self.TARGET_DATE_ALLOCATION,
@@ -1589,7 +1813,7 @@ class TestClassTotalsSumToThePortfolio:
                 TaxTreatment.TAX_FREE,
                 [
                     holding(
-                        FundType.TARGET_DATE,
+                        FundType.MULTI_ASSET,
                         "Target Date 2065 Fund",
                         "17288.58",
                         self.TARGET_DATE_ALLOCATION,
@@ -1640,11 +1864,11 @@ class TestClassTotalsSumToThePortfolio:
         self, us_stock, international, bond
     ):
         """A fact sheet rounds each sleeve to a tenth, so the three need not
-        come to 100 -- TargetDateAllocation allows a tenth either way. Read
+        come to 100 -- FundAllocation allows a tenth either way. Read
         as literal percentages, such a fund's sleeves contradict its own
         account budget by a tenth of a percent of the account, which is a
         thousand times the slack the solver has."""
-        allocation = TargetDateAllocation(
+        allocation = FundAllocation(
             us_stock_pct=Decimal(us_stock),
             international_stock_pct=Decimal(international),
             bond_pct=Decimal(bond),
@@ -1654,7 +1878,7 @@ class TestClassTotalsSumToThePortfolio:
                 "Traditional 401(k)",
                 "401k",
                 TaxTreatment.TAX_DEFERRED,
-                [holding(FundType.TARGET_DATE, "TDF", "31908.17", allocation)],
+                [holding(FundType.MULTI_ASSET, "TDF", "31908.17", allocation)],
             ),
             account(
                 "Roth IRA",
@@ -1714,7 +1938,7 @@ class TestClassTotalsSumToThePortfolio:
                 TaxTreatment.TAX_DEFERRED,
                 [
                     holding(
-                        FundType.TARGET_DATE,
+                        FundType.MULTI_ASSET,
                         "TDF",
                         "4695425564",
                         self.TARGET_DATE_ALLOCATION,

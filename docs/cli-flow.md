@@ -110,3 +110,28 @@ that reads as its opposite number, and it is not. `--no-save`'s help now names
 the portfolio file outright for the same reason, and the README says it in a
 sentence, since a help string is not where someone resolves a confusion they
 have not had yet.
+
+## An account's funds are a list the user builds
+
+Step 3 no longer asks which *kind* of account this is and then walks fixed slots.
+It loops: a fund's name, which of four things it holds, its mix if that is "a mix of
+asset classes", and its value -- then "Add another fund?", defaulting to yes.
+`prompts.FUND_EXPLANATION` is said once above the list, for a new account and for a
+saved one that has no funds yet, and not for one whose funds are being re-confirmed:
+`prompt_accounts` has already said how a saved answer is kept, and an instruction
+repeated under every account every run says nothing the run before it did.
+
+A saved account's funds are walked first, each behind **"Keep this fund?"** -- the same
+gate, the same default and the same `Removed '<name>'.` that `prompt_revise_account`
+puts in front of an account. It is the only way to drop a fund from a list nothing
+else bounds, which is why it is worth a question per fund per run. The account-level
+gate answers "is this account still mine"; the fund-level one answers "is this fund
+still in the lineup", and a user who changes neither presses Enter through both.
+
+Every answer on a saved fund is an editable default, its *kind* included, so replacing
+an index fund with a balanced one is one keystroke rather than a removal and a
+re-entry. A fund whose kind changes *to* multi-asset has no saved mix and is asked for
+one outright -- the same branch a brand new fund takes.
+
+The update menu reaches all of this through `prompt_revise_account`, unchanged: it is
+still the account that is picked from the menu, and the fund list is walked inside it.

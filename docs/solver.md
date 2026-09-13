@@ -20,7 +20,7 @@ either of the other two at identical cost, so which one got sold came down to
 whichever vertex HiGHS happened to return.
 
 **The gate reads the band `_reachable_bounds` has widened**, not the band the user set.
-A class the accounts pin outside its band -- a target-date fund's bond sleeve against a
+A class the accounts pin outside its band -- a multi-asset fund's bond sleeve against a
 0% bond target -- is outside it forever, and a band that can never be satisfied is a
 band that never says "leave it alone": every later run would drive all three classes
 back to exact target and trade on any drift at all, which is the opposite of what a
@@ -70,7 +70,7 @@ band has had its say at the gate, and constraining these to it as well is what u
 turn a target the accounts cannot quite reach into a refusal to plan at all.
 
 **(3) exists because (2) goes flat too, and in a way that is easy to miss.** When every
-class sits on the *same* side of its target -- which a target-date fund's bond sleeve
+class sits on the *same* side of its target -- which a multi-asset fund's bond sleeve
 against a 0% bond target produces on every run -- a dollar given to any class closes the
 total gap by exactly a dollar and moves the portfolio by exactly a dollar, so both
 objectives above tie across the whole face and the split comes down to whichever vertex
@@ -115,7 +115,7 @@ that needs it, rather than by raising `_ALLOCATION_WIDTH` under both allocation 
 indifferent to the whole thing: sharing a purchase across two funds moves the same
 dollars, which is all that phase measures.
 
-**Skipping that stage and handing the band to the six phases below is a bug that was
+**Skipping that stage and handing the band to the phases below is a bug that was
 shipped once and caught in real use.** Given a portfolio inside its band but with
 international parked in a Roth and a taxable account too full to take any, phase 5
 could not relocate -- so it satisfied itself by *selling* international and buying U.S.
@@ -144,6 +144,29 @@ later phases refine but never undo earlier ones:
    however many funds the buy side is split across. Splitting one purchase into
    two is free here, which is what lets the allocation stage's third objective
    do it.
+
+**Which of two interchangeable funds gets bought is not specified, and a seventh
+phase to specify it was tried and reverted.** Now that an account may hold two funds
+with the same asset mix -- VTI beside VOO, or beside a 100%-U.S. multi-asset fund --
+every phase above ties across every split between them, so the answer comes down to
+whichever vertex HiGHS returns. That is the shape `_resolve_allocation`'s third
+objective exists to close one stage down, so closing it here looked obvious.
+
+The attempt was `over_movement([float(i) for i in range(n)])` appended as phase 7:
+weight each slot's movement by its declared position, so a tie resolves toward the
+fund entered first. It does not do that. The weight reaches **every** slot in the
+portfolio, not only the tied ones, so what it actually expresses is "prefer to trade
+in earlier-declared accounts" -- a placement preference nobody designed, sitting below
+six that were. It rewrote the README's own example from four orders to two with the
+same total volume, which is how it was caught. No test failed: today's HiGHS already
+returns the first-declared fund, so `TestInterchangeableFunds` passed either way and
+proved nothing, exactly as the caution below about degenerate placements predicts.
+
+Doing it properly means a cost that is zero everywhere except among slots sharing an
+account *and* an asset mix -- a different kind of objective from the six here, all of
+which are stated over a whole class of account. Until there is a reason to want it the
+tie stands unresolved, and `TestInterchangeableFunds` pins only what is promised: the
+portfolio solves, the totals are right, and one run matches the next.
 
 The variable layout is `[ x (n) | y (n) | w (k) ]` -- slot values, their absolute
 deviations `|x - current|`, and one-sided purchase amounts for phase 3. It is built
@@ -183,11 +206,27 @@ a realized gain we cannot even measure, and the same logic governs 3 and 4.
 
 Some finer points that are easy to undo by accident:
 
-- **Phase 5 tests `slot.fund_type` directly** rather than going through
-  `_fund_type_coefficient`. A target-date fund is not majority-foreign, so it passes
-  no credit through from either kind of account, and counting its international sleeve
-  makes the solver liquidate half a TDF for nothing
-  (`test_target_date_international_sleeve_is_left_alone` pins this).
+- **Phase 5 reads `_foreign_credit_coefficient`** rather than
+  `_fund_type_coefficient`. A regulated investment company may pass the foreign tax it
+  paid through to its shareholders only when more than half its assets are foreign, so
+  the coefficient is the fund's international share above that line and zero at or
+  below it. A target-date fund scores zero, which is what stops the solver liquidating
+  half of one to chase a credit it cannot pass on.
+
+  This used to be a bare `slot.fund_type == INTERNATIONAL_STOCK`, which was the same
+  rule stated for the only two kinds of fund that could exist: a dedicated
+  international fund is majority-foreign and a target-date fund is not. Once an
+  account can hold a fund declared 80/20 international the two come apart, and the
+  fund-type version reads a majority-foreign fund as passing nothing through at all.
+  The threshold is in the rule rather than a tuning knob -- `_MAJORITY_FOREIGN` is
+  `0.5` because that is what the pass-through test is.
+
+  The old fund-type test also carried the guarantee that a multi-asset fund could not
+  be reached at all, because its account had exactly one slot. That is gone (see
+  [`invariants.md`](invariants.md)), so this coefficient is now the whole of the
+  protection rather than a second line of it. Only the disclosure test earns its keep
+  against the old rule; the two placement tests pass either way, as placement tests in
+  a degenerate LP tend to.
 - **Phase 5 losing is disclosed, and it is the only phase whose loss is.**
   `_international_location_notes` fires when the plan *buys* international stock in a
   tax-advantaged account, which is phase 2 outranking phase 5 -- the one place the plan
@@ -196,8 +235,12 @@ Some finer points that are easy to undo by accident:
   `_taxable_sale_note` fires only on a sale: international already sitting in a shelter
   is the common case and reports nothing worth reading, so a note that fired on it
   would fire nearly every run. Silent with no taxable account, where there is no
-  alternative to describe, and it reads `trade.fund_type` for the same reason phase 5
-  reads `slot.fund_type` -- a target-date sleeve is not what it is about. **It says
+  alternative to describe, and it reads `_foreign_credit_coefficient` for the same
+  reason phase 5
+  reads it -- a multi-asset fund's sleeve is not what it is about. It counts the
+  *foreign sleeve* of what was bought rather than the whole order, which is what the
+  sentence claims it is; a `Trade` carries no allocation, so the holding is looked up
+  by `(account, fund name)`, a pair `Account` guarantees is unique. **It says
   what the alternative would have cost, never where the phase sat**, because a note is
   read by someone holding a plan and not by someone holding this file. It shipped once
   as "Avoiding a taxable sale ranks higher", which names an ordering the reader has
@@ -209,10 +252,11 @@ Some finer points that are easy to undo by accident:
   sentence, and a label is worth three lines only if it survives the render -- dropping
   "there" from the last sentence is what bought the room back at a ten-figure amount.
 - **Phase 4 does the opposite, deliberately**, and uses `_fund_type_coefficient`.
-  Bonds inside a Roth's target-date fund really are bonds occupying tax-free space,
-  exactly as phase 1 counts them -- and a TDF account is pinned by its own budget row
-  anyway, so counting them states the truth without giving the solver anything to act
-  on.
+  Bonds inside a Roth's multi-asset fund really are bonds occupying tax-free space,
+  exactly as phase 1 counts them, so counting them states the truth. It used to state
+  it without giving the solver anything to act on, because such an account was pinned
+  by its own budget row; where the fund now sits beside others, phase 4 can and should
+  act on it.
 - **Phase 3 penalizes only the sheltered *buy* side.** The taxable sale is the leg
   that realizes the loss, but it is also the leg phase 2 has already minimized and the
   one the portfolio usually has no choice about; penalizing it too would put phase 3
@@ -268,7 +312,7 @@ for rejecting the impossible, not for certifying the possible. That surfaces thr
 `_check_capacity_feasible` raised when the band and the reach did not overlap, so an
 unreachable target was an error unless the band happened to be wide enough to cover the
 gap -- widening a band silently converted a refusal into a plan, and a 0% bond target
-against a target-date fund's bond sleeve could not be planned at all, which is how it
+against a multi-asset fund's bond sleeve could not be planned at all, which is how it
 was found. Both it and `_band_note` are gone. The band is now the trigger and nothing
 else.
 
@@ -281,17 +325,26 @@ not a fact about that one, which on its own could have reached its target. The r
 marks it outside its band and says no more, because the only available explanation
 would be a false one.
 
-Since an account holding individual funds declares all three, its coefficient for
-every class runs 0 to 1 -- floor zero, ceiling its whole value -- so **a target-date
-account is now the only thing that can pin one.** Both messages used to say so
-outright, in a second indented paragraph ("an account holding a single fund has to put
-its whole value into that fund, and a target-date fund's mix is fixed"); shortening
-each note to one paragraph cut that, and each remedy now names one culprit and stops --
-"hold target-date funds in a smaller percentage of the portfolio" against a floor,
-"hold individual funds in a larger percentage" against a ceiling. Note the bound
-itself is general -- `compute_trades` is public and tests call it with partial slot
-sets -- so a message may name the likely cause but never asserts it, which is what makes
-each of those a remedy to try rather than a diagnosis.
+An account holding two or more funds has a coefficient running down to its smallest,
+so **an account holding exactly one fund is the only thing that can pin a floor.**
+Both messages used to say so outright, in a second indented paragraph ("an account
+holding a single fund has to put its whole value into that fund, and a target-date
+fund's mix is fixed"); shortening each note to one paragraph cut that, and each remedy
+now names one culprit and stops.
+
+The two name different culprits, because the two directions have different usual
+causes. A floor is what a multi-asset fund pins, since its mix cannot be split: "hold
+multi-asset funds in a smaller percentage of the portfolio". A ceiling used to be
+"hold individual funds in a larger percentage", which made sense while every such
+account declared all three classes by construction -- the only way to be short of a
+class was to hold too little of that kind of account. Now that an account declares
+only the funds the user entered, the usual cause is that the class has nowhere to go
+at all, and the remedy says so: "add a bond fund to more accounts", with the class's
+own label in it.
+
+Note the bound itself is general -- `compute_trades` is public and tests call it with
+partial slot sets -- so a message may name the likely cause but never asserts it, which
+is what makes each of those a remedy to try rather than a diagnosis.
 
 **The two directions are one sentence read twice.** "These accounts cannot hold less
 than $X, or Y% of the portfolio. Raise the target, or ..." and "These accounts cannot

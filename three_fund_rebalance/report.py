@@ -54,6 +54,7 @@ from three_fund_rebalance.formatting import (
     format_account_heading,
     format_date,
     format_generated_at,
+    format_percent,
     format_percent_prose,
     format_percents,
     format_subheading,
@@ -61,6 +62,7 @@ from three_fund_rebalance.formatting import (
 )
 from three_fund_rebalance.models import (
     Account,
+    FundAllocation,
     FundType,
     Note,
     RebalanceResult,
@@ -253,7 +255,7 @@ def allocation_after_trades(accounts: list[Account], trades: list[Trade]) -> dic
     """What each asset class will be worth once these orders are filled.
 
     Applied to the holdings rather than to the class totals, so a trade in a
-    target-date fund moves all three of its sleeves by the right fractions.
+    multi-asset fund moves all three of its sleeves by the right fractions.
     Cash is left out: it has no trade of its own because it is not a
     security, but the per-account budget spends every dollar of it, so the
     buys above already account for it.
@@ -266,9 +268,7 @@ def allocation_after_trades(accounts: list[Account], trades: list[Trade]) -> dic
 
     after = []
     for account in accounts:
-        for holding in account.holdings:
-            if holding.fund_type == FundType.CASH:
-                continue
+        for holding in account.funds():
             delta = deltas.get((account.name, holding.fund_type, holding.name), Decimal(0))
             after.append(replace(holding, value=holding.value + delta))
 
@@ -394,6 +394,36 @@ def _describe_band(inputs: RebalanceInputs) -> list[str]:
     return lines
 
 
+def _describe_mix(allocation: FundAllocation, indent: str) -> list[str]:
+    """A multi-asset fund's own mix, one asset class to a line.
+
+    The same shape the Target Asset Allocation block uses -- label left, share
+    right-aligned -- because it is the same kind of content: the three asset
+    classes and what each comes to. Run together on one line they read as a
+    sentence about the fund, which is not what they are; down the page each
+    share sits under the one above it, and can be read against the target
+    table without unpicking a clause first. The classes are named in the
+    order every table here names them, from `_CATEGORY_FUND_TYPES`.
+
+    The figures are the fund's own, exactly as entered, so they deliberately
+    do **not** go through `format_percents`: that rounds to
+    `PERCENT_MAX_PLACES`, and a fact sheet printing 34.34% is entitled to be
+    read back as 34.34%. That is also why they are right-aligned rather than
+    aligned on the decimal point -- sleeves entered at different precisions
+    have no common point to align on, so the percent signs are what line up.
+    """
+    cells = [
+        (label, f"{format_percent(allocation.percent_of(fund_type))}%")
+        for label, fund_type in _CATEGORY_FUND_TYPES.items()
+    ]
+    label_width = max(len(label) for label, _ in cells)
+    share_width = max(len(share) for _, share in cells)
+    return [
+        f"{indent}{label:<{label_width}}  {share:>{share_width}}"
+        for label, share in cells
+    ]
+
+
 def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
     lines = _subheading("Account Holdings")
     for index, account in enumerate(inputs.accounts):
@@ -410,20 +440,31 @@ def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
         treatment = TAX_TREATMENT_LABELS[account.tax_treatment]
         heading = format_account_heading(account.name, f"{account.account_type}, {treatment}")
 
-        rows = []
+        # Three fields per row, the third being the mix a multi-asset fund
+        # carries. It is a block of its own rather than a cell: it is set one
+        # level deeper than its row, with its own two columns, and is sized
+        # out of the width computation below, which reads the account's two
+        # real columns only.
+        rows: list[tuple[str, str, FundAllocation | None]] = []
         for holding in account.holdings:
             if holding.fund_type == FundType.CASH:
-                rows.append(("Cash available to invest", _money(holding.value)))
+                rows.append(("Cash available to invest", _money(holding.value), None))
                 continue
             label = ASSET_CLASS_LABELS[holding.fund_type]
             # A declared position holding nothing is capacity, not a holding;
             # "$0.00" gives it a false air of precision.
             amount = _money(holding.value) if holding.value > 0 else "--"
-            rows.append((f"{holding.name} ({label} fund)", amount))
-        rows.append(("Total", _money(account.total_value())))
+            # Stated for a multi-asset fund and only for one. The three
+            # single-asset labels say everything there is to say about what
+            # those funds hold; a multi-asset fund's mix is the user's own
+            # answer, and a plan read days later cannot be checked against
+            # the fact sheet it came from without it.
+            mix = holding.allocation if holding.fund_type == FundType.MULTI_ASSET else None
+            rows.append((f"{holding.name} ({label} fund)", amount, mix))
+        rows.append(("Total", _money(account.total_value()), None))
 
-        label_width = max(len(label) for label, _ in rows)
-        amount_width = max(len(amount) for _, amount in rows)
+        label_width = max(len(label) for label, _, _ in rows)
+        amount_width = max(len(amount) for _, amount, _ in rows)
         body_indent = INDENT_UNIT * 2
 
         # A blank line *between* accounts, never under the rule: every
@@ -433,8 +474,10 @@ def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
         if index:
             lines.append("")
         lines.append(wrap(heading, indent=INDENT_UNIT, hanging_indent=INDENT_UNIT * 2))
-        for label, amount in rows:
+        for label, amount, mix in rows:
             lines.append(f"{body_indent}{label:<{label_width}}  {amount:>{amount_width}}")
+            if mix is not None:
+                lines.extend(_describe_mix(mix, body_indent + INDENT_UNIT))
 
     return lines
 
