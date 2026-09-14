@@ -173,7 +173,7 @@ class _Answers:
     bond_pct: Decimal
     vt: VTAllocationResult
     band_pct: Decimal
-    relative_band_pct: Decimal | None
+    relative_band_pct: Decimal
     accounts: list[Account]
     # Every fund entered, saved ones included -- the one place a fund's
     # details live, which the accounts are re-read from after every change.

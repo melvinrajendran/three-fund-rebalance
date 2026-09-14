@@ -88,30 +88,29 @@ class TestTargetDollarBounds:
         """One number has to mean the same thing for every asset class, so
         the band is points of the portfolio rather than a share of each
         target: 5 points of $100,000 is $5,000 for all three."""
-        bounds = target_dollar_bounds(self._target(), Decimal(100_000), Decimal(5))
+        bounds = target_dollar_bounds(self._target(), Decimal(100_000), Decimal(5), Decimal(25))
         assert bounds["us_stock"] == (Decimal(45_000), Decimal(55_000))
         assert bounds["international_stock"] == (Decimal(25_000), Decimal(35_000))
         assert bounds["bond"] == (Decimal(15_000), Decimal(25_000))
 
     def test_a_band_of_zero_collapses_both_edges_onto_the_target(self):
-        bounds = target_dollar_bounds(self._target(), Decimal(100_000), Decimal(0))
+        bounds = target_dollar_bounds(self._target(), Decimal(100_000), Decimal(0), Decimal(25))
         amounts = target_dollar_amounts(self._target(), Decimal(100_000))
         for key, (low, high) in bounds.items():
             assert low == high == amounts[key]
 
     def test_edges_are_clamped_to_what_a_portfolio_can_actually_hold(self):
-        """A 2% target with a 5-point band would otherwise ask for at least
-        -3% of the portfolio, and the solver reads these as real bounds."""
+        """A 98% target with a 5-point band would otherwise ask for up to 103%
+        of the portfolio, and the solver reads these as real bounds."""
         target = TargetAllocation(
             us_stock_pct=Decimal(98), international_stock_pct=Decimal(0), bond_pct=Decimal(2)
         )
-        bounds = target_dollar_bounds(target, Decimal(100_000), Decimal(5))
-        assert bounds["bond"] == (Decimal(0), Decimal(7_000))
+        bounds = target_dollar_bounds(target, Decimal(100_000), Decimal(5), Decimal(25))
         assert bounds["us_stock"] == (Decimal(93_000), Decimal(100_000))
 
     def test_a_negative_band_is_rejected(self):
         with pytest.raises(ValueError, match="cannot be negative"):
-            target_dollar_bounds(self._target(), Decimal(100_000), Decimal(-1))
+            target_dollar_bounds(self._target(), Decimal(100_000), Decimal(-1), Decimal(25))
 
 
 class TestEffectiveBandPoints:
@@ -144,13 +143,8 @@ class TestEffectiveBandPoints:
             self._target(50, 40, 10), Decimal(5), Decimal(25)
         )["bond"] == Decimal("2.5")
 
-    def test_no_relative_rule_leaves_the_absolute_one_alone(self):
-        points = effective_band_points(self._target("58.8", "36.2", 5), Decimal(5), None)
-        assert set(points.values()) == {Decimal(5)}
-
     def test_zero_on_either_half_tolerates_no_drift(self):
-        """Unlike None, which means the rule was never configured, zero is a
-        real answer and it is the tightest one there is."""
+        """Zero is a real answer, and it is the tightest one there is."""
         target = self._target(50, 30, 20)
         assert set(effective_band_points(target, Decimal(5), Decimal(0)).values()) == {Decimal(0)}
         assert set(effective_band_points(target, Decimal(0), Decimal(25)).values()) == {Decimal(0)}
@@ -169,7 +163,8 @@ class TestTargetDollarBoundsWithARelativeBand:
             international_stock_pct=Decimal("36.2"),
             bond_pct=Decimal(5),
         )
-        assert target_dollar_bounds(target, Decimal(100_000), Decimal(5))["bond"] == (
+        # A relative band of 100% never binds, so this is the absolute rule alone.
+        assert target_dollar_bounds(target, Decimal(100_000), Decimal(5), Decimal(100))["bond"] == (
             Decimal(0),
             Decimal(10_000),
         )

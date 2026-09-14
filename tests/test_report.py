@@ -41,7 +41,7 @@ from three_fund_rebalance.report import (
 from three_fund_rebalance.vt_allocation import VTAllocationResult
 
 
-def inputs(accounts, target, band_pct="0", relative_band_pct=None):
+def inputs(accounts, target, band_pct="0", relative_band_pct="25"):
     """The report recaps what it was asked, so it needs the whole set of
     answers -- not just the accounts and the target it computes against."""
     return RebalanceInputs(
@@ -51,8 +51,14 @@ def inputs(accounts, target, band_pct="0", relative_band_pct=None):
         target=target,
         band_pct=Decimal(band_pct),
         accounts=accounts,
-        relative_band_pct=None if relative_band_pct is None else Decimal(relative_band_pct),
+        relative_band_pct=Decimal(relative_band_pct),
     )
+
+
+def is_comparison_table_line(line):
+    """The header or a row of the Current vs. Target table, which is budgeted
+    against table_width() rather than prose_width()."""
+    return "Drift" in line or " pts" in line
 
 
 def trade(account_name, fund_type, fund_name, action, amount):
@@ -394,14 +400,12 @@ class TestReportRecap:
         assert "+10 pts *" in text
         # $3,500 is 35% international against 30%: 5 points, just inside.
         assert "+5 pts" in text and "+5 pts *" not in text
-        # No relative band here, so no column measured against one.
-        assert "Relative Drift" not in text
-        assert "outside the band of plus or minus 5 percentage points" in " ".join(text.split())
+        assert "* outside its rebalancing band" in text
 
     def test_no_band_means_no_footnote_to_explain(self):
         text = self._report(band_pct="0")
         assert "+10" in text
-        assert "outside the band of" not in text
+        assert "outside its rebalancing band" not in text
 
     def test_no_trades_message_names_the_band(self):
         # Sitting on the target, so the band is what the line has to name.
@@ -423,7 +427,7 @@ class TestReportRecap:
         rendered = " ".join(
             format_report(inputs(in_band, self._target(), "5"), result).split()
         )
-        assert "within the band of plus or minus 5 percentage points" in rendered
+        assert "within its rebalancing band" in rendered
 
     def test_every_line_fits_the_page_width(self):
         """Four different widths at once was the thing that made this output
@@ -473,7 +477,8 @@ class TestReportRecap:
         before, _, rest = text.partition("Account Holdings")
         _holdings, _, after = rest.partition("Current vs. Target")
         for line in (before + after).split("\n"):
-            assert len(line) <= prose_width(), line
+            limit = table_width() if is_comparison_table_line(line) else prose_width()
+            assert len(line) <= limit, line
 
     def test_an_order_naming_a_fund_in_full_wraps_with_its_continuation_set_in(self):
         """The order line is prose, not a column, so it can wrap -- and the
@@ -1047,7 +1052,6 @@ class TestPercentFormatting:
     def test_a_distance_between_percentages_is_called_percentage_points(self):
         text = " ".join(self._report().split())
         assert "Plus or minus 5 percentage points" in text
-        assert "band of plus or minus 5 percentage points" in text
         assert "point band" not in text
         assert "percentage point rebalancing band" not in text
 
@@ -1132,8 +1136,11 @@ class TestTerminalWidth:
         wide_limit, wide = prose_width(), self._report()
 
         assert narrow_limit < wide_limit
-        assert max(len(line) for line in narrow.split("\n")) <= narrow_limit
-        assert max(len(line) for line in wide.split("\n")) <= wide_limit
+        # The comparison table answers to table_width(), whose floor of 100
+        # is wider than an 80-column terminal -- see docs/output-structure.md.
+        for limit, text in ((narrow_limit, narrow), (wide_limit, wide)):
+            prose = [line for line in text.split("\n") if not is_comparison_table_line(line)]
+            assert max(len(line) for line in prose) <= limit
 
     def test_a_seven_figure_portfolio_no_longer_overflows(self, monkeypatch):
         """The dollar columns are four characters wider than a five-figure
@@ -1211,11 +1218,6 @@ class TestRelativeBandInTheReport:
         assert "U.S. stocks           53.8% to 63.8%" in section
         assert "International stocks  31.2% to 41.2%" in section
         assert "Bonds                  3.8% to  6.2%" in section
-
-    def test_the_ranges_are_omitted_when_only_the_absolute_rule_applies(self):
-        section = self._band_section(self._report(relative_band_pct=None))
-        assert "Plus or minus 5 percentage points." in " ".join(section.split())
-        assert "% to " not in section  # no per-class ranges: one number covers all three
 
     def test_the_footnote_stops_naming_a_single_band(self):
         """Bonds at 1.2% against a 3.8% floor are out; U.S. stock at 58.8% is
@@ -1353,7 +1355,7 @@ class TestRelativeBandInTheReport:
                     Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(bonds)),
                 ],
             )
-            for relative in (None, Decimal(25)):
+            for relative in (Decimal(100), Decimal(25)):
                 summary = summarize_allocation([account], target, Decimal(5), relative)
                 for cat in summary.categories:
                     assert cat.within_band == (

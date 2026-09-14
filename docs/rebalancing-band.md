@@ -18,12 +18,16 @@ relative rule and large ones the absolute cap. The two cross at a 20% target, wh
 both come to 5 points -- which is why the convention is usually stated as "5 points at
 20% and above, 25% relative below": one rule, described twice.
 
-`relative_band_pct` of `None` means the rule was never configured and only `band_pct`
-applies. That is **distinct from `0`**, which like a `band_pct` of `0` tolerates no
-drift at all. The distinction is what lets `compute_trades`'s `band_pct`-only default
-keep meaning exactly what it did -- every solver test that says nothing about the band
-still asserts exact-target behavior -- and it is the same "absent means never chosen"
-that `rebalance_band_pct` uses in the config file.
+**Both halves are always set.** There is no "absolute band only" state: the prompts
+always ask for both, so a `None` relative band was a code path the program could never
+reach, and it was removed. A `0` on either half tolerates no drift at all.
+`compute_trades` and `summarize_allocation` default to a `band_pct` of `0` (the exact
+target, whatever the relative half says) and a relative band of
+`DEFAULT_REBALANCE_RELATIVE_BAND_PCT`. To state the absolute rule alone, pass a
+relative band of `100`: `min(band, target)` is the band wherever the band is no
+larger than every target. The config file is a different matter: an absent
+`rebalance_relative_band_pct` there still means "never chosen", exactly as an absent
+`rebalance_band_pct` does, and the prompt offers the default.
 
 **Both halves default to the 5/25 rule, and the user can type over either.**
 `prompt_rebalance_band` and `prompt_relative_rebalance_band` offer a *saved* answer
@@ -70,17 +74,14 @@ as "5%", which is 5 percentage *points*, so the prompt's unit stays `pts`.
 **The comparison table shows both drifts, and the `*` sits on the one that crossed its
 rule.** A single `Drift (pts)` column starred bonds at 3.5% against 5% as `-1.5 *`, which
 reads as inside a 5-point band -- it was starred for being -30% relative. So the table has
-an Absolute Drift column (points) and, whenever the relative rule is in force, a Relative
-Drift column (a share of the class's target, `--` for a 0% target), each with its own
+an Absolute Drift column (points) and a Relative Drift column (a share of the class's target, `--` for a 0% target), each with its own
 marker slot. `CategorySummary.outside_absolute` / `outside_relative` say which rule a
 class crosses; `within_band` still comes from `effective_band_points`, and
 `test_within_band_is_the_two_rules_together` holds the two to one answer.
 
-Because each class now has its own band, nothing user-facing may name a single number
-for it. `report._describe_band` writes the three ranges out; `_describe_band_extent`
-is the one place that decides between "the band of plus or minus X percentage points"
-(absolute only) and "its rebalancing band" (both rules), and the comparison table's
-footnote and the no-trades line both go through it.
+Because each class has its own band, nothing user-facing may name a single number for
+it. `report._describe_band` writes the three ranges out, and the comparison table's
+footnote and the no-trades line both say "its rebalancing band".
 
 **The no-trades line has to survive being read against the starred rows above it.**
 Nothing to trade and a class still outside its band is neither "already matches the
