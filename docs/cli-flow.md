@@ -121,7 +121,17 @@ asset classes", and its value -- then "Add another fund?", defaulting to no, as
 "this account" means the one just named -- for a new account and for a saved one that
 has no funds yet, and not for one whose funds are being re-confirmed:
 `prompt_accounts` has already said how a saved answer is kept, and an instruction
-repeated under every account every run says nothing the run before it did.
+repeated under every account every run says nothing the run before it did. It starts on
+the line directly beneath the heading (or "Keep this account?"), and "Fund name or ticker"
+follows it directly.
+
+**Nothing inside an account is set apart by a blank line** -- not the explanation, and
+not one fund from the next. Depth already groups a fund's questions under its name; the
+blank line goes before each account heading, the one division a reader scanning step 3
+needs to find.
+
+The nickname's rule -- `(must be unique, e.g. 'Vanguard Roth IRA')` -- is said with the
+first account of a pass only, the same once-is-enough treatment the account types get.
 
 A saved account's funds are walked first, each behind **"Keep this fund?"** -- the same
 gate, the same default and the same `Removed '<name>'.` that `prompt_revise_account`
@@ -130,13 +140,22 @@ else bounds, which is why it is worth a question per fund per run. The account-l
 gate answers "is this account still mine"; the fund-level one answers "is this fund
 still in the lineup", and a user who changes neither presses Enter through both.
 
-Every answer on a saved fund is an editable default, its *kind* included, so replacing
-an index fund with a balanced one is one keystroke rather than a removal and a
-re-entry. A fund whose kind changes *to* multi-asset has no saved mix and is asked for
-one outright -- the same branch a brand new fund takes.
+A kept fund is **confirmed, not re-asked**: `Keep VTI?` stands where the name question
+would, and one level deeper come the same `Saved details: …` and "Use these details?"
+any known fund gets (below), then the value. Its name is not asked, so a changed ticker
+is a removal and an addition. Declining the details asks the kind with the saved one as
+the default, so replacing an index fund with a balanced one is still one keystroke
+rather than a removal and a re-entry. A fund whose kind changes *to* multi-asset has no
+saved mix and is asked for one outright -- the same branch a brand new fund takes. One
+that stays multi-asset has its mix asked outright too, each saved sleeve offered as the
+default: declining the details has already asked for a change, and a second
+"Update this fund's underlying allocation?" yes/no would ask for it again.
 
 The update menu reaches all of this through `prompt_revise_account`, unchanged: it is
 still the account that is picked from the menu, and the fund list is walked inside it.
+Its entry for adding accounts is `Add Accounts`, the one heading `prompt_add_accounts`
+prints whether or not any accounts were saved; the question beneath it ("Add an
+account?" or "Add another account?") is what says which.
 
 ## A fund is remembered by its name
 
@@ -150,16 +169,36 @@ run the catalog still knows it, so a fund moved from one account to another in t
 same session -- removed here, added there -- is still recognized; only the save drops
 what no account holds (see [`persistence.md`](persistence.md)).
 
-**A name the catalog knows is confirmed, not re-asked.** Typed into a new slot -- a
-second account, or re-added later in the run it was removed in -- `_prompt_holding` says
-`Saved details: VBIAX is a multi-asset fund that holds 60% U.S. stocks, 0% international
-stocks, and 40% bonds.` (or, for a single-asset fund, `Saved details: VTI is a U.S.
-stock fund.` -- named by `ASSET_CLASS_LABELS`, as the report names funds)
-and asks "Use these details?", defaulting to yes; yes goes straight to the value. No
-asks the kind and mix with the saved answer as defaults. A saved fund keeping its own
-name is not gated -- its kind is already an editable default -- but that default is the
-catalog's, not the holding's copy, so a change made to the same fund earlier in the run
-is what it offers.
+**A name the catalog knows is confirmed, not re-asked.** Kept from the saved file,
+typed into a second account, or re-added later in the run it was removed in, `_prompt_holding` says
+the fund's kind -- `Saved details: Multi-asset fund`, or `Saved details: U.S. stock fund`,
+named by `ASSET_CLASS_LABELS` as the report names funds -- and, for a multi-asset fund,
+its mix one level deeper as `formatting.format_fund_mix`, the table the report sets
+under the same fund:
+
+```
+    Keep VBIAX? [Y/n]:
+      Saved details: Multi-asset fund
+        U.S. stocks           60%
+        International stocks   0%
+        Bonds                 40%
+      Use these details? [Y/n]:
+```
+
+The name is not repeated; it is the line directly above. It then asks "Use these details?", defaulting to yes; yes goes straight to the value. No
+asks the kind and mix with the saved answer as defaults. The details shown are the
+catalog's, not a holding's copy, and a known fund is stored under the catalog's spelling
+of its name -- `vti` typed into a second account is `VTI` there too, rather than a second
+spelling of one fund in the plan.
+
+**Once per pass.** A fund's details are shown or asked the first time it appears in a
+pass, and every later appearance goes straight to its value: there is one set of
+details, so asking about them again in the next account could only offer the same
+answer. A pass is one call to `prompt_accounts` -- the saved accounts and the new ones
+together -- and `_prompt_holding` tracks it in a `confirmed` set of name keys threaded
+beside the catalog. Each pass through the update menu starts a fresh set, which is what
+keeps the menu the way to correct a fund's details after the report. A fund dropped at
+"Keep BND?" was never confirmed, so re-adding it elsewhere still shows its details.
 
 **A change is never applied silently.** Answering a known fund differently says
 `This changes VBIAX's details in every account that holds it.` -- and it does:

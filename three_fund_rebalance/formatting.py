@@ -42,6 +42,15 @@ PROSE_MAX_WIDTH = 80
 #: matches the documented output rather than being a third width.
 SUMMARY_FILE_WIDTH = 80
 
+#: The narrowest budget a table ever gets, however narrow the terminal. A
+#: table is read down its columns rather than along a line, so it does not
+#: share prose's readable measure -- it only fails when a row cannot be seen
+#: whole. 100 holds the comparison table with both of its drift columns for
+#: any portfolio under $10M, and is the repo's own line length, so the README
+#: Example and the summary file show it without scrolling. The cost is that
+#: an 80-column terminal wraps a table row, which prose never does.
+TABLE_MIN_WIDTH = 100
+
 _forced_width: int | None = None
 
 
@@ -81,12 +90,13 @@ def prose_width() -> int:
 
 
 def table_width() -> int:
-    """Width a table may occupy. Tables are sized to their own contents
-    rather than padded out to this, so it is a budget rather than a target --
-    what it buys is that a seven-figure portfolio, whose dollar columns are
-    four characters wider than a five-figure one, is no longer squeezed
-    against a fixed 78."""
-    return terminal_width() - 2
+    """Width a table may occupy: the terminal's, and never less than
+    TABLE_MIN_WIDTH. Tables are sized to their own contents rather than
+    padded out to this, so it is a budget rather than a target -- what it
+    buys is that a seven-figure portfolio, whose dollar columns are four
+    characters wider than a five-figure one, is not squeezed against the
+    prose measure."""
+    return max(terminal_width() - 2, TABLE_MIN_WIDTH)
 
 #: What each fund type is called in anything the user reads. Kept here rather
 #: than on FundType because the enum's values are a storage detail -- they go
@@ -98,6 +108,16 @@ ASSET_CLASS_LABELS: dict[FundType, str] = {
     FundType.US_BOND: "bond",
     FundType.MULTI_ASSET: "multi-asset",
     FundType.CASH: "cash",
+}
+
+#: What each asset class is called on its own, in the order every table lists
+#: them. Plural, unlike ASSET_CLASS_LABELS: these stand alone as a column
+#: label, where those are attributive and precede "fund". Here rather than in
+#: `report` because the prompts list a saved mix under the same labels.
+CATEGORY_FUND_TYPES: dict[str, FundType] = {
+    "U.S. stocks": FundType.US_STOCK,
+    "International stocks": FundType.INTERNATIONAL_STOCK,
+    "Bonds": FundType.US_BOND,
 }
 
 #: What each tax treatment is called on screen. Same reasoning as
@@ -369,28 +389,33 @@ def format_and_list(items: list[str]) -> str:
     return f"{', '.join(items[:-1])}, and {items[-1]}"
 
 
-def describe_fund_allocation(allocation: FundAllocation) -> str:
-    """A multi-asset fund's own mix on one line, for the prompt that offers
-    to change it -- so the user is deciding against the numbers rather than
-    from memory.
+def format_fund_mix(allocation: FundAllocation) -> list[str]:
+    """A multi-asset fund's own mix, one asset class to a line, unindented --
+    the caller sets the depth. The report puts it under the fund's row in
+    Account Holdings; the prompts put it under a fund's saved details, so
+    the user decides whether to keep a mix against the same table the plan
+    will restate it in.
 
-    A sentence, because it sits inside one ("Currently ..."), and a set of
-    asset classes is named the same way wherever it is named in prose. The
-    report says the same thing as a vertical list instead: it has a page to
-    lay out rather than a line to finish, and three shares under each other
-    can be read against the target table above them. `report._describe_mix`
-    is that one, and the divergence is deliberate.
+    The same shape the Target Asset Allocation block uses -- label left, share
+    right-aligned -- because it is the same kind of content: the three asset
+    classes and what each comes to. Run together on one line they read as a
+    sentence about the fund, which is not what they are; down the page each
+    share sits under the one above it, and can be read against the target
+    table without unpicking a clause first. The classes are named in the
+    order every table names them, from `CATEGORY_FUND_TYPES`.
 
-    The fund's own percentages, exactly as entered -- `percent_of`, not
-    `fraction_of`, which normalizes for the solver's benefit.
+    The figures are the fund's own, exactly as entered -- `percent_of`, not
+    `fraction_of` -- so they deliberately do **not** go through
+    `format_percents`: that rounds to `PERCENT_MAX_PLACES`, and a fact sheet
+    printing 34.34% is entitled to be read back as 34.34%. That is also why
+    they are right-aligned rather than aligned on the decimal point --
+    sleeves entered at different precisions have no common point to align
+    on, so the percent signs are what line up.
     """
-    return format_and_list(
-        [
-            f"{format_percent(allocation.percent_of(fund_type))}% {label}"
-            for fund_type, label in (
-                (FundType.US_STOCK, "U.S. stocks"),
-                (FundType.INTERNATIONAL_STOCK, "international stocks"),
-                (FundType.US_BOND, "bonds"),
-            )
-        ]
-    )
+    cells = [
+        (label, f"{format_percent(allocation.percent_of(fund_type))}%")
+        for label, fund_type in CATEGORY_FUND_TYPES.items()
+    ]
+    label_width = max(len(label) for label, _ in cells)
+    share_width = max(len(share) for _, share in cells)
+    return [f"{label:<{label_width}}  {share:>{share_width}}" for label, share in cells]

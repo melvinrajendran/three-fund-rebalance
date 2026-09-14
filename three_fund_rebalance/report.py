@@ -9,9 +9,10 @@ what to do, and what the result will be.
 
 Widths come from `formatting`: prose wraps to `prose_width()`, which follows
 the terminal up to a readable maximum, while tables are sized to their own
-contents within `table_width()`, which follows the terminal without a cap.
-The two are separate because they want opposite things -- a paragraph gets
-harder to read as it gets wider, and a table of dollar figures does not.
+contents within `table_width()`, which follows the terminal without a cap and
+never drops below `TABLE_MIN_WIDTH`. The two are separate because they want
+opposite things -- a paragraph gets harder to read as it gets wider, and a
+table of dollar figures does not.
 Amounts are right-aligned in their columns, because the whole point of
 putting them in rows is to compare them down the page.
 
@@ -48,13 +49,14 @@ from three_fund_rebalance.allocation import (
 from three_fund_rebalance.config import MIN_TRADE_DOLLARS
 from three_fund_rebalance.formatting import (
     ASSET_CLASS_LABELS,
+    CATEGORY_FUND_TYPES,
     INDENT_UNIT,
     TAX_TREATMENT_LABELS,
     describe_as_of,
     format_account_heading,
     format_date,
+    format_fund_mix,
     format_generated_at,
-    format_percent,
     format_percent_prose,
     format_percents,
     format_subheading,
@@ -74,19 +76,13 @@ from three_fund_rebalance.models import (
 from three_fund_rebalance.vt_allocation import VTAllocationResult
 
 #: What the report calls each asset class, in the order every table lists
-#: them. Plural, unlike `formatting.ASSET_CLASS_LABELS`: these stand alone as
-#: a column label, where those are attributive and precede "fund".
-_CATEGORY_FUND_TYPES = {
-    "U.S. stocks": FundType.US_STOCK,
-    "International stocks": FundType.INTERNATIONAL_STOCK,
-    "Bonds": FundType.US_BOND,
-}
-_CATEGORY_LABELS = tuple(_CATEGORY_FUND_TYPES)
+#: them -- `formatting.CATEGORY_FUND_TYPES`, shared with the prompts.
+_CATEGORY_LABELS = tuple(CATEGORY_FUND_TYPES)
 #: The label-to-key hop the dollar and percentage dicts are keyed by. Derived
 #: rather than re-typed: `allocation.ASSET_CLASS_KEYS` is where those keys are
 #: decided, and "bond" is not the spelling anyone would guess.
 _CATEGORY_TARGET_KEYS = {
-    label: ASSET_CLASS_KEYS[fund_type] for label, fund_type in _CATEGORY_FUND_TYPES.items()
+    label: ASSET_CLASS_KEYS[fund_type] for label, fund_type in CATEGORY_FUND_TYPES.items()
 }
 
 #: Closes every report, because the report is the artifact that gets
@@ -143,6 +139,14 @@ class CategorySummary:
     # Signed percentage points away from target, and whether that is small
     # enough to leave alone. With a band of 0 every nonzero drift is out.
     drift_pct: Decimal
+    # The same drift as a share of the class's own target -- what the
+    # relative band is measured in. None for a 0% target, where it has no size.
+    relative_drift_pct: Decimal | None
+    # Which of the two rules the drift crosses. A class is outside its band
+    # when it crosses either, which is `within_band` stated the other way:
+    # the tighter of the two bands is the one that binds.
+    outside_absolute: bool
+    outside_relative: bool
     within_band: bool
 
 
@@ -185,7 +189,7 @@ def summarize_allocation(
 
     current_by_label = {
         label: sum((h.component(fund_type) for h in holdings), Decimal(0))
-        for label, fund_type in _CATEGORY_FUND_TYPES.items()
+        for label, fund_type in CATEGORY_FUND_TYPES.items()
     }
     target_pct_by_label = {
         "U.S. stocks": target.us_stock_pct,
@@ -204,15 +208,24 @@ def summarize_allocation(
     for label in _CATEGORY_LABELS:
         current_amount = current_by_label[label]
         current_pct = (current_amount / total * Decimal(100)) if total > 0 else Decimal(0)
-        drift_pct = current_pct - target_pct_by_label[label]
+        target_pct = target_pct_by_label[label]
+        drift_pct = current_pct - target_pct
         categories.append(
             CategorySummary(
                 label=label,
                 current_amount=to_cents(current_amount),
                 current_pct=current_pct,
                 target_amount=to_cents(target_amounts[_CATEGORY_TARGET_KEYS[label]]),
-                target_pct=target_pct_by_label[label],
+                target_pct=target_pct,
                 drift_pct=drift_pct,
+                relative_drift_pct=(
+                    drift_pct / target_pct * Decimal(100) if target_pct > 0 else None
+                ),
+                outside_absolute=abs(drift_pct) > band_pct,
+                outside_relative=(
+                    relative_band_pct is not None
+                    and abs(drift_pct) > target_pct * relative_band_pct / Decimal(100)
+                ),
                 within_band=abs(drift_pct) <= band_points[_CATEGORY_TARGET_KEYS[label]],
             )
         )
@@ -274,7 +287,7 @@ def allocation_after_trades(accounts: list[Account], trades: list[Trade]) -> dic
 
     return {
         label: sum((h.component(fund_type) for h in after), Decimal(0))
-        for label, fund_type in _CATEGORY_FUND_TYPES.items()
+        for label, fund_type in CATEGORY_FUND_TYPES.items()
     }
 
 
@@ -394,36 +407,6 @@ def _describe_band(inputs: RebalanceInputs) -> list[str]:
     return lines
 
 
-def _describe_mix(allocation: FundAllocation, indent: str) -> list[str]:
-    """A multi-asset fund's own mix, one asset class to a line.
-
-    The same shape the Target Asset Allocation block uses -- label left, share
-    right-aligned -- because it is the same kind of content: the three asset
-    classes and what each comes to. Run together on one line they read as a
-    sentence about the fund, which is not what they are; down the page each
-    share sits under the one above it, and can be read against the target
-    table without unpicking a clause first. The classes are named in the
-    order every table here names them, from `_CATEGORY_FUND_TYPES`.
-
-    The figures are the fund's own, exactly as entered, so they deliberately
-    do **not** go through `format_percents`: that rounds to
-    `PERCENT_MAX_PLACES`, and a fact sheet printing 34.34% is entitled to be
-    read back as 34.34%. That is also why they are right-aligned rather than
-    aligned on the decimal point -- sleeves entered at different precisions
-    have no common point to align on, so the percent signs are what line up.
-    """
-    cells = [
-        (label, f"{format_percent(allocation.percent_of(fund_type))}%")
-        for label, fund_type in _CATEGORY_FUND_TYPES.items()
-    ]
-    label_width = max(len(label) for label, _ in cells)
-    share_width = max(len(share) for _, share in cells)
-    return [
-        f"{indent}{label:<{label_width}}  {share:>{share_width}}"
-        for label, share in cells
-    ]
-
-
 def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
     lines = _subheading("Account Holdings")
     for index, account in enumerate(inputs.accounts):
@@ -477,7 +460,8 @@ def _describe_accounts(inputs: RebalanceInputs) -> list[str]:
         for label, amount, mix in rows:
             lines.append(f"{body_indent}{label:<{label_width}}  {amount:>{amount_width}}")
             if mix is not None:
-                lines.extend(_describe_mix(mix, body_indent + INDENT_UNIT))
+                mix_indent = body_indent + INDENT_UNIT
+                lines.extend(mix_indent + line for line in format_fund_mix(mix))
 
     return lines
 
@@ -495,15 +479,32 @@ def _describe_comparison(inputs: RebalanceInputs, summary: AllocationSummary) ->
     lines.append("")
 
     banded = _band_is_on(inputs)
-    drift_header = "Drift (pts)"
+    # The relative column is shown exactly when the relative rule is in force
+    # -- the same condition under which "Rebalancing Bands" lists each class's
+    # range. Without it, a relative drift can never put a class out of band.
+    show_relative = inputs.relative_band_pct is not None
     # Every share of the portfolio in this table is written at one precision,
     # current and target alike -- they are the same unit and are read against
-    # each other across the row. The drift column is a different unit and
+    # each other across the row. Each drift column is a different unit and
     # gets its own.
     shares = format_percents(
         [pct for cat in summary.categories for pct in (cat.current_pct, cat.target_pct)]
     )
-    drifts = format_percents([cat.drift_pct for cat in summary.categories], signed=True)
+    absolute = format_percents([cat.drift_pct for cat in summary.categories], signed=True)
+    relative = iter(
+        format_percents(
+            [c.relative_drift_pct for c in summary.categories if c.relative_drift_pct is not None],
+            signed=True,
+        )
+    )
+
+    def marked(cell: str, outside: bool) -> str:
+        # The * sits on the drift that crossed its own rule, so a class
+        # starred for its relative drift is not starred beside a number that
+        # reads as inside the absolute band. The slot is always reserved, so a
+        # cell without one still lines up with a cell that has one.
+        return cell + (" *" if banded and outside else "  ")
+
     rows = [
         (
             cat.label,
@@ -511,33 +512,46 @@ def _describe_comparison(inputs: RebalanceInputs, summary: AllocationSummary) ->
             f"({shares[i * 2]}%)",
             _money(cat.target_amount),
             f"({shares[i * 2 + 1]}%)",
-            drifts[i],
-            "" if not banded or cat.within_band else " *",
+            marked(f"{absolute[i]} pts", cat.outside_absolute),
+            marked(
+                "--" if cat.relative_drift_pct is None else f"{next(relative)}%",
+                cat.outside_relative,
+            ),
         )
         for i, cat in enumerate(summary.categories)
     ]
 
     # The dollars and the share in parentheses are two columns, not one cell:
     # aligned as one string, a five-figure amount beside a six-figure one
-    # lines up on whatever trails it and the cents wander. Each of the four
-    # is sized to its own contents, so the table stays as narrow as it can.
+    # lines up on whatever trails it and the cents wander. Each column is
+    # sized to its own contents, so the table stays as narrow as it can -- a
+    # drift header is right-aligned over its cells' marker slot, so the * is
+    # the column's right edge.
+    absolute_header, relative_header = "Absolute Drift", "Relative Drift"
     label_w = max(len(row[0]) for row in rows)
     widths = [max(len(row[i]) for row in rows) for i in (1, 2, 3, 4)]
     current_w, current_pct_w, target_w, target_pct_w = widths
-    drift_w = max(len(row[5]) for row in rows + [("", "", "", "", "", drift_header, "")])
+    absolute_w = max(len(absolute_header), *(len(row[5]) for row in rows))
+    relative_w = max(len(relative_header), *(len(row[6]) for row in rows))
 
-    lines.append(
+    header = (
         f"{INDENT_UNIT}{'':<{label_w}}  {'Current':>{current_w + 1 + current_pct_w}}  "
-        f"{'Target':>{target_w + 1 + target_pct_w}}  {drift_header:>{drift_w}}"
+        f"{'Target':>{target_w + 1 + target_pct_w}}  {absolute_header:>{absolute_w}}"
     )
-    for label, current, current_pct, target, target_pct, drift, marker in rows:
-        lines.append(
+    if show_relative:
+        header += f"  {relative_header:>{relative_w}}"
+    lines.append(header)
+    for label, current, current_pct, target, target_pct, absolute_cell, relative_cell in rows:
+        line = (
             f"{INDENT_UNIT}{label:<{label_w}}  "
             f"{current:>{current_w}} {current_pct:>{current_pct_w}}  "
             f"{target:>{target_w}} {target_pct:>{target_pct_w}}  "
-            f"{drift:>{drift_w}}{marker}"
+            f"{absolute_cell:>{absolute_w}}"
         )
-    if any(row[6] for row in rows):
+        if show_relative:
+            line += f"  {relative_cell:>{relative_w}}"
+        lines.append(line.rstrip())
+    if banded and not all(cat.within_band for cat in summary.categories):
         lines.append("")
         lines.append(f"{INDENT_UNIT}* outside {_describe_band_extent(inputs)}")
     return lines

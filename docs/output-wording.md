@@ -237,8 +237,9 @@ have been spread across the three sleeves by `fraction_of` anyway.
 
 A share of the portfolio is `%`; a distance between two percentages is **percentage
 points**, abbreviated `pts` only where the words will not fit: the comparison table's
-`Drift (pts)` header, and the absolute band prompt's unit suffix.
-`TestPercentFormatting` asserts the report's count is one; `prompt_percent`'s `unit`
+Absolute Drift cells (`+23.7 pts`), and the absolute band prompt's unit suffix. The
+Relative Drift cells beside them are a share of the class's own target, so they are `%`.
+`TestPercentFormatting` asserts `pts` appears in the report only in those cells; `prompt_percent`'s `unit`
 argument is the prompt side, and defaults to `%` so every other question is unaffected.
 
 **Dollar amounts are right-aligned in columns.** The comparison table and the
@@ -252,7 +253,7 @@ gives it a precision it does not have.
 The three single-asset labels say everything there is to say about what those funds
 hold; a multi-asset fund's mix is the user's answer to a question, and a plan read
 days later cannot be checked against the fact sheet it came from without it. It is a
-block of its own -- `report._describe_mix` -- set one level deeper than the row, with
+block of its own -- `formatting.format_fund_mix` -- set one level deeper than the row, with
 its own label and share columns, and sized out of the two the account's rows align in.
 
 **It is the Target Asset Allocation block's shape, because it is that block's
@@ -271,11 +272,15 @@ the solver needs; everything that echoes a mix to a user prints the first.
 `TestMultiAssetFundRows` pins the order, the depth, the alignment and that the
 account's columns do not widen.
 
-**The prompt says the same mix as a sentence, and that divergence is deliberate.**
-`formatting.describe_fund_allocation` is the one-line form, used where it sits inside
-a sentence ("Currently 60% U.S. stocks, ..."), which is a line to finish rather than a
-page to lay out. It and `format_and_list` live in `formatting` rather than `prompts`
-for the rule at the bottom of this file: **`report.py` must not import `prompts.py`**.
+**The prompt shows a saved mix as the same table.** A known fund's details are
+`Saved details: Multi-asset fund` with `format_fund_mix` one level beneath -- it used
+to be a sentence ("… is a multi-asset fund that holds 64.1% U.S. stocks, 34.34%
+international stocks, and 1.56% bonds."), which wrapped mid-figure and had to be
+unpicked to compare against the fact sheet. One table in both places also means the
+mix a user confirms is laid out exactly as the plan will restate it.
+`format_fund_mix` and `CATEGORY_FUND_TYPES` live in `formatting` rather than `report`
+or `prompts` for the rule at the bottom of this file: **`report.py` must not import
+`prompts.py`**.
 
 **The orders close with where they land** (`_describe_outcome`) -- the question the
 rest of the report only answers by implication. It is computed from the holdings

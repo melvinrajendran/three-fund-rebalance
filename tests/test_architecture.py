@@ -8,6 +8,8 @@ import ast
 import re
 from pathlib import Path
 
+from three_fund_rebalance.formatting import TABLE_MIN_WIDTH
+
 PACKAGE = "three_fund_rebalance"
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_DIR = ROOT / PACKAGE
@@ -78,13 +80,26 @@ class TestReadmeMechanics:
     README = ROOT / "README.md"
     MAX_WIDTH = 78
 
-    def test_no_line_exceeds_78_columns_except_the_options_table(self):
+    def _example_table_rows(self) -> set[int]:
+        """Line numbers of the Example's comparison table: its header and its
+        three rows. Real output pasted verbatim, and a table gets
+        `TABLE_MIN_WIDTH` where prose gets 78 -- so the Example can only match
+        the program if these may run to that width."""
+        lines = self.README.read_text().splitlines()
+        header = next(i for i, line in enumerate(lines, start=1) if "Absolute Drift" in line)
+        return set(range(header, header + 4))
+
+    def test_no_line_exceeds_78_columns_except_the_tables(self):
         """Only an unbreakable line may run past 78: a row of the options table
-        under Running, which cannot be wrapped without breaking the table."""
+        under Running, which cannot be wrapped without breaking the table, or a
+        row of the Example's comparison table, within the table budget."""
+        table_rows = self._example_table_rows()
         too_long = [
             (number, line)
             for number, line in enumerate(self.README.read_text().splitlines(), start=1)
-            if len(line) > self.MAX_WIDTH and not line.startswith("|")
+            if len(line) > self.MAX_WIDTH
+            and not line.startswith("|")
+            and not (number in table_rows and len(line) <= TABLE_MIN_WIDTH)
         ]
         assert too_long == []
 

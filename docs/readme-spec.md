@@ -21,7 +21,9 @@ hand-idealized -- re-generate it and paste the result. Any change to `report.py`
 `formatting.py` wording means re-generating it. To do that, drive `run()` with a
 scripted prompter as the tests do (never by piping stdin -- see "Running the CLI
 without side effects"), under `COLUMNS=80`, which is what `tests/conftest.py` pins the
-suite to and therefore the width every wrapping assertion in the repo assumes. The
+suite to and therefore the width every wrapping assertion in the repo assumes -- prose
+at 78, tables within their 100-column floor, so the comparison table is the widest block
+in the Example. The
 scenario is 80/20, a 5/25 band, and three accounts, each declaring a fund per asset
 class:
 a Brokerage holding $60k VTI and $30k VXUS, a Roth IRA holding $20k VTI, and a
@@ -139,6 +141,8 @@ defaults but never shows its name, so the README states the defaults ("5 points 
 Mechanically: prose wraps at 78 columns, hard; `--` for a dash, never an em dash, so
 the source matches what the CLI prints; asterisk emphasis for the band names on first
 use. Only an unbreakable line may run past 78: a row of the options table under
-Running, which cannot be wrapped without breaking the table. Nothing inside a fence
-does any more -- the install commands are all short since they name a PyPI package
-rather than a git URL.
+Running, which cannot be wrapped without breaking the table, and the header and three
+rows of the Example's comparison table, which the program itself prints within its
+100-column table budget (`formatting.TABLE_MIN_WIDTH`) and which the Example has to
+match verbatim. Nothing else inside a fence does -- the install commands are all short
+since they name a PyPI package rather than a git URL.

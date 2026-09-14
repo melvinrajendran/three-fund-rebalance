@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -10,8 +11,10 @@ from three_fund_rebalance.cli import _write_summary, parse_args, run
 from three_fund_rebalance.config import VT_FUND_PAGE_URL
 from three_fund_rebalance.formatting import (
     SUMMARY_FILE_WIDTH,
+    TABLE_MIN_WIDTH,
     format_generated_at,
     prose_width,
+    table_width,
 )
 from three_fund_rebalance.models import FundType
 from three_fund_rebalance.persistence import load_config
@@ -71,6 +74,13 @@ def known_fund_responses(name: str, value: str) -> list[str]:
     return [name, "", value]
 
 
+def seen_fund_responses(name: str, value: str) -> list[str]:
+    """A fund already shown or described earlier in the same pass: its name
+    and its value. There is one set of details, so they are not asked about
+    again."""
+    return [name, value]
+
+
 def account_responses(
     account_type_index: str, nickname: str, funds: list[list[str]], cash: str = "0"
 ) -> list[str]:
@@ -94,12 +104,12 @@ def account_responses(
 def keep_fund_responses(value: str = "") -> list[str]:
     """Keep one saved fund exactly as it was, or change only its value.
 
-    Four answers, every one of them a default the saved fund supplied: the
-    "Keep this fund?" gate, the name, the kind, and the value. An empty
+    Three answers, every one of them a default the saved fund supplied: the
+    "Keep this fund?" gate, "Use these details?", and the value. An empty
     string takes whatever was offered, so this is what "press Enter through
     it" looks like in a script.
     """
-    return ["", "", "", value]
+    return ["", "", value]
 
 
 def keep_account_responses(*values: str) -> list[str]:
@@ -126,13 +136,13 @@ def new_account_responses(
     """The common account: one fund per asset class, in the order every table
     in the report lists them.
 
-    `known` is for every such account after the first in a run: VTI, VXUS and
-    BND are then already described, so each is confirmed rather than asked."""
+    `known` is for every such account after the first in a pass: VTI, VXUS
+    and BND are then already described, so each goes straight to its value."""
     if known:
         funds = [
-            known_fund_responses("VTI", us_stock_value),
-            known_fund_responses("VXUS", intl_value),
-            known_fund_responses("BND", bond_value),
+            seen_fund_responses("VTI", us_stock_value),
+            seen_fund_responses("VXUS", intl_value),
+            seen_fund_responses("BND", bond_value),
         ]
     else:
         funds = [
@@ -433,13 +443,19 @@ class TestLongMessagesWrap:
         """Lines that overrun and *could* have been broken. A line carrying a
         single token longer than the page -- a URL, or pytest's own tmp_path --
         is not a violation: wrap deliberately never splits a long word, since
-        half a URL is worse than a long line."""
+        half a URL is worse than a long line.
+
+        Nor is a table row within the table budget: tables are read down their
+        columns and get their own width. A row is recognizable by its column
+        gaps -- two or more spaces between cells, which wrapped prose never
+        has."""
         return [
             line
             for block in prompter.output
             for line in block.split("\n")
             if len(line) > prose_width()
             and max((len(word) for word in line.split()), default=0) <= prose_width()
+            and not (re.search(r"\S {2,}\S", line) and len(line) <= table_width())
         ]
 
     def test_a_corrupt_config_warning_wraps(self, tmp_path):
@@ -542,6 +558,7 @@ class TestRevisionLoop:
             "2. Rebalancing Bands",
             "3. Brokerage (Brokerage)",
             "4. Roth (Roth IRA)",
+            # The heading choosing it prints.
             "5. Add Accounts",
             # Last, because reaching this menu means having already said yes.
             "6. No Updates, Continue",
@@ -790,7 +807,9 @@ class TestSummaryFile:
             ]
 
         assert body(narrow) == body(wide)
-        assert max(len(line) for line in body(wide)) <= SUMMARY_FILE_WIDTH
+        # Prose at the file's width; tables within their own floor, which is
+        # the one thing in the file allowed past it.
+        assert max(len(line) for line in body(wide)) <= max(SUMMARY_FILE_WIDTH, TABLE_MIN_WIDTH)
 
     def test_a_generated_name_never_overwrites_an_earlier_summary(self, tmp_path):
         """Two runs inside one minute share a stamp. "No collisions" has to
@@ -880,21 +899,27 @@ class TestFundsAreRememberedAcrossRuns:
         ]
         assert written["accounts"][0]["holdings"][0] == {"name": "VTI", "value": "6000"}
 
-    def test_a_saved_fund_typed_into_a_new_account_is_confirmed(self, tmp_path):
+    def test_a_kept_fund_typed_into_a_new_account_is_not_confirmed_again(self, tmp_path):
+        """Confirmed once, while keeping the saved account; the new account
+        that holds it too goes straight to its value, under its saved spelling."""
         config_path = tmp_path / "c.json"
         self._first_run(config_path)
         prompter = ScriptedPrompter([
             "", "y", "", "",
             *keep_account_responses("", "", ""),
             "y",  # Add another account?
-            *account_responses("1", "Roth", [known_fund_responses("vxus", "4000")]),
+            *account_responses("1", "Roth", [seen_fund_responses("vxus", "4000")]),
             "n", NO_REVISION, "y",
         ])
         assert run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter) == 0
         assert prompter.all_consumed()
-        assert "Saved details: VXUS is an international stock fund." in prompter.full_output
+        details = "Saved details: International stock fund"
+        assert prompter.full_output.count(details) == 1
         roth = load_config(config_path).accounts[1]
-        assert roth.funds()[0].fund_type == FundType.INTERNATIONAL_STOCK
+        assert (roth.funds()[0].name, roth.funds()[0].fund_type) == (
+            "VXUS",
+            FundType.INTERNATIONAL_STOCK,
+        )
 
     def test_a_fund_removed_from_every_account_is_removed_from_the_file(self, tmp_path):
         config_path = tmp_path / "c.json"

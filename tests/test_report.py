@@ -1,3 +1,4 @@
+import re
 from dataclasses import replace
 from decimal import Decimal
 
@@ -7,6 +8,7 @@ from three_fund_rebalance.config import MAX_ACCOUNT_NAME_LENGTH
 from three_fund_rebalance.formatting import (
     INDENT_UNIT,
     PROSE_MAX_WIDTH,
+    TABLE_MIN_WIDTH,
     format_account_heading,
     format_percent,
     prose_width,
@@ -389,9 +391,11 @@ class TestReportRecap:
     def test_shows_drift_against_target_and_flags_what_sits_outside_the_band(self):
         text = self._report()
         # $6,000 of $10,000 is 60% U.S. against a 50% target: 10 points out.
-        assert "+10 *" in text
+        assert "+10 pts *" in text
         # $3,500 is 35% international against 30%: 5 points, just inside.
-        assert "+5\n" in text or "+5 " in text
+        assert "+5 pts" in text and "+5 pts *" not in text
+        # No relative band here, so no column measured against one.
+        assert "Relative Drift" not in text
         assert "outside the band of plus or minus 5 percentage points" in " ".join(text.split())
 
     def test_no_band_means_no_footnote_to_explain(self):
@@ -1047,9 +1051,13 @@ class TestPercentFormatting:
         assert "point band" not in text
         assert "percentage point rebalancing band" not in text
 
-    def test_pts_is_used_only_in_the_table_header(self):
-        assert self._report().count("pts") == 1
-        assert "Drift (pts)" in self._report()
+    def test_pts_is_used_only_in_the_absolute_drift_cells(self):
+        """The one place the words will not fit: every other distance between
+        percentages is spelled out as percentage points."""
+        text = self._report()
+        cells = re.findall(r"[+-]?\d+(?:\.\d+)? pts", text)
+        assert len(cells) == 3
+        assert text.count("pts") == len(cells)
 
 
 class TestFormatPercent:
@@ -1070,13 +1078,13 @@ class TestFormatPercent:
 
 class TestTerminalWidth:
     """Prose follows the terminal up to a readable maximum; tables follow it
-    without one."""
+    without one, and never get less than TABLE_MIN_WIDTH."""
 
-    def test_prose_and_tables_both_follow_a_wider_terminal(self, monkeypatch):
-        """Below the cap the two agree; pick the width from the cap so this
-        keeps testing what it means if PROSE_MAX_WIDTH is retuned."""
+    def test_prose_follows_a_terminal_below_its_maximum(self, monkeypatch):
+        """Pick the width from the cap so this keeps testing what it means if
+        PROSE_MAX_WIDTH is retuned."""
         monkeypatch.setenv("COLUMNS", str(PROSE_MAX_WIDTH))
-        assert prose_width() == table_width() == PROSE_MAX_WIDTH - 2
+        assert prose_width() == PROSE_MAX_WIDTH - 2
 
     def test_prose_stops_at_the_readable_maximum(self, monkeypatch):
         monkeypatch.setenv("COLUMNS", "200")
@@ -1086,10 +1094,12 @@ class TestTerminalWidth:
         monkeypatch.setenv("COLUMNS", "200")
         assert table_width() == 198
 
-    def test_a_narrow_terminal_narrows_both(self, monkeypatch):
+    def test_a_narrow_terminal_narrows_prose_but_not_tables(self, monkeypatch):
+        """A table is read down its columns, so it keeps its floor where a
+        paragraph would be pushed past a readable line."""
         monkeypatch.setenv("COLUMNS", "60")
         assert prose_width() == 58
-        assert table_width() == 58
+        assert table_width() == TABLE_MIN_WIDTH
 
     def _report(self):
         account = Account(
@@ -1212,9 +1222,143 @@ class TestRelativeBandInTheReport:
         in. One number cannot describe both, so the footnote points at the
         section that lists them."""
         text = self._report()
-        assert "-3.8 *" in text
+        # -3.8 points is inside the 5-point absolute band, and -76% of a 5%
+        # target is well past the 25% relative one: the star says which.
+        assert "-3.8 pts" in text and "-3.8 pts *" not in text
+        assert "-76.0% *" in text
         assert "* outside its rebalancing band" in text
         assert "percentage points" not in text.split("Current vs. Target")[1]
+
+    def _comparison(self, holdings, target, band_pct="5", relative_band_pct="25"):
+        account = Account(
+            account_type="Roth IRA",
+            name="Roth",
+            tax_treatment=TaxTreatment.TAX_FREE,
+            holdings=[
+                Holding(fund_type=fund_type, name=name, value=Decimal(value))
+                for fund_type, name, value in zip(
+                    (FundType.US_STOCK, FundType.INTERNATIONAL_STOCK, FundType.US_BOND),
+                    ("VTI", "VXUS", "BND"),
+                    holdings,
+                    strict=True,
+                )
+            ],
+        )
+        result = RebalanceResult(trades=[], notes=[], taxable_bond_dollars=Decimal(0))
+        text = format_report(inputs([account], target, band_pct, relative_band_pct), result)
+        return text.split("Current vs. Target Allocation")[1].split("Orders to Place")[0]
+
+    def _row(self, section, label):
+        return next(line for line in section.split("\n") if line.startswith(f"  {label}  "))
+
+    def test_a_class_inside_the_absolute_band_is_starred_on_its_relative_drift(self):
+        """The case that made a lone -1.5 look wrongly starred: 1.5 points is
+        well inside 5, but it is 30% of a 5% target."""
+        section = self._comparison(
+            (60000, 36500, 3500),
+            TargetAllocation(
+                us_stock_pct=Decimal("59.28"),
+                international_stock_pct=Decimal("35.72"),
+                bond_pct=Decimal(5),
+            ),
+        )
+        bonds = self._row(section, "Bonds")
+        assert "-1.5 pts  " in bonds and "-1.5 pts *" not in bonds
+        assert bonds.endswith("-30.0% *")
+
+    def test_a_class_past_both_rules_is_starred_on_both(self):
+        section = self._comparison(
+            (110000, 30000, 10000),
+            TargetAllocation(
+                us_stock_pct=Decimal("49.6"),
+                international_stock_pct=Decimal("30.4"),
+                bond_pct=Decimal(20),
+            ),
+        )
+        us = self._row(section, "U.S. stocks")
+        assert "+23.7 pts *" in us and us.endswith("+47.8% *")
+
+    def test_a_band_that_is_off_stars_nothing_and_has_no_footnote(self):
+        section = self._comparison(
+            (60000, 36500, 3500),
+            TargetAllocation(
+                us_stock_pct=Decimal("59.28"),
+                international_stock_pct=Decimal("35.72"),
+                bond_pct=Decimal(5),
+            ),
+            band_pct="0",
+        )
+        assert "*" not in section
+        assert "Relative Drift" in section
+
+    def test_a_zero_target_has_no_relative_drift_to_show(self):
+        """A share of nothing has no size, so the cell says so -- and any
+        holding at all is outside a band that allows none."""
+        section = self._comparison(
+            (60000, 39000, 1000),
+            TargetAllocation(
+                us_stock_pct=Decimal(60), international_stock_pct=Decimal(40), bond_pct=Decimal(0)
+            ),
+        )
+        assert self._row(section, "Bonds").endswith("-- *")
+
+    def test_the_drift_columns_line_up_down_the_table(self):
+        section = self._comparison(
+            (60000, 36500, 3500),
+            TargetAllocation(
+                us_stock_pct=Decimal("59.28"),
+                international_stock_pct=Decimal("35.72"),
+                bond_pct=Decimal(5),
+            ),
+        )
+        lines = section.split("\n")
+        header = next(line for line in lines if "Absolute Drift" in line)
+        labels = ("U.S. stocks", "International stocks", "Bonds")
+        rows = [self._row(section, label) for label in labels]
+        # Every "pts" ends in one column, and each column's right edge -- the
+        # marker slot -- is the right edge of its header.
+        assert len({row.index(" pts") for row in rows}) == 1
+        assert len({len(row.rstrip(" *")) for row in rows}) == 1
+        assert header.index("Absolute Drift") + len("Absolute Drift") == rows[0].index(" pts") + 6
+
+    def test_a_seven_figure_portfolio_fits_the_table_budget_at_80_columns(self):
+        section = self._comparison(
+            (7_000_000, 2_000_000, 900_000),
+            TargetAllocation(
+                us_stock_pct=Decimal("49.6"),
+                international_stock_pct=Decimal("30.4"),
+                bond_pct=Decimal(20),
+            ),
+        )
+        assert max(len(line) for line in section.split("\n")) <= TABLE_MIN_WIDTH
+
+    def test_within_band_is_the_two_rules_together(self):
+        """`within_band` still comes from `effective_band_points`, the one
+        statement of the 5/25 rule; the per-rule flags must never disagree
+        with it, or the stars and the no-trades line would say different
+        things."""
+        target = TargetAllocation(
+            us_stock_pct=Decimal(60), international_stock_pct=Decimal(35), bond_pct=Decimal(5)
+        )
+        for bonds in range(0, 1100, 25):
+            account = Account(
+                account_type="Roth IRA",
+                name="Roth",
+                tax_treatment=TaxTreatment.TAX_FREE,
+                holdings=[
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000)),
+                    Holding(
+                        fund_type=FundType.INTERNATIONAL_STOCK, name="VXUS", value=Decimal(3500)
+                    ),
+                    Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(bonds)),
+                ],
+            )
+            for relative in (None, Decimal(25)):
+                summary = summarize_allocation([account], target, Decimal(5), relative)
+                for cat in summary.categories:
+                    assert cat.within_band == (
+                        not (cat.outside_absolute or cat.outside_relative)
+                    ), (bonds, relative, cat.label)
 
     def test_the_no_trades_line_stops_naming_a_single_band(self):
         on_target = [

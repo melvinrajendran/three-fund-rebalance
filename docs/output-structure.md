@@ -51,11 +51,19 @@ one sentence explaining why it is being asked -- a rule between them would separ
 the question from its reason.
 
 **Two widths, both following the terminal.** `formatting.prose_width()` is
-`min(terminal - 2, PROSE_MAX_WIDTH)`; `formatting.table_width()` is `terminal - 2` with
-no cap. They diverge because they want opposite things: a paragraph gets *harder* to
-read as it widens, while a table of dollar figures does not. Prose, notes and
+`min(terminal - 2, PROSE_MAX_WIDTH)`; `formatting.table_width()` is
+`max(terminal - 2, TABLE_MIN_WIDTH)` -- no cap, and a floor of 100. They diverge because
+they want opposite things: a paragraph gets *harder* to read as it widens, while a table
+is read down its columns and only fails when a row cannot be seen whole. Prose, notes and
 the `=` banners all use prose width; tables are sized to their own contents within the
 table budget.
+
+**Why the floor is 100.** The comparison table carries both drifts -- absolute and
+relative -- beside the dollar columns, which is about 95 columns for a six-figure
+portfolio and 100 for a seven-figure one; showing only one drift is what once put a `*`
+beside a number that read as inside the band. 100 is also the repo's own line length,
+so the README Example and the summary file show the table without scrolling. The cost is
+deliberate and bounded: in an 80-column terminal a table row wraps, and prose never does.
 
 This replaced a fixed 78, which was fine for prose but squeezed the tables -- the
 comparison table silently passed 78 at a $5M portfolio, because seven-figure dollar
@@ -71,9 +79,9 @@ because textwrap will otherwise split "tax-advantaged" across lines, and in a do
 about tax treatment that reads as a different term.
 
 **Only the per-account holdings table may exceed the width budget.** Everything else --
-prose, notes, account headings, trade lines, the comparison table -- wraps or is
-sized to fit, and `test_long_names_do_not_push_prose_or_headings_off_the_page` holds
-the line. The exception is deliberate: a fund entered by its real name rather than its
+prose, notes, account headings and trade lines at prose width, the comparison table
+within its 100-column floor -- wraps or is sized to fit, and
+`test_long_names_do_not_push_prose_or_headings_off_the_page` holds the line. The exception is deliberate: a fund entered by its real name rather than its
 ticker ("Vanguard Total Stock Market Index Fund Admiral Shares") cannot fit alongside
 an amount in 78 columns, truncating it is how someone buys the wrong fund at the
 broker, and wrapping it destroys the alignment the table exists for. It runs wide and
@@ -95,7 +103,8 @@ class, label left and share right-aligned, set in one level further and left out
 the width computation the rows share. That keeps every amount in a block ending in the
 same column whether or not a multi-asset fund is in it, and it makes the mix the same
 shape as the Target Asset Allocation block, which lists the same three classes. See
-`report._describe_mix` and `TestMultiAssetFundRows`.
+`formatting.format_fund_mix` and `TestMultiAssetFundRows`. The prompts set the same
+table one level under a multi-asset fund's `Saved details` line.
 
 There used to be a rule suppressing the treatment when the type already named it, for
 the sake of the account type then called `Taxable Brokerage`. Since v4 renamed that to

@@ -4,11 +4,11 @@ from zoneinfo import ZoneInfo
 
 from three_fund_rebalance.formatting import (
     describe_as_of,
-    describe_fund_allocation,
     fixed_width,
     format_account_heading,
     format_and_list,
     format_date,
+    format_fund_mix,
     format_generated_at,
     format_generated_at_for_filename,
     format_percent_prose,
@@ -212,17 +212,19 @@ class TestFixedWidth:
     other than the terminal that produced it."""
 
     def test_it_pins_both_widths_and_restores_them(self, monkeypatch):
+        """At 80 columns a file's prose is 78 and its tables keep their
+        100-column floor."""
         monkeypatch.setenv("COLUMNS", "200")
         before = (prose_width(), table_width())
         with fixed_width(80):
-            assert (prose_width(), table_width()) == (78, 78)
+            assert (prose_width(), table_width()) == (78, 100)
         assert (prose_width(), table_width()) == before
 
     def test_it_restores_the_previous_setting_when_nested(self):
-        with fixed_width(120):
+        with fixed_width(140):
             with fixed_width(80):
-                assert table_width() == 78
-            assert table_width() == 118
+                assert table_width() == 100
+            assert table_width() == 138
 
 
 class TestFormatAndList:
@@ -242,39 +244,48 @@ class TestFormatAndList:
         assert format_and_list(["A", "B", "C", "D"]) == "A, B, C, and D"
 
 
-class TestDescribeFundAllocation:
-    """A multi-asset fund's mix, said the same way in the prompt that asks
-    for it and in the report that restates it. Here rather than in `prompts`
-    because `report` may not import `prompts`."""
+class TestFormatFundMix:
+    """A multi-asset fund's mix as a table, the same in the prompt that shows
+    a saved fund and in the report that restates it. Here rather than in
+    either because `report` may not import `prompts`."""
 
-    def test_it_names_all_three_sleeves_as_a_sentence(self):
-        assert describe_fund_allocation(
+    def test_it_lists_the_three_classes_in_the_report_s_order(self):
+        assert format_fund_mix(
             FundAllocation(
                 us_stock_pct=Decimal(54),
                 international_stock_pct=Decimal(36),
                 bond_pct=Decimal(10),
             )
-        ) == "54% U.S. stocks, 36% international stocks, and 10% bonds"
+        ) == [
+            "U.S. stocks           54%",
+            "International stocks  36%",
+            "Bonds                 10%",
+        ]
 
-    def test_a_zero_sleeve_is_still_named(self):
-        """All three, always: "60% U.S. stocks and 40% bonds" leaves the
-        reader to work out that the fund holds no international at all."""
-        assert describe_fund_allocation(
+    def test_a_zero_sleeve_is_still_listed(self):
+        """All three, always: leaving one out leaves the reader to work out
+        that the fund holds none of it."""
+        lines = format_fund_mix(
             FundAllocation(
                 us_stock_pct=Decimal(60),
                 international_stock_pct=Decimal(0),
                 bond_pct=Decimal(40),
             )
-        ) == "60% U.S. stocks, 0% international stocks, and 40% bonds"
+        )
+        assert lines[1] == "International stocks   0%"
 
-    def test_percentages_are_written_as_a_person_would_type_them(self):
-        """The fund's own figures, trailing zeros trimmed -- and not the
-        normalized fractions `FundAllocation.fraction_of` derives for the
-        solver."""
-        assert describe_fund_allocation(
+    def test_shares_are_read_back_as_entered_and_line_up_on_the_percent_sign(self):
+        """The fund's own figures at their own precision -- not rounded by
+        `format_percents`, and not the normalized fractions the solver uses --
+        so they are right-aligned rather than aligned on a decimal point."""
+        assert format_fund_mix(
             FundAllocation(
-                us_stock_pct=Decimal("64.0"),
-                international_stock_pct=Decimal("34.3"),
-                bond_pct=Decimal("1.6"),
+                us_stock_pct=Decimal("64.1"),
+                international_stock_pct=Decimal("34.34"),
+                bond_pct=Decimal("1.56"),
             )
-        ) == "64% U.S. stocks, 34.3% international stocks, and 1.6% bonds"
+        ) == [
+            "U.S. stocks            64.1%",
+            "International stocks  34.34%",
+            "Bonds                  1.56%",
+        ]
