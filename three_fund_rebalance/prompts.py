@@ -751,9 +751,9 @@ def _prompt_fund_holdings(
     account: it is the only way to drop one from a list nothing else bounds,
     and one question shape for removing either is one fewer thing to learn.
 
-    "Add another fund?" then defaults to yes. It costs a single "n" to finish
-    and it leans the way the capacity argument above does -- an account is far
-    more often one fund short of what it could hold than one too many.
+    "Add another fund?" then defaults to no, as "Add another account?" does:
+    once one is entered, pressing Enter moves on, and another fund costs a
+    single "y".
     """
     # Said for an account being built from nothing, and not for one whose
     # funds are being re-confirmed: `prompt_accounts` has already said how a
@@ -795,7 +795,7 @@ def _prompt_fund_holdings(
     while True:
         # A new account has to name a fund before it can be asked whether it
         # wants another; a saved one that kept at least one is past that.
-        if holdings and not prompt_yes_no(prompter, "Add another fund?", default=True):
+        if holdings and not prompt_yes_no(prompter, "Add another fund?", default=False):
             break
         holdings.append(
             _prompt_holding(

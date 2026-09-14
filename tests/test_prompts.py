@@ -551,6 +551,24 @@ class TestPromptAccounts:
         assert account.total_value() == Decimal(10_000)
         assert [h.name for h in account.funds()] == ["VTI", "VXUS", "BND"]
 
+    def test_pressing_enter_after_the_first_fund_and_account_finishes_each(self):
+        """Once one fund is entered, "Add another fund?" defaults to no; once
+        one account is, so does "Add another account?"."""
+        responses = [
+            "y",  # Add an account?
+            "1",  # account type -> Roth IRA
+            "My Roth",  # nickname
+            *fund_responses("VTI", US_STOCK_KIND, "6000"),
+            "",  # Add another fund? -> default no
+            "0",  # cash
+            "",  # Add another account? -> default no
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [])
+        assert p.all_consumed()
+        assert len(accounts) == 1
+        assert [h.name for h in accounts[0].funds()] == ["VTI"]
+
     def test_a_multi_asset_fund_may_be_added_beside_single_asset_ones(self):
         """The point of the change: a 401(k) holding a 2050 fund and an index
         fund is an ordinary lineup, and used to be unenterable."""
@@ -962,6 +980,25 @@ class TestPromptAccounts:
         p = ScriptedPrompter(responses)
         prompt_accounts(p, [])
         assert _said_once(p, FUND_EXPLANATION)
+
+    def test_the_fund_questions_are_introduced_again_for_each_new_account(self):
+        """Unlike the fund kinds, which are the same list every time, the note
+        is about the account just named -- and a second account is where a
+        user lists only what it holds and leaves out a $0 slot."""
+        responses = [
+            "y", "1", "My Roth",
+            *fund_list_responses(fund_responses("VTI", US_STOCK_KIND, "1000")),
+            "0",
+            "y", "10", "Taxable",  # Brokerage
+            *fund_list_responses(known_fund_responses("VTI", "5000")),
+            "0",
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
+        prompt_accounts(p, [])
+        assert p.all_consumed()
+        said = " ".join(" ".join(p.said).split())
+        assert said.count(FUND_EXPLANATION) == 2
 
     def test_the_fund_kinds_are_listed_once_per_account(self):
         """Four choices reprinted under every fund is most of the screen, so

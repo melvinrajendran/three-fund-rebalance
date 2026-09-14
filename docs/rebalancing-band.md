@@ -40,7 +40,7 @@ preferred over it, and either one overridable.
 rule's name is not.
 
 **The relative half is one of the two questions in the flow that get explained before
-they are asked** (the other is the three fund slots -- see `prompts.FUND_EXPLANATION`).
+they are asked** (the other is which funds an account lists -- see `prompts.FUND_EXPLANATION`).
 Everything else is asked bare and explained where its effect is visible, in the
 report. That does not work here: "or by more than this percentage of its target"
 reads as an alternative when it is a second, tighter limit, and the reason the rule
