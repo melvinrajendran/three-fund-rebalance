@@ -166,7 +166,8 @@ VT's fund page to read the number off yourself. It never guesses silently.
 **Rebalancing bands.** You set two -- and an asset class has to satisfy both,
 so the tighter binds: the *absolute band*, in percentage points of the
 portfolio, and the *relative band*, as a percentage of the asset class's
-target. Zero on either tolerates no drift.
+target. They default to 5 points and 25%, and zero on either tolerates no
+drift.
 
 **A band is a trigger, not a destination.** No trades while every asset class
 stays within its band; if any drifts outside, all three are rebalanced back to

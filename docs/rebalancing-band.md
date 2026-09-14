@@ -25,31 +25,19 @@ keep meaning exactly what it did -- every solver test that says nothing about th
 still asserts exact-target behavior -- and it is the same "absent means never chosen"
 that `rebalance_band_pct` uses in the config file.
 
-**Both halves are required input, and neither offers a suggested answer.**
-`prompt_rebalance_band` and `prompt_relative_rebalance_band` pass `default` straight
-through, so it carries a *saved* answer and nothing else: a returning user presses
-Enter to keep what they chose, and a first run has to type both. They used to fall
-back to `DEFAULT_REBALANCE_BAND_PCT` / `DEFAULT_REBALANCE_RELATIVE_BAND_PCT`, which
-meant the whole of step 2 could be walked past with two keystrokes. The band is the
-one setting here that decides whether the program does anything at all, 5 and 25 are
-a convention rather than a recommendation this program is in a position to make, and a
-number the user never chose reads back in the report's "Rebalancing Bands" section as
-their own policy. The constants stay in `config.py` as the documented convention --
-what is gone is the program answering on the user's behalf. `TestRebalanceBandPrompts`
-pins both halves of that: no suggested answer on a first run, a saved answer still
-offered.
+**Both halves default to the 5/25 rule, and the user can type over either.**
+`prompt_rebalance_band` and `prompt_relative_rebalance_band` offer a *saved* answer
+when there is one and otherwise fall back to `DEFAULT_REBALANCE_BAND_PCT` /
+`DEFAULT_REBALANCE_RELATIVE_BAND_PCT`, so a first run can accept the convention with
+Enter and a returning user keeps what they chose. This reverses an earlier decision to
+require both answers on a first run, at the user's request. The config file still stores
+an absent band as absent -- the default is applied at the prompt, never written in on
+load. `TestRebalanceBandPrompts` pins both halves: 5/25 on a first run, a saved answer
+preferred over it, and either one overridable.
 
-**The README says none of this, deliberately.** It claimed "both are asked outright
-with no suggested answer", which is true of a first run and false of every run after
-it, since a saved answer *is* offered back -- one of those halves is easy to state and
-forget the other. It named the 5/25 rule in the same breath, which put a specific pair
-of numbers in front of a reader as the convention while the program itself declines to
-suggest them. Both went. Whether a prompt has a default is not what someone deciding
-to install needs to know, and the two facts were only ever there together.
-
-Note this makes `prompt_percent`'s no-default path load-bearing for the first time in
-the flow: pressing Enter falls through to "Please enter a number." rather than
-returning anything, which is what "required" means here.
+**The README states the defaults but does not name the 5/25 rule.** "They default to
+5 points and 25%" is what a reader needs to know what they get by pressing Enter; the
+rule's name is not.
 
 **The relative half is one of the two questions in the flow that get explained before
 they are asked** (the other is the three fund slots -- see `prompts.FUND_EXPLANATION`).
@@ -74,10 +62,10 @@ holds this.
 The vocabulary throughout is the Bogleheads wiki's and Larry Swedroe's, because that
 is where a reader checking what to answer ends up: "rebalancing band", "asset class", an
 asset class that "drifts from" its target, and the pair of numbers as **the 5/25
-rule** -- absolute 5, relative 25. The rule is named in `config.py` and this file, and
-nowhere the user can see it: not in the prompt, and no longer in the README. Where the two traditions disagree, precision
-wins: Bogleheads writes the absolute half as "5%", which is 5 percentage *points*, so
-the prompt's unit stays `pts`.
+rule** -- absolute 5, relative 25. The rule is named in `config.py` and this file; the
+prompt and the README show its numbers as the defaults but not its name.
+Where the two traditions disagree, precision wins: Bogleheads writes the absolute half
+as "5%", which is 5 percentage *points*, so the prompt's unit stays `pts`.
 
 Because each class now has its own band, nothing user-facing may name a single number
 for it. `report._describe_band` writes the three ranges out; `_describe_band_extent`
