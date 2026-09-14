@@ -280,23 +280,22 @@ class TestRebalanceBandPrompts:
         assert BAND_EXPLANATION.count(".") == 1
         assert len(wrap(BAND_EXPLANATION).split("\n")) <= 2
 
-    def test_neither_half_offers_a_suggested_answer(self):
-        """The band decides whether the program does anything at all, and 5/25
-        is a convention rather than a recommendation this program is in a
-        position to make. Offering it meant a first run could be walked past
-        with two keystrokes, and a number the user never chose then reads back
-        in the report as their own policy."""
-        assert "[" not in self._asked(prompt_rebalance_band)
-        assert "[" not in self._asked(prompt_relative_rebalance_band)
-
-    def test_pressing_enter_re_asks_rather_than_choosing_for_you(self):
-        p = ScriptedPrompter(["", "5"])
+    def test_a_first_run_offers_the_5_25_rule_as_the_default(self):
+        """With nothing saved, Enter accepts absolute 5 and relative 25."""
+        assert self._asked(prompt_rebalance_band).endswith("[5]: ")
+        assert self._asked(prompt_relative_rebalance_band).endswith("[25]: ")
+        p = ScriptedPrompter(["", ""])
         assert prompt_rebalance_band(p) == Decimal(5)
-        assert "Please enter a number." in p.said
+        assert prompt_relative_rebalance_band(p) == Decimal(25)
+
+    def test_the_default_can_be_typed_over(self):
+        p = ScriptedPrompter(["3", "20"])
+        assert prompt_rebalance_band(p) == Decimal(3)
+        assert prompt_relative_rebalance_band(p) == Decimal(20)
 
     def test_a_saved_answer_is_still_offered_as_an_editable_default(self):
-        """Nothing about requiring an answer changes the persistence contract:
-        a returning user presses Enter to keep what they chose last time."""
+        """A saved answer takes the place of the 5/25 default: a returning
+        user presses Enter to keep what they chose last time."""
         p = ScriptedPrompter([""])
         assert prompt_rebalance_band(p, default=Decimal(3)) == Decimal(3)
         p = ScriptedPrompter([""])

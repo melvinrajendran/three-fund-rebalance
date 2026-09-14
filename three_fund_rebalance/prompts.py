@@ -13,6 +13,8 @@ from decimal import Decimal, InvalidOperation
 
 from three_fund_rebalance.config import (
     ACCOUNT_TYPE_CHOICES,
+    DEFAULT_REBALANCE_BAND_PCT,
+    DEFAULT_REBALANCE_RELATIVE_BAND_PCT,
     FALLBACK_VT_US_PCT,
     MAX_ACCOUNT_NAME_LENGTH,
     VT_FUND_NAME,
@@ -402,7 +404,7 @@ def prompt_stock_bond_allocation(
 #: that is where a reader who wants to check what to answer will end up:
 #: "rebalancing band", "asset class", an asset class that "drifts from" its
 #: target. See config.DEFAULT_REBALANCE_BAND_PCT for the wiki link and for
-#: the 5/25 rule, which this program records but never suggests.
+#: the 5/25 rule, which both questions offer as their default.
 #:
 #: One sentence. Earlier drafts also named the rule, said what the relative
 #: band is for, and noted that zero turns the band off -- all true, and all
@@ -425,14 +427,13 @@ def prompt_rebalance_band(prompter: Prompter, *, default: Decimal | None = None)
     only has to say which unit it wants, which is the part that was actually
     ambiguous.
 
-    **There is no suggested default.** `default` carries a saved answer and
-    nothing else, so on a first run both halves have to be typed -- see
-    prompt_relative_rebalance_band for why.
+    Offers the 5 of the 5/25 rule unless the user has a saved answer, which
+    wins -- see prompt_relative_rebalance_band.
     """
     return prompt_percent(
         prompter,
         "Absolute band, in percentage points of the portfolio",
-        default=default,
+        default=DEFAULT_REBALANCE_BAND_PCT if default is None else default,
         unit="pts",
     )
 
@@ -443,24 +444,14 @@ def prompt_relative_rebalance_band(
     """The relative band: a share of the class's own target, so it scales
     with the target where the absolute band does not.
 
-    Like the absolute half, this offers a saved answer and never a suggested
-    one. The pair used to default to the 5/25 convention, which meant a first
-    run could be walked past with two keystrokes -- and the band is the one
-    setting here that decides whether the program does anything at all. A
-    number the user did not choose, sitting under a heading that says
-    "Rebalancing band", reads in the report as their own policy. Neither
-    figure is universal: 5 and 25 are a convention, not a recommendation this
-    program is in a position to make.
-
-    The constants remain in `config.py` as the documented convention -- what
-    is gone is the program answering the question on the user's behalf. The
-    README does not name the rule either: a specific pair of numbers offered
-    to a reader as the convention is the same suggestion by another route.
+    Like the absolute half, this offers the user's saved answer when there is
+    one and the 25 of the 5/25 rule when there is not, so a first run can
+    accept the convention with Enter and anyone can type over it.
     """
     return prompt_percent(
         prompter,
         "Relative band, as a percentage of the asset class's target",
-        default=default,
+        default=DEFAULT_REBALANCE_RELATIVE_BAND_PCT if default is None else default,
     )
 
 

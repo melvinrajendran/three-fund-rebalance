@@ -132,8 +132,9 @@ disclaimer entry under "Wording the output has to keep" for why.
 it.** The two bands, the order/trade split, and the ban on "recommendation" all apply
 here exactly as they do to printed output -- the README is one of the places the band
 names have to agree, and a rename is a change to all of them at once. The 5/25 rule is
-the exception in the other direction: it is a name for something the program never
-shows, so the README does not use it either.
+the exception in the other direction: the program offers its numbers as the bands'
+defaults but never shows its name, so the README states the defaults ("5 points and
+25%") without naming the rule.
 
 Mechanically: prose wraps at 78 columns, hard; `--` for a dash, never an em dash, so
 the source matches what the CLI prints; asterisk emphasis for the band names on first
