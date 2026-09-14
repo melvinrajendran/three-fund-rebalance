@@ -33,8 +33,8 @@ file written before the rule and one written under it load the same way. What
 key an order is placed against -- and that reaches the user the way any
 `PersistenceError` does: `cli.run()` warns and starts blank.
 
-The file is at v5, and upgrades run **one hop at a time** -- `config_from_dict` chains
-`v1 → _upgrade_v1 → v2 → … → _upgrade_v4 → v5`, so a v1 file walks the
+The file is at v6, and upgrades run **one hop at a time** -- `config_from_dict` chains
+`v1 → _upgrade_v1 → v2 → … → _upgrade_v5 → v6`, so a v1 file walks the
 same path a v4 file does. Each upgrade translates without validating: anything still wrong surfaces from
 the normal parse, so a corrupt old file reports what a corrupt current file would.
 Each copies at every level, because a failed load must not leave the caller's parsed
@@ -75,6 +75,25 @@ in-place edit of an existing one -- and `_upgrade_v1` must keep returning `2`, n
   A v4 target-date account loads as a one-fund multi-asset account, which is exactly
   what it always was. No account structure moves: v4 refused to load a mixed account,
   so no such file exists to translate -- what changed is that v5's model accepts one.
+
+- **v5 → v6** moves each fund's `fund_type` and `allocation` off its holdings into one
+  top-level `"funds"` list, because a fund name maps to one set of details across every
+  account (see [`invariants.md`](invariants.md)) and two copies are what let them
+  disagree. A fund holding is now `{name, value}` and is resolved against `funds` by
+  `fund_name_key`; cash is `{fund_type: "cash", value}`. A holding that still carries
+  its own details, or names a fund `funds` does not list, is a `PersistenceError`.
+  The hop appends one `funds` entry per fund holding, repeats included, and the parse
+  collapses repeats that agree. **Repeats that disagree are refused**, with the message
+  naming the fund -- the hop is not the place to pick which of two answers was the
+  user's, and it is the same treatment a v6 file describing one fund two ways gets.
+
+`funds` holds exactly the funds some account holds. **A fund removed from every account
+is removed from the file** on the next save -- `config_to_dict` writes
+`FundCatalog.held_by(accounts)` -- because a fund the portfolio no longer holds is not
+part of it, and a list that only grows is one nobody can prune. It also adds any
+account fund `funds` lacks, which is what lets a `PersistedConfig` built from accounts
+alone still write a loadable file. A hand-edited file listing an unheld fund still
+loads; the entry is simply gone after the next save.
 
 `rebalance_relative_band_pct` was added later **without a hop**, and deliberately: a
 new optional key translates nothing, and its absence already means "never chosen"

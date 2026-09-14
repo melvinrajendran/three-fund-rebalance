@@ -23,10 +23,13 @@ from three_fund_rebalance.models import TaxTreatment
 # `target_date_allocation` to `allocation`: an account may now hold any
 # combination of funds, so a fund with a fixed internal mix is no longer
 # necessarily a dated one.
-# Older files are still read -- persistence._upgrade_v1 through _upgrade_v4
+# 6 moved each fund's type and mix off its holdings into one top-level `funds`
+# list: a fund name maps to one set of details across every account, so it is
+# stored once, and a holding keeps only its name and value.
+# Older files are still read -- persistence._upgrade_v1 through _upgrade_v5
 # translate them on load -- and are rewritten at the current version the next
 # time the user saves.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DEFAULT_CONFIG_PATH = Path.home() / ".three_fund_rebalance" / "config.json"
 
 # ---------------------------------------------------------------------------

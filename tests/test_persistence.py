@@ -7,6 +7,7 @@ from three_fund_rebalance.config import SCHEMA_VERSION
 from three_fund_rebalance.models import (
     Account,
     FundAllocation,
+    FundProfile,
     FundType,
     Holding,
     TaxTreatment,
@@ -17,6 +18,7 @@ from three_fund_rebalance.persistence import (
     _upgrade_v1,
     _upgrade_v2,
     _upgrade_v4,
+    _upgrade_v5,
     config_from_dict,
     load_config,
     save_config,
@@ -169,6 +171,52 @@ MALFORMED = {
         "schema_version": SCHEMA_VERSION,
         "rebalance_relative_band_pct": ["25"],
         "accounts": [],
+    },
+    "funds is not a list": {"schema_version": SCHEMA_VERSION, "funds": 7, "accounts": []},
+    "fund is not an object": {"schema_version": SCHEMA_VERSION, "funds": ["VTI"], "accounts": []},
+    "fund is cash": {
+        "schema_version": SCHEMA_VERSION,
+        "funds": [{"name": "Sweep", "fund_type": "cash"}],
+        "accounts": [],
+    },
+    "multi-asset fund has no mix": {
+        "schema_version": SCHEMA_VERSION,
+        "funds": [{"name": "VBIAX", "fund_type": "multi_asset"}],
+        "accounts": [],
+    },
+    "one fund described two ways": {
+        "schema_version": SCHEMA_VERSION,
+        "funds": [
+            {"name": "VTI", "fund_type": "us_stock"},
+            {"name": "vti", "fund_type": "us_bond"},
+        ],
+        "accounts": [],
+    },
+    "holding names a fund not under funds": {
+        "schema_version": SCHEMA_VERSION,
+        "funds": [],
+        "accounts": [
+            {
+                "account_type": "Brokerage",
+                "name": "B",
+                "tax_treatment": "taxable",
+                "holdings": [{"name": "VTI", "value": "10"}],
+            }
+        ],
+    },
+    "holding carries its own details": {
+        "schema_version": SCHEMA_VERSION,
+        "funds": [{"name": "VTI", "fund_type": "us_stock"}],
+        "accounts": [
+            {
+                "account_type": "Brokerage",
+                "name": "B",
+                "tax_treatment": "taxable",
+                # Only a mix, with no type: no older hop would lift it, so it
+                # stays invalid whichever version the file claims to be.
+                "holdings": [{"name": "VTI", "allocation": {}, "value": "10"}],
+            }
+        ],
     },
     "account name is null": {
         "schema_version": 2,
@@ -353,13 +401,21 @@ class TestSchemaV1Migration:
         written = json.loads(path.read_text())
         assert written["schema_version"] == SCHEMA_VERSION
         assert "balances_as_of" not in written
-        holdings = {h["fund_type"]: h for h in written["accounts"][0]["holdings"]}
-        assert set(holdings) == {"us_stock", "international_stock", "us_bond", "cash"}
-        assert holdings["us_stock"]["value"] == "6000"
-        multi_asset = written["accounts"][1]["holdings"][0]
-        assert multi_asset["fund_type"] == "multi_asset"
-        assert "allocation" in multi_asset
-        assert "target_date_allocation" not in multi_asset
+        funds = {f["name"]: f for f in written["funds"]}
+        assert {name: f["fund_type"] for name, f in funds.items()} == {
+            "VTI": "us_stock",
+            "VXUS": "international_stock",
+            "BND": "us_bond",
+            "Target 2050": "multi_asset",
+        }
+        assert "allocation" in funds["Target 2050"]
+        assert "target_date_allocation" not in funds["Target 2050"]
+        assert written["accounts"][0]["holdings"] == [
+            {"name": "VTI", "value": "6000"},
+            {"name": "VXUS", "value": "2000"},
+            {"name": "BND", "value": "1000"},
+            {"fund_type": "cash", "value": "500"},
+        ]
 
     def test_migration_does_not_mutate_the_callers_dict(self):
         payload = self._v1_payload()
@@ -478,7 +534,8 @@ class TestErrorHandling:
     def test_holding_failing_model_validation_raises(self, tmp_path):
         # An empty name is valid JSON but rejected by Holding's own validation
         # for a non-cash fund type -- this should surface as PersistenceError,
-        # not an uncaught ValueError.
+        # not an uncaught ValueError. Since v6 a fund's details are parsed
+        # under "funds", so that is where the message says it went wrong.
         path = tmp_path / "config.json"
         path.write_text(
             json.dumps(
@@ -497,7 +554,7 @@ class TestErrorHandling:
                 }
             )
         )
-        with pytest.raises(PersistenceError, match="Invalid holding"):
+        with pytest.raises(PersistenceError, match="Invalid fund"):
             load_config(path)
 
     def test_invalid_holding_fund_type_raises(self, tmp_path):
@@ -517,7 +574,7 @@ class TestErrorHandling:
                 }
             )
         )
-        with pytest.raises(PersistenceError, match="Invalid holding"):
+        with pytest.raises(PersistenceError, match="Invalid fund"):
             load_config(path)
 
 
@@ -586,7 +643,7 @@ class TestSchemaV2Migration:
         path = tmp_path / "config.json"
         path.write_text(json.dumps(self._v2_payload("Roth IRA")))
         config = load_config(path)
-        assert config.schema_version == SCHEMA_VERSION == 5
+        assert config.schema_version == SCHEMA_VERSION == 6
         assert config.accounts[1].account_type == "Brokerage"
         assert config.accounts[1].tax_treatment == TaxTreatment.TAXABLE
 
@@ -737,9 +794,9 @@ class TestSchemaV4Migration:
         path = tmp_path / "config.json"
         path.write_text(json.dumps(self._v4_payload()))
         save_config(path, load_config(path))
-        holding = json.loads(path.read_text())["accounts"][0]["holdings"][0]
-        assert holding["fund_type"] == "multi_asset"
-        assert holding["allocation"] == {
+        fund = json.loads(path.read_text())["funds"][0]
+        assert fund["fund_type"] == "multi_asset"
+        assert fund["allocation"] == {
             "us_stock_pct": "60",
             "international_stock_pct": "20",
             "bond_pct": "20",
@@ -814,3 +871,119 @@ class TestRebalanceBandPersistence:
         path = tmp_path / "config.json"
         save_config(path, PersistedConfig(rebalance_band_pct=Decimal(0)))
         assert load_config(path).rebalance_band_pct == Decimal(0)
+
+
+class TestSchemaV5Migration:
+    """v5 wrote a fund's type and mix on every holding of it, so one fund in
+    two accounts was two copies of its details. v6 maps a fund name to one set
+    of details and stores them once, under "funds"."""
+
+    def _v5_payload(self, second_type: str = "us_stock") -> dict:
+        return {
+            "schema_version": 5,
+            "accounts": [
+                {
+                    "account_type": "Brokerage",
+                    "name": "Brokerage",
+                    "tax_treatment": "taxable",
+                    "holdings": [
+                        {"fund_type": "us_stock", "name": "VTI", "value": "6000"},
+                        {
+                            "fund_type": "multi_asset",
+                            "name": "VBIAX",
+                            "value": "3000",
+                            "allocation": {
+                                "us_stock_pct": "60",
+                                "international_stock_pct": "0",
+                                "bond_pct": "40",
+                            },
+                        },
+                        {"fund_type": "cash", "name": "", "value": "100"},
+                    ],
+                },
+                {
+                    "account_type": "Other",
+                    "name": "Other",
+                    "tax_treatment": "taxable",
+                    "holdings": [{"fund_type": second_type, "name": "vti", "value": "4000"}],
+                },
+            ],
+        }
+
+    def test_one_fund_in_two_accounts_becomes_one_saved_fund(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v5_payload()))
+        config = load_config(path)
+        assert config.schema_version == SCHEMA_VERSION == 6
+        assert [(f.name, f.fund_type) for f in config.funds] == [
+            ("VTI", FundType.US_STOCK),
+            ("VBIAX", FundType.MULTI_ASSET),
+        ]
+        assert config.accounts[1].funds()[0].name == "vti"
+        assert config.accounts[1].funds()[0].value == Decimal(4000)
+        assert config.accounts[0].funds()[1].allocation.bond_pct == Decimal(40)
+        assert config.accounts[0].available_cash() == Decimal(100)
+
+    def test_a_resaved_file_stores_each_funds_details_once(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v5_payload()))
+        save_config(path, load_config(path))
+        written = json.loads(path.read_text())
+        assert [f["name"] for f in written["funds"]] == ["VTI", "VBIAX"]
+        assert written["accounts"][0]["holdings"] == [
+            {"name": "VTI", "value": "6000"},
+            {"name": "VBIAX", "value": "3000"},
+            {"fund_type": "cash", "value": "100"},
+        ]
+        assert written["accounts"][1]["holdings"] == [{"name": "vti", "value": "4000"}]
+
+    def test_one_fund_described_two_ways_is_refused_rather_than_guessed(self, tmp_path):
+        """The hop is not the place to decide which of two answers was the
+        user's, so the file is refused the way a v6 file saying so would be."""
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(self._v5_payload(second_type="us_bond")))
+        with pytest.raises(PersistenceError, match="described two different ways"):
+            load_config(path)
+
+    def test_the_hop_stops_at_six(self):
+        assert _upgrade_v5({"schema_version": 5})["schema_version"] == 6
+
+    def test_the_hop_does_not_mutate_the_callers_payload(self):
+        payload = self._v5_payload()
+        config_from_dict(payload)
+        assert payload["schema_version"] == 5
+        assert "funds" not in payload
+        assert payload["accounts"][0]["holdings"][0]["fund_type"] == "us_stock"
+        assert "allocation" in payload["accounts"][0]["holdings"][1]
+
+
+class TestSavedFunds:
+    def test_a_fund_no_account_holds_is_not_saved(self, tmp_path):
+        """Removing a fund from every account removes it from the file."""
+        path = tmp_path / "config.json"
+        config = sample_config()
+        config.funds = [
+            FundProfile(name="BND", fund_type=FundType.US_BOND),
+            FundProfile(name="VTI", fund_type=FundType.US_STOCK),
+        ]
+        save_config(path, config)
+        loaded = load_config(path)
+        assert [f.name for f in loaded.funds] == ["VTI", "Target 2050", "VXUS"]
+
+    def test_a_hand_edited_file_listing_an_unheld_fund_still_loads(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({
+            "schema_version": SCHEMA_VERSION,
+            "funds": [{"name": "BND", "fund_type": "us_bond"}],
+            "accounts": [],
+        }))
+        config = load_config(path)
+        assert [f.name for f in config.funds] == ["BND"]
+        save_config(path, config)
+        assert json.loads(path.read_text())["funds"] == []
+
+    def test_saving_an_account_that_contradicts_a_saved_fund_is_refused(self, tmp_path):
+        config = sample_config()
+        config.funds = [FundProfile(name="VTI", fund_type=FundType.US_BOND)]
+        with pytest.raises(ValueError, match="described two different ways"):
+            save_config(tmp_path / "config.json", config)

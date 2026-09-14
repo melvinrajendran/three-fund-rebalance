@@ -112,6 +112,8 @@ session and because a change that breaks one usually looks reasonable up close.
     one.** `cli._now_local` is the only clock. (`docs/output-wording.md`)
 14. **Every way a config file can fail to load raises `PersistenceError`**, which
     `cli.run()` catches to warn and start blank. (`docs/persistence.md`)
+15. **A fund name maps to one kind and mix across every account**, stored once in
+    `FundCatalog`; only value is per account. (`docs/invariants.md`)
 
 ## Where the rest of this lives
 

@@ -33,6 +33,14 @@ comes `"Add another fund?"`, which defaults to **yes** -- so a list reads
 `fund, "y", fund, "y", fund, "n"`, one `"y"` before each fund after the first and one
 `"n"` to close it. Then the cash.
 
+**A fund name already known in the run asks one question fewer.** Funds are remembered
+by name, so a ticker typed into a second account -- or one the saved file lists -- is
+`name, "Use these details?", value`: `known_fund_responses(name, value)`, where `""`
+takes the saved kind and mix. A `"n"` there is followed by the kind (and mix) as for a
+new fund. `new_account_responses(..., known=True)` is the VTI/VXUS/BND account for every
+such account after the first in a run; forgetting it runs the script one answer out of
+step.
+
 The helpers are `fund_responses`, `multi_asset_fund_responses` and (in `test_cli.py`)
 `account_responses` / `new_account_responses`; reuse them rather than spelling a list
 out. On the update path every saved fund arrives behind its own `"Keep this fund?"`

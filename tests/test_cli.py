@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -63,6 +64,13 @@ def multi_asset_fund_responses(
     return [name, MULTI_ASSET_KIND, us_stock, international, "y", value]
 
 
+def known_fund_responses(name: str, value: str) -> list[str]:
+    """A fund whose name is already known from another account: its name,
+    "Use these details?" taken at its default of yes, and its value -- the
+    kind and mix are the saved ones and are not asked again."""
+    return [name, "", value]
+
+
 def account_responses(
     account_type_index: str, nickname: str, funds: list[list[str]], cash: str = "0"
 ) -> list[str]:
@@ -112,19 +120,27 @@ def new_account_responses(
     intl_value: str,
     bond_value: str,
     cash: str = "0",
+    *,
+    known: bool = False,
 ) -> list[str]:
     """The common account: one fund per asset class, in the order every table
-    in the report lists them."""
-    return account_responses(
-        account_type_index,
-        nickname,
-        [
+    in the report lists them.
+
+    `known` is for every such account after the first in a run: VTI, VXUS and
+    BND are then already described, so each is confirmed rather than asked."""
+    if known:
+        funds = [
+            known_fund_responses("VTI", us_stock_value),
+            known_fund_responses("VXUS", intl_value),
+            known_fund_responses("BND", bond_value),
+        ]
+    else:
+        funds = [
             fund_responses("VTI", US_STOCK_KIND, us_stock_value),
             fund_responses("VXUS", INTERNATIONAL_KIND, intl_value),
             fund_responses("BND", BOND_KIND, bond_value),
-        ],
-        cash,
-    )
+        ]
+    return account_responses(account_type_index, nickname, funds, cash)
 
 
 def target_date_account_responses(
@@ -480,7 +496,7 @@ class TestRevisionLoop:
     def _two_accounts(self):
         return [
             "y", *new_account_responses("10", "Brokerage", "1500000", "40000", "0"),
-            "y", *new_account_responses("1", "Roth", "60000", "0", "0"),
+            "y", *new_account_responses("1", "Roth", "60000", "0", "0", known=True),
             "n",
         ]
 
@@ -839,3 +855,59 @@ class TestTheActionsAfterTheReport:
         lines = self._run(tmp_path)
         closing = next(i for i, line in enumerate(lines) if line.startswith("Consult a"))
         assert lines[closing + 1:closing + 3] == ["", "Update Answer"]
+
+
+class TestFundsAreRememberedAcrossRuns:
+    """Every fund entered is saved once, under "funds", and a later run that
+    types one into a new account confirms its details instead of asking."""
+
+    def _first_run(self, config_path):
+        prompter = ScriptedPrompter([
+            "80", "y", "0", "0",
+            "y", *new_account_responses("10", "Brokerage", "6000", "2000", "2000"),
+            "n", NO_REVISION, "y",
+        ])
+        assert run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter) == 0
+
+    def test_the_saved_file_stores_each_funds_details_once(self, tmp_path):
+        config_path = tmp_path / "c.json"
+        self._first_run(config_path)
+        written = json.loads(config_path.read_text())
+        assert [(f["name"], f["fund_type"]) for f in written["funds"]] == [
+            ("VTI", "us_stock"),
+            ("VXUS", "international_stock"),
+            ("BND", "us_bond"),
+        ]
+        assert written["accounts"][0]["holdings"][0] == {"name": "VTI", "value": "6000"}
+
+    def test_a_saved_fund_typed_into_a_new_account_is_confirmed(self, tmp_path):
+        config_path = tmp_path / "c.json"
+        self._first_run(config_path)
+        prompter = ScriptedPrompter([
+            "", "y", "", "",
+            *keep_account_responses("", "", ""),
+            "y",  # Add another account?
+            *account_responses("1", "Roth", [known_fund_responses("vxus", "4000")]),
+            "n", NO_REVISION, "y",
+        ])
+        assert run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter) == 0
+        assert prompter.all_consumed()
+        assert "Saved details: VXUS is an international stock fund." in prompter.full_output
+        roth = load_config(config_path).accounts[1]
+        assert roth.funds()[0].fund_type == FundType.INTERNATIONAL_STOCK
+
+    def test_a_fund_removed_from_every_account_is_removed_from_the_file(self, tmp_path):
+        config_path = tmp_path / "c.json"
+        self._first_run(config_path)
+        prompter = ScriptedPrompter([
+            "", "y", "", "",
+            "",  # Keep this account?
+            *keep_fund_responses(), *keep_fund_responses(),
+            "n",  # Keep BND? -- no
+            "n", "",  # no more funds, cash unchanged
+            "n", NO_REVISION, "y",
+        ])
+        assert run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter) == 0
+        assert prompter.all_consumed()
+        written = json.loads(config_path.read_text())
+        assert [f["name"] for f in written["funds"]] == ["VTI", "VXUS"]
