@@ -23,6 +23,7 @@ from three_fund_rebalance.prompts import (
     prompt_decimal,
     prompt_rebalance_band,
     prompt_relative_rebalance_band,
+    prompt_revise_account,
     prompt_stock_bond_allocation,
     prompt_str,
     prompt_yes_no,
@@ -111,6 +112,12 @@ def known_fund_responses(name: str, value: str, use_saved: str = "") -> list[str
     return [name, use_saved, value]
 
 
+def seen_fund_responses(name: str, value: str) -> list[str]:
+    """A fund already shown or described earlier in the same pass: its name
+    and its value, the details not asked about again."""
+    return [name, value]
+
+
 def multi_asset_fund_responses(
     name: str, value: str, us_stock: str = "60", international: str = "20"
 ) -> list[str]:
@@ -143,8 +150,8 @@ def _said_once(prompter: "ScriptedPrompter", sentence: str) -> bool:
 
 def keep_fund_responses(value: str = "") -> list[str]:
     """Keep one saved fund, or change only its value: the "Keep this fund?"
-    gate and then name, kind and value all left at their saved defaults."""
-    return ["", "", "", value]
+    gate, "Use these details?" taken at its default of yes, and the value."""
+    return ["", "", value]
 
 
 class TestPromptStr:
@@ -518,7 +525,7 @@ class TestSavedAccountsLine:
         in the list, so repeating it at the head of each one says nothing the
         account above it has not already said."""
         output = self._run(["Alpha", "Beta"]).text
-        assert output.count("press Enter to use its saved value") == 1
+        assert output.count("press Enter to keep a saved answer") == 1
 
     def test_every_kept_account_comes_back(self):
         p = ScriptedPrompter([*(self.KEEP_ACCOUNT * 2), "n"])
@@ -612,7 +619,7 @@ class TestPromptAccounts:
             "y", "1", "First",
             *fund_list_responses(fund_responses("VTI", US_STOCK_KIND, "0")), "0",
             "y", "1", "First", "SecondUnique",
-            *fund_list_responses(known_fund_responses("VTI", "0")), "0",
+            *fund_list_responses(seen_fund_responses("VTI", "0")), "0",
             "n",
         ]
         p = ScriptedPrompter(responses)
@@ -661,11 +668,54 @@ class TestPromptAccounts:
         assert len(accounts) == 1
         assert accounts[0].funds()[0].value == Decimal(6000)
 
-    def test_a_saved_ticker_is_offered_as_an_editable_default(self):
+    def test_a_kept_fund_shows_its_saved_details_instead_of_re_asking_them(self):
+        """A kept fund takes the same confirmation as any other known fund:
+        its details are said and confirmed, and neither its name nor its kind
+        is asked again."""
+        existing = Account(
+            account_type="Roth IRA",
+            name="My Roth",
+            tax_treatment=TaxTreatment.TAX_FREE,
+            holdings=[Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(6000))],
+        )
+        p = ScriptedPrompter([
+            "y",  # Keep account 'My Roth'?
+            *keep_fund_responses("7000"),
+            "n", "", "n",
+        ])
+        accounts = prompt_accounts(p, [existing])
+        assert p.all_consumed()
+        assert accounts[0].funds()[0].value == Decimal(7000)
+        assert _said_once(p, "Saved details: U.S. stock fund")
+        assert not any("1. U.S. stocks" in text for text in p.said)
+
+    def test_the_kinds_are_listed_for_the_first_fund_that_asks_for_them(self):
+        """A kept fund whose details are confirmed never sees the kinds, so
+        the first fund that is asked its kind still gets the list."""
+        existing = Account(
+            account_type="Roth IRA",
+            name="My Roth",
+            tax_treatment=TaxTreatment.TAX_FREE,
+            holdings=[
+                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1)),
+                Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1)),
+            ],
+        )
+        p = ScriptedPrompter([
+            "y",  # Keep account 'My Roth'?
+            *keep_fund_responses(),  # VTI confirmed
+            "", "n", "", "",  # keep BND, decline its details, same kind, same value
+            "n", "", "n",
+        ])
+        prompt_accounts(p, [existing])
+        assert p.all_consumed()
+        assert sum("1. U.S. stocks" in text for text in p.said) == 1
+
+    def test_a_saved_fund_is_renamed_by_removing_it_and_adding_another(self):
         """A fund's name is the part most likely to change -- a plan swaps
         its bond fund, or a slot opened for a fund not yet bought is filled
-        with a different one -- so it is re-asked with the old one
-        pre-filled."""
+        with a different one. A kept fund's name is not re-asked, so the new
+        ticker is added and the old one dropped."""
         existing = Account(
             account_type="Traditional 401(k)",
             name="401k",
@@ -680,14 +730,17 @@ class TestPromptAccounts:
             "y",  # Keep account '401k'?
             *keep_fund_responses(),  # U.S. stock fund unchanged
             *keep_fund_responses(),  # international unchanged
-            "", "VBTLX", "", "",  # kept, renamed, same kind, same value
-            "n",  # no funds to add
+            "n",  # Keep BND? -> no
+            "y",  # Add another fund?
+            *fund_responses("VBTLX", BOND_KIND, "0"),
+            "n",  # no more funds
             "",  # cash
             "n",
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [existing])
         assert p.all_consumed()
+        assert [h.name for h in accounts[0].funds()] == ["VTI", "VXUS", "VBTLX"]
         bond = accounts[0].funds()[2]
         assert bond.name == "VBTLX"
         assert bond.value == Decimal(0)
@@ -753,8 +806,8 @@ class TestPromptAccounts:
         responses = [
             "y",  # Keep account 'My Roth'?
             "",  # Keep VSMGX?
-            "",  # name unchanged
-            MULTI_ASSET_KIND,  # ...but it is a LifeStrategy fund, not an index one
+            "n",  # Use these details? -> no
+            MULTI_ASSET_KIND,  # ...it is a LifeStrategy fund, not an index one
             "36", "24", "y",  # 60/40, stocks split; 40% bonds derived
             "",  # value unchanged
             "n",  # no funds to add
@@ -830,28 +883,6 @@ class TestPromptAccounts:
         assert p.all_consumed()
         assert [h.name for h in accounts[0].funds()] == ["VTI", "BND"]
 
-    def test_a_saved_fund_keeping_its_own_name_is_not_a_clash(self):
-        """Pressing Enter through a saved ticker has to keep it -- the fund
-        being re-asked is not yet among the names collected."""
-        existing = Account(
-            account_type="Roth IRA",
-            name="My Roth",
-            tax_treatment=TaxTreatment.TAX_FREE,
-            holdings=[
-                Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(100)),
-                Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(0)),
-            ],
-        )
-        p = ScriptedPrompter([
-            "y",
-            *keep_fund_responses(),
-            *keep_fund_responses(),
-            "n", "", "n",
-        ])
-        accounts = prompt_accounts(p, [existing])
-        assert p.all_consumed()
-        assert [h.name for h in accounts[0].funds()] == ["VTI", "BND"]
-
     def test_removing_existing_account(self):
         existing = Account(
             account_type="Roth IRA",
@@ -920,9 +951,8 @@ class TestPromptAccounts:
         responses = [
             "y",  # Keep account '401k'?
             "",  # Keep 'Target 2050'?
-            "",  # name unchanged
-            "",  # kind unchanged -> still a mix
-            "y",  # update the fund's underlying allocation?
+            "n",  # Use these details? -> no
+            "",  # kind unchanged -> still a mix, asked for outright
             "70", "15", "y",  # new underlying allocation; 15% bonds derived
             "",  # value unchanged
             "n",  # no funds to add
@@ -935,12 +965,130 @@ class TestPromptAccounts:
         updated = accounts[0]
         assert updated.funds()[0].allocation.us_stock_pct == Decimal(70)
         assert updated.available_cash() == Decimal(200)
-        # The mix being replaced is shown, so the answer isn't from memory. It
-        # is the *old* one: the question hasn't been answered yet at that point.
-        assert any(
-            "Currently 60% U.S. stocks, 20% international stocks, and 20% bonds" in line
-            for line in p.said
+        # The mix being replaced is shown, so the answer isn't from memory --
+        # once, in the saved details, and not restated before the question.
+        details = next(i for i, line in enumerate(p.said) if "Saved details" in line)
+        assert p.said[details] == "      Saved details: Multi-asset fund"
+        # The report's table, one level under the line it belongs to.
+        assert p.said[details + 1].split("\n") == [
+            "        U.S. stocks           60%",
+            "        International stocks  20%",
+            "        Bonds                 20%",
+        ]
+        assert _said_once(p, "Saved details")
+        assert "Currently" not in p.text
+
+    def test_declining_a_multi_asset_funds_details_offers_its_saved_sleeves(self):
+        """Declining the details is already asking for a change, so the mix is
+        asked outright rather than behind a second yes/no -- with each saved
+        sleeve offered back, so a sleeve that did not change is a keystroke."""
+        existing = Account(
+            account_type="Roth 401(k)",
+            name="401k",
+            tax_treatment=TaxTreatment.TAX_DEFERRED,
+            holdings=[
+                Holding(
+                    fund_type=FundType.MULTI_ASSET,
+                    name="Target 2050",
+                    value=Decimal(3000),
+                    allocation=FundAllocation(
+                        us_stock_pct=Decimal(60),
+                        international_stock_pct=Decimal(20),
+                        bond_pct=Decimal(20),
+                    ),
+                ),
+            ],
         )
+        p = ScriptedPrompter([
+            "y",  # Keep account '401k'?
+            "", "n", "",  # keep the fund, decline its details, kind unchanged
+            "", "", "y",  # both sleeves kept; 20% bonds confirmed
+            "",  # value
+            "n", "", "n",
+        ])
+        accounts = prompt_accounts(p, [existing])
+        assert p.all_consumed()
+        allocation = accounts[0].funds()[0].allocation
+        assert (
+            allocation.us_stock_pct,
+            allocation.international_stock_pct,
+            allocation.bond_pct,
+        ) == (Decimal(60), Decimal(20), Decimal(20))
+
+    def test_a_new_accounts_explanation_starts_directly_under_its_heading(self):
+        """The same spacing a saved account's first question has: an account
+        heading's contents begin on the next line."""
+        p = ScriptedPrompter([
+            "y", "1", "My Roth",
+            *fund_list_responses(fund_responses("VTI", US_STOCK_KIND, "1")), "0",
+            "n",
+        ])
+        prompt_accounts(p, [])
+        heading = next(i for i, line in enumerate(p.said) if "My Roth (Roth IRA)" in line)
+        assert p.said[heading + 1].lstrip().startswith("Enter every fund")
+
+    def test_an_accounts_questions_run_on_without_blank_lines(self):
+        """Depth groups a fund's questions under its name, so nothing inside
+        an account is set apart -- the blank line goes between accounts."""
+        saved = [
+            Account(
+                account_type="Roth IRA",
+                name="Roth",
+                tax_treatment=TaxTreatment.TAX_FREE,
+                holdings=[
+                    Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1)),
+                    Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1)),
+                ],
+            ),
+            Account(
+                account_type="Traditional IRA",
+                name="Empty",
+                tax_treatment=TaxTreatment.TAX_DEFERRED,
+                holdings=[],
+            ),
+        ]
+        p = ScriptedPrompter([
+            "", *keep_fund_responses(), *keep_fund_responses(),
+            "y", *fund_responses("VXUS", INTERNATIONAL_KIND, "1"), "n", "",
+            "", *fund_list_responses(seen_fund_responses("VTI", "2")), "",
+            "n",
+        ])
+        prompt_accounts(p, saved)
+        assert p.all_consumed()
+
+        def index(test):
+            return next(i for i, line in enumerate(p.said) if test(line))
+
+        roth = index(lambda line: "Roth (Roth IRA)" in line)
+        empty = index(lambda line: "Empty (Traditional IRA)" in line)
+        end = index(lambda line: line.startswith("\nAdd Accounts"))
+        # One blank line, and it sits between the two accounts.
+        assert p.said[empty - 1] == ""
+        inside = p.said[roth + 1 : empty - 1] + p.said[empty + 1 : end]
+        assert any("Enter every fund" in line for line in inside)
+        assert all(line.strip() and not line.startswith("\n") for line in inside)
+
+    def test_the_nickname_rule_is_said_for_the_first_account_only(self):
+        """A second account is asked the same question with the rule already
+        read. Question text goes to `input_func`, so it is recorded there."""
+        answers = iter([
+            "y", "1", "Roth",
+            *fund_list_responses(fund_responses("VTI", US_STOCK_KIND, "1")), "0",
+            "y", "10", "Taxable",
+            *fund_list_responses(seen_fund_responses("VTI", "2")), "0",
+            "n",
+        ])
+        asked: list[str] = []
+
+        def record(text: str) -> str:
+            asked.append(text)
+            return next(answers)
+
+        prompt_accounts(Prompter(input_func=record, print_func=lambda _: None), [])
+        assert [q.strip() for q in asked if "Account nickname" in q] == [
+            "Account nickname (must be unique, e.g. 'Vanguard Roth IRA'):",
+            "Account nickname:",
+        ]
 
     def test_a_fund_with_no_position_is_still_declared(self):
         """A fund the user owns none of becomes a slot the solver can buy
@@ -990,7 +1138,7 @@ class TestPromptAccounts:
             *fund_list_responses(fund_responses("VTI", US_STOCK_KIND, "1000")),
             "0",
             "y", "10", "Taxable",  # Brokerage
-            *fund_list_responses(known_fund_responses("VTI", "5000")),
+            *fund_list_responses(seen_fund_responses("VTI", "5000")),
             "0",
             "n",
         ]
@@ -1036,49 +1184,91 @@ class TestFundsAreRememberedByName:
     already known is shown and confirmed rather than described again, and a
     change to it reaches every account holding it."""
 
-    def test_a_fund_typed_into_a_second_account_is_confirmed_not_re_asked(self):
+    def test_a_fund_typed_into_a_second_account_goes_straight_to_its_value(self):
+        """Described in the first account, so there is nothing about it left
+        to confirm -- and stored under the spelling it was described with."""
         responses = [
             "y", "1", "Roth",
             *fund_list_responses(multi_asset_fund_responses("VBIAX", "100", "60", "0")), "0",
             "y", "10", "Brokerage",
-            *fund_list_responses(known_fund_responses("vbiax", "200")), "0",
+            *fund_list_responses(seen_fund_responses("vbiax", "200")), "0",
             "n",
         ]
         p = ScriptedPrompter(responses)
         accounts = prompt_accounts(p, [])
         assert p.all_consumed()
         holding = accounts[1].funds()[0]
-        assert (holding.name, holding.value) == ("vbiax", Decimal(200))
+        assert (holding.name, holding.value) == ("VBIAX", Decimal(200))
         assert holding.allocation.bond_pct == Decimal(40)
-        assert _said_once(
-            p,
-            "Saved details: VBIAX is a multi-asset fund that holds 60% U.S. stocks, "
-            "0% international stocks, and 40% bonds.",
-        )
+        assert "Saved details" not in p.text
 
-    def test_changing_a_known_fund_changes_it_in_every_account(self):
+    def test_a_fund_held_by_two_saved_accounts_is_confirmed_once(self):
+        saved = [
+            Account(
+                account_type="Brokerage",
+                name=name,
+                tax_treatment=TaxTreatment.TAXABLE,
+                holdings=[Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1))],
+            )
+            for name in ("First", "Second")
+        ]
+        p = ScriptedPrompter([
+            "", *keep_fund_responses("2"), "n", "",
+            "", "", "3",  # Keep this account?, Keep VTI?, and only its value
+            "n", "",
+            "n",
+        ])
+        accounts = prompt_accounts(p, saved)
+        assert p.all_consumed()
+        assert [a.funds()[0].value for a in accounts] == [Decimal(2), Decimal(3)]
+        assert _said_once(p, "Saved details: U.S. stock fund")
+
+    def test_a_known_fund_typed_in_another_case_takes_the_catalogs_spelling(self):
+        """Otherwise the order reads "... of vti" beside a catalog that says
+        VTI, and the plan shows one fund under two names."""
+        catalog = FundCatalog([FundProfile(name="VTI", fund_type=FundType.US_STOCK)])
+        p = ScriptedPrompter([
+            "y", "10", "Brokerage",
+            *fund_list_responses(known_fund_responses("vti", "50")), "0",
+            "n",
+        ])
+        accounts = prompt_accounts(p, [], catalog)
+        assert p.all_consumed()
+        assert accounts[0].funds()[0].name == "VTI"
+
+    def test_changing_a_known_fund_from_the_menu_changes_it_in_every_account(self):
+        """Re-opening an account from the update menu is a fresh pass, so its
+        funds' details are shown again -- which is how a fund's kind is
+        corrected after the report -- and the change reaches every account."""
         responses = [
             "y", "1", "Roth",
             *fund_list_responses(fund_responses("VTI", US_STOCK_KIND, "100")), "0",
             "y", "10", "Brokerage",
-            # Decline the saved details, and call it a bond fund instead.
-            *fund_list_responses(["vti", "n", BOND_KIND, "200"]), "0",
+            *fund_list_responses(seen_fund_responses("vti", "200")), "0",
             "n",
         ]
         p = ScriptedPrompter(responses)
         catalog = FundCatalog()
         accounts = prompt_accounts(p, [], catalog)
         assert p.all_consumed()
-        # A lookup in another spelling is not a rename of the fund.
+        revise = ScriptedPrompter([
+            "",  # Keep this account?
+            "", "n", BOND_KIND, "",  # keep VTI, decline its details: a bond fund
+            "n", "",
+        ])
+        accounts[1] = prompt_revise_account(revise, accounts[1], catalog)
+        assert revise.all_consumed()
+        accounts = catalog.resolve(accounts)
         assert [f.name for f in catalog.profiles()] == ["VTI"]
-        assert [a.funds()[0].name for a in accounts] == ["VTI", "vti"]
+        assert [a.funds()[0].name for a in accounts] == ["VTI", "VTI"]
         assert [a.funds()[0].fund_type for a in accounts] == [FundType.US_BOND] * 2
         assert [a.funds()[0].value for a in accounts] == [Decimal(100), Decimal(200)]
-        assert _said_once(p, "This changes VTI's details in every account that holds it.")
+        assert _said_once(revise, "Saved details: U.S. stock fund")
+        assert _said_once(revise, "This changes VTI's details in every account that holds it.")
 
     def test_a_saved_fund_offers_details_changed_earlier_in_the_run(self):
         """The first account re-describes VTI; the second, walked after it,
-        offers the new kind as its default rather than its own old copy."""
+        holds the new kind without being asked about it again."""
         saved = [
             Account(
                 account_type="Brokerage",
@@ -1090,10 +1280,10 @@ class TestFundsAreRememberedByName:
         ]
         responses = [
             "",  # Keep this account?
-            "", "", INTERNATIONAL_KIND, "",  # keep VTI, but it holds international stocks
+            "", "n", INTERNATIONAL_KIND, "",  # keep VTI, but it holds international stocks
             "n", "",
             "",  # Keep this account?
-            *keep_fund_responses(),
+            "", "",  # keep VTI -- already confirmed, so only its value
             "n", "",
             "n",  # Add another account?
         ]
@@ -1138,7 +1328,9 @@ class TestFundsAreRememberedByName:
         assert "This changes" not in p.text
         assert [f.name for f in catalog.profiles()] == ["BND"]
 
-    def test_saved_details_name_a_single_asset_fund_by_its_asset_class(self):
+    def test_saved_details_name_a_single_asset_fund_by_its_kind_alone(self):
+        """No table for a fund with one asset class, and no name: it is on
+        the line directly above."""
         catalog = FundCatalog([
             FundProfile(name="VTI", fund_type=FundType.US_STOCK),
             FundProfile(name="VXUS", fund_type=FundType.INTERNATIONAL_STOCK),
@@ -1153,5 +1345,5 @@ class TestFundsAreRememberedByName:
         ])
         prompt_accounts(p, [], catalog)
         assert p.all_consumed()
-        assert _said_once(p, "Saved details: VTI is a U.S. stock fund.")
-        assert _said_once(p, "Saved details: VXUS is an international stock fund.")
+        assert _said_once(p, "Saved details: U.S. stock fund")
+        assert _said_once(p, "Saved details: International stock fund")

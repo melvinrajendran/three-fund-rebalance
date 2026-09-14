@@ -65,10 +65,10 @@ Current vs. Target Allocation
 Total portfolio value: $150,000.00
   Values as entered, not live market prices.
 
-                                    Current              Target  Drift (pts)
-  U.S. stocks           $110,000.00 (73.3%)  $74,400.00 (49.6%)        +23.7 *
-  International stocks   $30,000.00 (20.0%)  $45,600.00 (30.4%)        -10.4 *
-  Bonds                  $10,000.00  (6.7%)  $30,000.00 (20.0%)        -13.3 *
+                                    Current              Target  Absolute Drift  Relative Drift
+  U.S. stocks           $110,000.00 (73.3%)  $74,400.00 (49.6%)     +23.7 pts *        +47.8% *
+  International stocks   $30,000.00 (20.0%)  $45,600.00 (30.4%)     -10.4 pts *        -34.2% *
+  Bonds                  $10,000.00  (6.7%)  $30,000.00 (20.0%)     -13.3 pts *        -66.7% *
 
   * outside its rebalancing band
 

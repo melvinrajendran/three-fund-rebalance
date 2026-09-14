@@ -10,7 +10,7 @@ defaults*, never silently trusted.
 said once.** Step 3 lists them vertically under "Saved Accounts" -- one name per line,
 because those names are the headings the questions below arrive in and a list read
 down the page is what lets someone match one to the next -- then says how to answer
-them ("For each, press Enter to use its saved value, or type a new value.") **above
+them ("For each, press Enter to keep a saved answer, or type a new one.") **above
 the list rather than at the head of each account**, where it said nothing the previous
 account had not already said. Each account then opens with "Keep this account?", which
 is the one way the flow drops a saved account; answering no says `Removed '<name>'.`

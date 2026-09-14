@@ -264,9 +264,7 @@ def _revise(prompter: Prompter, args, answers: _Answers) -> bool:
         )
     elif choice == ADD_ACCOUNTS_SUBHEADING:
         answers.accounts.extend(
-            prompt_add_accounts(
-                prompter, answers.accounts, had_saved=True, catalog=answers.catalog
-            )
+            prompt_add_accounts(prompter, answers.accounts, catalog=answers.catalog)
         )
     else:
         # The remaining choices are the accounts, listed in their own order.

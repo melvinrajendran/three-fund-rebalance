@@ -36,16 +36,23 @@ comes `"Add another fund?"`, which defaults to **no** -- so a list reads
 **A fund name already known in the run asks one question fewer.** Funds are remembered
 by name, so a ticker typed into a second account -- or one the saved file lists -- is
 `name, "Use these details?", value`: `known_fund_responses(name, value)`, where `""`
-takes the saved kind and mix. A `"n"` there is followed by the kind (and mix) as for a
-new fund. `new_account_responses(..., known=True)` is the VTI/VXUS/BND account for every
-such account after the first in a run; forgetting it runs the script one answer out of
-step.
+takes the saved kind and mix. A `"n"` there is followed by the kind as for a new fund;
+a mix then asks both sleeves with the saved ones as defaults (`"", "", "y"` keeps it).
+
+**A fund already shown earlier in the same pass asks one fewer again.** Details are
+confirmed once per `prompt_accounts` call, so a fund's second appearance is just
+`name, value` -- `seen_fund_responses(name, value)` -- or, for a kept saved fund,
+`"Keep this fund?", value`. `new_account_responses(..., known=True)` is the VTI/VXUS/BND
+account for every such account after the first in a pass; forgetting it runs the script
+one answer out of step. `prompt_revise_account` called on its own (as the update menu
+does) is a fresh pass, so its funds show their details again.
 
 The helpers are `fund_responses`, `multi_asset_fund_responses` and (in `test_cli.py`)
 `account_responses` / `new_account_responses`; reuse them rather than spelling a list
 out. On the update path every saved fund arrives behind its own `"Keep this fund?"`
-and then offers name, kind and value as defaults, so `keep_fund_responses()` -- four
-empty strings -- walks one fund through unchanged, and `keep_account_responses(*values)`
+and is then a known fund -- `"Use these details?"`, then the value -- so
+`keep_fund_responses()` -- three empty strings -- walks one fund through unchanged; a
+`"n"` in its second place is followed by the kind (and mix). `keep_account_responses(*values)`
 walks a whole account. All of that still sits behind the leading `"y"` for
 "Keep this account?" that every saved account starts with.
 

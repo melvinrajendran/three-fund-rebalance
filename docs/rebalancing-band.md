@@ -67,6 +67,15 @@ prompt and the README show its numbers as the defaults but not its name.
 Where the two traditions disagree, precision wins: Bogleheads writes the absolute half
 as "5%", which is 5 percentage *points*, so the prompt's unit stays `pts`.
 
+**The comparison table shows both drifts, and the `*` sits on the one that crossed its
+rule.** A single `Drift (pts)` column starred bonds at 3.5% against 5% as `-1.5 *`, which
+reads as inside a 5-point band -- it was starred for being -30% relative. So the table has
+an Absolute Drift column (points) and, whenever the relative rule is in force, a Relative
+Drift column (a share of the class's target, `--` for a 0% target), each with its own
+marker slot. `CategorySummary.outside_absolute` / `outside_relative` say which rule a
+class crosses; `within_band` still comes from `effective_band_points`, and
+`test_within_band_is_the_two_rules_together` holds the two to one answer.
+
 Because each class now has its own band, nothing user-facing may name a single number
 for it. `report._describe_band` writes the three ranges out; `_describe_band_extent`
 is the one place that decides between "the band of plus or minus X percentage points"
