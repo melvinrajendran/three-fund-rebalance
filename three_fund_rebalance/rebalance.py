@@ -135,7 +135,7 @@ from three_fund_rebalance.allocation import (
     target_dollar_amounts,
     target_dollar_bounds,
 )
-from three_fund_rebalance.config import MIN_TRADE_DOLLARS
+from three_fund_rebalance.config import DEFAULT_REBALANCE_RELATIVE_BAND_PCT, MIN_TRADE_DOLLARS
 from three_fund_rebalance.formatting import ASSET_CLASS_LABELS, format_percent_prose
 from three_fund_rebalance.models import (
     CENT,
@@ -1197,12 +1197,12 @@ def compute_trades(
     accounts: list[Account],
     target: TargetAllocation,
     band_pct: Decimal = Decimal(0),
-    relative_band_pct: Decimal | None = None,
+    relative_band_pct: Decimal = DEFAULT_REBALANCE_RELATIVE_BAND_PCT,
 ) -> RebalanceResult:
     """Solve for the trades that bring `accounts` to `target`, leaving any
     asset class alone while it is inside the band `allocation`'s
-    `effective_band_points` allows it. The default of zero is the exact
-    target."""
+    `effective_band_points` allows it. The default `band_pct` of zero is the
+    exact target, whatever the relative half says."""
     _check_names_unique(accounts)
 
     total_value = sum((a.total_value() for a in accounts), Decimal(0))

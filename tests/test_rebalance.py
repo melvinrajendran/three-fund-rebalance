@@ -1341,7 +1341,8 @@ class TestRebalancingBand:
             ]),
         ]
         goal = target("58.8", "36.2", 5)
-        assert compute_trades(accounts, goal, Decimal(5)).trades == []
+        # A relative band of 100% never binds, so this is the absolute rule alone.
+        assert compute_trades(accounts, goal, Decimal(5), Decimal(100)).trades == []
         result = compute_trades(accounts, goal, Decimal(5), Decimal(25))
         assert trades_by_key(result)[("Roth", "VBTLX")] == ("buy", Decimal("3800.00"))
 
@@ -1457,7 +1458,8 @@ class TestAllocationIsSettledBeforeLocation:
     portfolio that was already underweight bonds."""
 
     def _in_band_portfolio(self):
-        # Every class inside a 5-point band of a 58.8/36.2/5.0 target, with
+        # Every class inside a 5-point absolute band of a 58.8/36.2/5.0 target
+        # -- the tests pass a relative band of 100%, which never binds -- with
         # international parked in a Roth and a taxable account that has no
         # room to take it -- so phase 5 has no legal way to relocate, and
         # phase 4 has nowhere to move the Roth's bonds to.
@@ -1486,7 +1488,7 @@ class TestAllocationIsSettledBeforeLocation:
 
     def test_an_in_band_portfolio_is_left_alone_when_no_free_relocation_exists(self):
         accounts = self._in_band_portfolio()
-        result = compute_trades(accounts, target("58.805", "36.195", 5), Decimal(5))
+        result = compute_trades(accounts, target("58.805", "36.195", 5), Decimal(5), Decimal(100))
         assert result.trades == []
 
     def test_the_same_portfolio_still_rebalances_to_target_without_a_band(self):
@@ -1502,7 +1504,7 @@ class TestAllocationIsSettledBeforeLocation:
         that cannot be reached into. Preferring less bonds over relocated
         bonds is the failure mode."""
         accounts = self._in_band_portfolio()
-        result = compute_trades(accounts, target("58.805", "36.195", 5), Decimal(5))
+        result = compute_trades(accounts, target("58.805", "36.195", 5), Decimal(5), Decimal(100))
         sold = sum(
             (t.amount for t in result.trades if t.action == "sell" and t.fund_name == "VBTLX"),
             Decimal(0),
@@ -1533,9 +1535,11 @@ class TestResolveAllocation:
     anything decides where to hold it."""
 
     def _bounds(self, band):
+        # A relative band of 100% never binds below a 20% target, so every
+        # class here gets the same absolute band.
         target_allocation = target(50, 30, 20)
         return target_dollar_amounts(target_allocation, Decimal(100_000)), target_dollar_bounds(
-            target_allocation, Decimal(100_000), Decimal(band)
+            target_allocation, Decimal(100_000), Decimal(band), Decimal(100)
         )
 
     def _unconstrained_reach(self):

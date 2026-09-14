@@ -58,9 +58,10 @@ walks a whole account. All of that still sits behind the leading `"y"` for
 
 `compute_trades`'s `band_pct` defaults to `Decimal(0)`, which is the exact target and
 therefore the pre-band behavior -- solver tests that aren't about the band say nothing
-about it and keep asserting the same numbers. `relative_band_pct` defaults to `None`
-for the same reason: `0` there would collapse every one of those tests onto the exact
-target by a different route, and silently.
+about it and keep asserting the same numbers. `relative_band_pct` defaults to the
+program's own 25, not `0`: `0` would turn off the band in every test that passes only
+`band_pct`, and do it silently. A test about the absolute rule alone passes a relative
+band of `100`, which never binds while the band is no larger than every target.
 
 Every network call is monkeypatched, including failure paths. The suite must stay
 runnable offline -- CI depends on it.

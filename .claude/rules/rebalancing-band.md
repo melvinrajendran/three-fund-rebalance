@@ -6,6 +6,6 @@ paths:
 ---
 
 Read `docs/rebalancing-band.md` before changing this file. The band is two rules a class must satisfy
-*both* of (the 5/25 rule), `relative_band_pct` of `None` is distinct from `0`,
-and the names `band_pct` / `relative_band_pct` are shared by the prompts, the
+*both* of (the 5/25 rule), both halves are always set (`0` on either turns the
+band off), and the names `band_pct` / `relative_band_pct` are shared by the prompts, the
 report, the saved keys and the README -- renaming one renames five.

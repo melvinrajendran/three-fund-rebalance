@@ -46,7 +46,7 @@ from three_fund_rebalance.allocation import (
     target_dollar_amounts,
     target_percentages,
 )
-from three_fund_rebalance.config import MIN_TRADE_DOLLARS
+from three_fund_rebalance.config import DEFAULT_REBALANCE_RELATIVE_BAND_PCT, MIN_TRADE_DOLLARS
 from three_fund_rebalance.formatting import (
     ASSET_CLASS_LABELS,
     CATEGORY_FUND_TYPES,
@@ -115,10 +115,9 @@ class RebalanceInputs:
     target: TargetAllocation
     band_pct: Decimal
     accounts: list[Account]
-    # The other half of the band: a share of each class's own target. None
-    # when only the absolute half applies -- distinct from 0, which tolerates
-    # no drift at all.
-    relative_band_pct: Decimal | None = None
+    # The other half of the band: a share of each class's own target. 0 on
+    # either half tolerates no drift at all.
+    relative_band_pct: Decimal
     # When the saved values were last written, if they came from a config
     # file. None when everything was typed this session.
     values_as_of: str | None = None
@@ -181,7 +180,7 @@ def summarize_allocation(
     accounts: list[Account],
     target: TargetAllocation,
     band_pct: Decimal = Decimal(0),
-    relative_band_pct: Decimal | None = None,
+    relative_band_pct: Decimal = DEFAULT_REBALANCE_RELATIVE_BAND_PCT,
 ) -> AllocationSummary:
     total = sum((a.total_value() for a in accounts), Decimal(0))
     available_cash = sum((a.available_cash() for a in accounts), Decimal(0))
@@ -222,10 +221,7 @@ def summarize_allocation(
                     drift_pct / target_pct * Decimal(100) if target_pct > 0 else None
                 ),
                 outside_absolute=abs(drift_pct) > band_pct,
-                outside_relative=(
-                    relative_band_pct is not None
-                    and abs(drift_pct) > target_pct * relative_band_pct / Decimal(100)
-                ),
+                outside_relative=abs(drift_pct) > target_pct * relative_band_pct / Decimal(100),
                 within_band=abs(drift_pct) <= band_points[_CATEGORY_TARGET_KEYS[label]],
             )
         )
@@ -331,19 +327,7 @@ _BAND_RULE = (
 def _band_is_on(inputs: RebalanceInputs) -> bool:
     """Zero on either half tolerates no drift at all, which is the same thing
     as having no band."""
-    return inputs.band_pct > 0 and inputs.relative_band_pct != 0
-
-
-def _describe_band_extent(inputs: RebalanceInputs) -> str:
-    """Name the band in running prose. Only nameable as one number when the
-    absolute half is the whole of it; otherwise each class has its own, and
-    the "Rebalancing band" section is where they are written out."""
-    if inputs.relative_band_pct is None:
-        return (
-            "the band of plus or minus "
-            f"{format_percent_prose(inputs.band_pct)} percentage points"
-        )
-    return "its rebalancing band"
+    return inputs.band_pct > 0 and inputs.relative_band_pct > 0
 
 
 def _band_ranges(inputs: RebalanceInputs) -> list[tuple[str, Decimal, Decimal]]:
@@ -366,15 +350,6 @@ def _describe_band(inputs: RebalanceInputs) -> list[str]:
     lines = _subheading("Rebalancing Bands")
     if inputs.band_pct == 0 or inputs.relative_band_pct == 0:
         lines.append("Off -- every asset class is traded back to its exact target.")
-        return lines
-
-    if inputs.relative_band_pct is None:
-        lines.append(
-            wrap(
-                f"Plus or minus {format_percent_prose(inputs.band_pct)} percentage points. "
-                f"{_BAND_RULE}"
-            )
-        )
         return lines
 
     # Two rules meeting at whichever is tighter give each class a different
@@ -479,10 +454,6 @@ def _describe_comparison(inputs: RebalanceInputs, summary: AllocationSummary) ->
     lines.append("")
 
     banded = _band_is_on(inputs)
-    # The relative column is shown exactly when the relative rule is in force
-    # -- the same condition under which "Rebalancing Bands" lists each class's
-    # range. Without it, a relative drift can never put a class out of band.
-    show_relative = inputs.relative_band_pct is not None
     # Every share of the portfolio in this table is written at one precision,
     # current and target alike -- they are the same unit and are read against
     # each other across the row. Each drift column is a different unit and
@@ -537,23 +508,20 @@ def _describe_comparison(inputs: RebalanceInputs, summary: AllocationSummary) ->
     header = (
         f"{INDENT_UNIT}{'':<{label_w}}  {'Current':>{current_w + 1 + current_pct_w}}  "
         f"{'Target':>{target_w + 1 + target_pct_w}}  {absolute_header:>{absolute_w}}"
+        f"  {relative_header:>{relative_w}}"
     )
-    if show_relative:
-        header += f"  {relative_header:>{relative_w}}"
     lines.append(header)
     for label, current, current_pct, target, target_pct, absolute_cell, relative_cell in rows:
         line = (
             f"{INDENT_UNIT}{label:<{label_w}}  "
             f"{current:>{current_w}} {current_pct:>{current_pct_w}}  "
             f"{target:>{target_w}} {target_pct:>{target_pct_w}}  "
-            f"{absolute_cell:>{absolute_w}}"
+            f"{absolute_cell:>{absolute_w}}  {relative_cell:>{relative_w}}"
         )
-        if show_relative:
-            line += f"  {relative_cell:>{relative_w}}"
         lines.append(line.rstrip())
     if banded and not all(cat.within_band for cat in summary.categories):
         lines.append("")
-        lines.append(f"{INDENT_UNIT}* outside {_describe_band_extent(inputs)}")
+        lines.append(f"{INDENT_UNIT}* outside its rebalancing band")
     return lines
 
 
@@ -696,8 +664,7 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
             )
         elif _band_is_on(inputs):
             lines.append(
-                wrap(f"Every asset class is within {_describe_band_extent(inputs)} -- no trades "
-                     "needed.")
+                wrap("Every asset class is within its rebalancing band -- no trades needed.")
             )
         else:
             lines.append(

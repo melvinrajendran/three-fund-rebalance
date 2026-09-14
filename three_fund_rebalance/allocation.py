@@ -75,7 +75,7 @@ def target_dollar_amounts(
 def effective_band_points(
     target: TargetAllocation,
     band_pct: Decimal,
-    relative_band_pct: Decimal | None = None,
+    relative_band_pct: Decimal,
 ) -> dict[str, Decimal]:
     """How far each asset class may drift from its target, in percentage
     points of the whole portfolio, before it is worth correcting.
@@ -96,18 +96,15 @@ def effective_band_points(
     cross at a 20% target, where both come to 5 points, which is why the rule
     is often stated as "5 points at 20% and above, 25% relative below".
 
-    `relative_band_pct` of `None` means the relative rule was never
-    configured and only `band_pct` applies -- distinct from `0`, which like a
-    `band_pct` of `0` means no drift is tolerated at all.
+    Both halves are always set. A `0` on either one means no drift is
+    tolerated at all.
     """
     if band_pct < 0:
         raise ValueError(f"band_pct cannot be negative (got {band_pct})")
-    if relative_band_pct is not None and relative_band_pct < 0:
+    if relative_band_pct < 0:
         raise ValueError(f"relative_band_pct cannot be negative (got {relative_band_pct})")
     return {
-        key: band_pct
-        if relative_band_pct is None
-        else min(band_pct, target_pct * relative_band_pct / Decimal(100))
+        key: min(band_pct, target_pct * relative_band_pct / Decimal(100))
         for key, target_pct in target_percentages(target).items()
     }
 
@@ -116,7 +113,7 @@ def target_dollar_bounds(
     target: TargetAllocation,
     total_portfolio_value: Decimal,
     band_pct: Decimal,
-    relative_band_pct: Decimal | None = None,
+    relative_band_pct: Decimal,
 ) -> dict[str, tuple[Decimal, Decimal]]:
     """The dollar range each asset class may occupy: its target give or take
     whatever `effective_band_points` allows it, converted to dollars.
