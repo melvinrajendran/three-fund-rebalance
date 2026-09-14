@@ -29,7 +29,7 @@ An account's funds are a **list the user builds**, so its answers are a loop rat
 than a fixed run of slots. One fund is `name, kind, value`, where kind is `"1"`–`"4"`
 for U.S. stocks / international stocks / bonds / a mix, and a mix inserts its two
 sleeve percentages and the confirmation between the kind and the value. Between funds
-comes `"Add another fund?"`, which defaults to **yes** -- so a list reads
+comes `"Add another fund?"`, which defaults to **no** -- so a list reads
 `fund, "y", fund, "y", fund, "n"`, one `"y"` before each fund after the first and one
 `"n"` to close it. Then the cash.
 

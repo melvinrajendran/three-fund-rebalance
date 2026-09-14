@@ -77,7 +77,7 @@ def account_responses(
     """An account built fund by fund: the type and nickname, then each fund's
     answers with "Add another fund?" between them, then the cash.
 
-    The loop asks "Add another fund?" after every fund, defaulting to yes, so
+    The loop asks "Add another fund?" after every fund, defaulting to no, so
     the answers run `fund, "y", fund, "y", fund, "n"` -- a "y" before each
     fund after the first and one "n" to close the list.
     """

@@ -115,9 +115,11 @@ have not had yet.
 
 Step 3 no longer asks which *kind* of account this is and then walks fixed slots.
 It loops: a fund's name, which of four things it holds, its mix if that is "a mix of
-asset classes", and its value -- then "Add another fund?", defaulting to yes.
-`prompts.FUND_EXPLANATION` is said once above the list, for a new account and for a
-saved one that has no funds yet, and not for one whose funds are being re-confirmed:
+asset classes", and its value -- then "Add another fund?", defaulting to no, as
+"Add another account?" does once one account exists.
+`prompts.FUND_EXPLANATION` is said above each account's list -- once per account, since
+"this account" means the one just named -- for a new account and for a saved one that
+has no funds yet, and not for one whose funds are being re-confirmed:
 `prompt_accounts` has already said how a saved answer is kept, and an instruction
 repeated under every account every run says nothing the run before it did.
 
