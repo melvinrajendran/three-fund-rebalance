@@ -135,3 +135,35 @@ one outright -- the same branch a brand new fund takes.
 
 The update menu reaches all of this through `prompt_revise_account`, unchanged: it is
 still the account that is picked from the menu, and the fund list is walked inside it.
+
+## A fund is remembered by its name
+
+A fund name maps to one kind and mix across every account, and every fund an account
+holds is saved -- `cli.run()` builds a `FundCatalog` from the saved file and threads it through
+`prompt_accounts`, `prompt_add_accounts` and `prompt_revise_account` down to
+`_prompt_holding`, which records every answer back into it.
+
+**A fund removed from every account is forgotten when the run is saved.** Within the
+run the catalog still knows it, so a fund moved from one account to another in the
+same session -- removed here, added there -- is still recognized; only the save drops
+what no account holds (see [`persistence.md`](persistence.md)).
+
+**A name the catalog knows is confirmed, not re-asked.** Typed into a new slot -- a
+second account, or re-added later in the run it was removed in -- `_prompt_holding` says
+`Saved details: VBIAX is a multi-asset fund that holds 60% U.S. stocks, 0% international
+stocks, and 40% bonds.` (or, for a single-asset fund, `Saved details: VTI is a U.S.
+stock fund.` -- named by `ASSET_CLASS_LABELS`, as the report names funds)
+and asks "Use these details?", defaulting to yes; yes goes straight to the value. No
+asks the kind and mix with the saved answer as defaults. A saved fund keeping its own
+name is not gated -- its kind is already an editable default -- but that default is the
+catalog's, not the holding's copy, so a change made to the same fund earlier in the run
+is what it offers.
+
+**A change is never applied silently.** Answering a known fund differently says
+`This changes VBIAX's details in every account that holds it.` -- and it does:
+`prompt_accounts` returns `catalog.resolve(accounts)`, and `_revise` resolves
+`answers.accounts` after every pass, so an account asked earlier picks the change up.
+
+The value is never offered from another account. It is the one thing that is per
+account, and a default copied from a different account would be a plausible wrong
+number at the prompt a typo is least likely to be noticed at.

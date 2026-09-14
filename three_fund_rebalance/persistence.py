@@ -18,6 +18,8 @@ from three_fund_rebalance.config import ACCOUNT_TYPE_TAX_TREATMENT, SCHEMA_VERSI
 from three_fund_rebalance.models import (
     Account,
     FundAllocation,
+    FundCatalog,
+    FundProfile,
     FundType,
     Holding,
     TaxTreatment,
@@ -43,6 +45,11 @@ class PersistedConfig:
     # user so they know how stale a pre-filled value might be.
     values_as_of: str | None = None
     accounts: list[Account] = field(default_factory=list)
+    # The details of every fund the accounts hold, each once. On save, a fund
+    # listed here that no account holds is dropped, and one an account holds
+    # is added if missing, so a config built from accounts alone still writes
+    # a loadable file.
+    funds: list[FundProfile] = field(default_factory=list)
 
 
 def _decimal_to_json(value: Decimal | None) -> str | None:
@@ -77,28 +84,61 @@ def _fund_allocation_from_dict(data: dict) -> FundAllocation:
         raise PersistenceError(f"Invalid allocation in config: {data!r}") from exc
 
 
-def _holding_to_dict(holding: Holding) -> dict:
-    data = {"fund_type": holding.fund_type.value, "name": holding.name, "value": str(holding.value)}
-    if holding.allocation is not None:
-        data["allocation"] = _fund_allocation_to_dict(holding.allocation)
+def _fund_profile_to_dict(profile: FundProfile) -> dict:
+    data = {"name": profile.name, "fund_type": profile.fund_type.value}
+    if profile.allocation is not None:
+        data["allocation"] = _fund_allocation_to_dict(profile.allocation)
     return data
 
 
-def _holding_from_dict(data: dict) -> Holding:
+def _fund_profile_from_dict(data: dict) -> FundProfile:
     try:
         fund_type = FundType(data["fund_type"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PersistenceError(f"Invalid fund in config: {data!r}") from exc
+    allocation_data = data.get("allocation")
+    try:
+        return FundProfile(
+            name=data["name"],
+            fund_type=fund_type,
+            allocation=(_fund_allocation_from_dict(allocation_data) if allocation_data else None),
+        )
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise PersistenceError(f"Invalid fund in config: {data!r}: {exc}") from exc
+
+
+def _holding_to_dict(holding: Holding) -> dict:
+    """A cash balance is marked as one; a fund is only its name and value --
+    what the fund *is* lives once, under the top-level "funds"."""
+    if holding.fund_type == FundType.CASH:
+        return {"fund_type": FundType.CASH.value, "value": str(holding.value)}
+    return {"name": holding.name, "value": str(holding.value)}
+
+
+def _holding_from_dict(data: dict, catalog: FundCatalog) -> Holding:
+    try:
         value = Decimal(data["value"])
     except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
         raise PersistenceError(f"Invalid holding in config: {data!r}") from exc
-    allocation_data = data.get("allocation")
-    try:
-        return Holding(
-            fund_type=fund_type,
-            name=data.get("name", ""),
-            value=value,
-            allocation=(_fund_allocation_from_dict(allocation_data) if allocation_data else None),
+    if data.get("fund_type") == FundType.CASH.value:
+        return Holding(fund_type=FundType.CASH, name="", value=value)
+    # Details carried on the holding itself are a second copy of them, which
+    # is the thing this schema exists to make impossible.
+    if "fund_type" in data or "allocation" in data:
+        raise PersistenceError(
+            f"Invalid holding in config: {data!r}: a fund's details belong under 'funds'"
         )
-    except (AttributeError, TypeError, ValueError) as exc:
+    name = data.get("name")
+    if not isinstance(name, str):
+        raise PersistenceError(f"Invalid holding in config: {data!r}")
+    profile = catalog.get(name)
+    if profile is None:
+        raise PersistenceError(
+            f"Invalid holding in config: {data!r}: no fund named {name!r} under 'funds'"
+        )
+    try:
+        return profile.holding(value, name=name)
+    except ValueError as exc:
         raise PersistenceError(f"Invalid holding in config: {data!r}: {exc}") from exc
 
 
@@ -111,10 +151,10 @@ def _account_to_dict(account: Account) -> dict:
     }
 
 
-def _account_from_dict(data: dict) -> Account:
+def _account_from_dict(data: dict, catalog: FundCatalog) -> Account:
     try:
         tax_treatment = TaxTreatment(data["tax_treatment"])
-        holdings = [_holding_from_dict(h) for h in data.get("holdings", [])]
+        holdings = [_holding_from_dict(h, catalog) for h in data.get("holdings", [])]
         return Account(
             account_type=data["account_type"],
             name=data["name"],
@@ -126,6 +166,11 @@ def _account_from_dict(data: dict) -> Account:
 
 
 def config_to_dict(config: PersistedConfig) -> dict:
+    # Raises ValueError if an account holds a fund with details other than the
+    # saved ones -- a programming error, since every holding the flow builds
+    # is read from the same catalog. A fund no account holds any more is not
+    # written: removing it from every account removes it from the file.
+    catalog = FundCatalog(config.funds, config.accounts).held_by(config.accounts)
     return {
         "schema_version": config.schema_version,
         "stock_pct": _decimal_to_json(config.stock_pct),
@@ -135,6 +180,7 @@ def config_to_dict(config: PersistedConfig) -> dict:
         "rebalance_band_pct": _decimal_to_json(config.rebalance_band_pct),
         "rebalance_relative_band_pct": _decimal_to_json(config.rebalance_relative_band_pct),
         "values_as_of": config.values_as_of,
+        "funds": [_fund_profile_to_dict(p) for p in catalog.profiles()],
         "accounts": [_account_to_dict(a) for a in config.accounts],
     }
 
@@ -329,6 +375,69 @@ def _upgrade_v4(data: dict) -> dict:
     return upgraded
 
 
+def _upgrade_v5(data: dict) -> dict:
+    """Translate a schema v5 payload into v6's shape. Same contract as the
+    hops above: translate without validating, and copy at every level.
+
+    v5 wrote each fund's type and mix on every holding of it, so VBIAX in two
+    accounts was two copies of its details that nothing kept in step. v6 says
+    a fund name maps to one set of details across the portfolio, and stores
+    them once, under a top-level "funds"; a holding keeps only its name and
+    value, and cash is marked by its type alone.
+
+    Every fund holding contributes a "funds" entry, repeats included. The
+    parse collapses repeats that agree and refuses ones that do not -- the
+    same refusal a v6 file describing one fund two ways gets, and the hop is
+    not the place to decide which of two answers was the user's.
+
+    A holding whose name is not a string is left untouched, so the parse
+    rejects it the way it would in any version.
+    """
+    upgraded = dict(data)
+    funds = list(upgraded.get("funds") or [])
+    accounts = []
+    for account in upgraded.get("accounts") or []:
+        if not isinstance(account, dict):
+            accounts.append(account)
+            continue
+        account = dict(account)
+        holdings = []
+        for holding in account.get("holdings") or []:
+            if not isinstance(holding, dict) or not isinstance(holding.get("name"), str):
+                holdings.append(holding)
+                continue
+            holding = dict(holding)
+            if holding.get("fund_type") == FundType.CASH.value:
+                holding.pop("name")
+            elif "fund_type" in holding:
+                fund = {"name": holding["name"], "fund_type": holding.pop("fund_type")}
+                if "allocation" in holding:
+                    fund["allocation"] = holding.pop("allocation")
+                funds.append(fund)
+            holdings.append(holding)
+        account["holdings"] = holdings
+        accounts.append(account)
+    upgraded["accounts"] = accounts
+    upgraded["funds"] = funds
+    upgraded["schema_version"] = 6  # literal, not SCHEMA_VERSION -- see _upgrade_v1
+    return upgraded
+
+
+def _catalog_from_list(data) -> FundCatalog:
+    """The saved funds, one profile per name. A name listed twice with the
+    same details is harmless and collapses; with different details it is two
+    answers to one question, and is refused rather than guessed between."""
+    if data is None:
+        return FundCatalog()
+    if not isinstance(data, list):
+        raise PersistenceError(f"'funds' in config is not a list: {data!r}")
+    profiles = [_fund_profile_from_dict(entry) for entry in data]
+    try:
+        return FundCatalog(profiles)
+    except ValueError as exc:
+        raise PersistenceError(f"Invalid funds in config: {exc}") from exc
+
+
 def config_from_dict(data: dict) -> PersistedConfig:
     """Parse a decoded config payload. Every way this can fail is reported as
     PersistenceError -- see the catch-all at the bottom for why."""
@@ -347,11 +456,15 @@ def config_from_dict(data: dict) -> PersistedConfig:
         if schema_version == 4:
             data = _upgrade_v4(data)
             schema_version = data["schema_version"]
+        if schema_version == 5:
+            data = _upgrade_v5(data)
+            schema_version = data["schema_version"]
         if schema_version != SCHEMA_VERSION:
             raise PersistenceError(
                 f"Unsupported config schema_version {schema_version!r} (this version of "
                 f"three-fund-rebalance understands 1 through {SCHEMA_VERSION})"
             )
+        catalog = _catalog_from_list(data.get("funds"))
         return PersistedConfig(
             schema_version=schema_version,
             stock_pct=_decimal_from_json(data.get("stock_pct"), field_name="stock_pct"),
@@ -370,7 +483,8 @@ def config_from_dict(data: dict) -> PersistedConfig:
                 field_name="rebalance_relative_band_pct",
             ),
             values_as_of=data.get("values_as_of"),
-            accounts=[_account_from_dict(a) for a in data.get("accounts", [])],
+            accounts=[_account_from_dict(a, catalog) for a in data.get("accounts", [])],
+            funds=catalog.profiles(),
         )
     except PersistenceError:
         # Already names the account, holding, or field at fault -- don't bury

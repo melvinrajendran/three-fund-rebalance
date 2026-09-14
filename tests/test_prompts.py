@@ -7,6 +7,8 @@ from three_fund_rebalance.formatting import prose_width, wrap
 from three_fund_rebalance.models import (
     Account,
     FundAllocation,
+    FundCatalog,
+    FundProfile,
     FundType,
     Holding,
     TaxTreatment,
@@ -101,6 +103,12 @@ US_STOCK_KIND, INTERNATIONAL_KIND, BOND_KIND, MULTI_ASSET_KIND = "1", "2", "3", 
 def fund_responses(name: str, kind: str, value: str) -> list[str]:
     """One fund's answers: name, kind, value."""
     return [name, kind, value]
+
+
+def known_fund_responses(name: str, value: str, use_saved: str = "") -> list[str]:
+    """A fund whose name the catalog already knows: its name, "Use these
+    details?" (default yes), and its value."""
+    return [name, use_saved, value]
 
 
 def multi_asset_fund_responses(
@@ -587,7 +595,7 @@ class TestPromptAccounts:
             "y", "1", "First",
             *fund_list_responses(fund_responses("VTI", US_STOCK_KIND, "0")), "0",
             "y", "1", "First", "SecondUnique",
-            *fund_list_responses(fund_responses("VTI", US_STOCK_KIND, "0")), "0",
+            *fund_list_responses(known_fund_responses("VTI", "0")), "0",
             "n",
         ]
         p = ScriptedPrompter(responses)
@@ -985,3 +993,129 @@ class TestPromptAccounts:
         p = ScriptedPrompter(responses)
         prompt_accounts(p, [])
         assert not any("taxed yearly as ordinary income" in text for text in p.said)
+
+
+class TestFundsAreRememberedByName:
+    """A fund name maps to one set of details across every account. A name
+    already known is shown and confirmed rather than described again, and a
+    change to it reaches every account holding it."""
+
+    def test_a_fund_typed_into_a_second_account_is_confirmed_not_re_asked(self):
+        responses = [
+            "y", "1", "Roth",
+            *fund_list_responses(multi_asset_fund_responses("VBIAX", "100", "60", "0")), "0",
+            "y", "10", "Brokerage",
+            *fund_list_responses(known_fund_responses("vbiax", "200")), "0",
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, [])
+        assert p.all_consumed()
+        holding = accounts[1].funds()[0]
+        assert (holding.name, holding.value) == ("vbiax", Decimal(200))
+        assert holding.allocation.bond_pct == Decimal(40)
+        assert _said_once(
+            p,
+            "Saved details: VBIAX is a multi-asset fund that holds 60% U.S. stocks, "
+            "0% international stocks, and 40% bonds.",
+        )
+
+    def test_changing_a_known_fund_changes_it_in_every_account(self):
+        responses = [
+            "y", "1", "Roth",
+            *fund_list_responses(fund_responses("VTI", US_STOCK_KIND, "100")), "0",
+            "y", "10", "Brokerage",
+            # Decline the saved details, and call it a bond fund instead.
+            *fund_list_responses(["vti", "n", BOND_KIND, "200"]), "0",
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
+        catalog = FundCatalog()
+        accounts = prompt_accounts(p, [], catalog)
+        assert p.all_consumed()
+        # A lookup in another spelling is not a rename of the fund.
+        assert [f.name for f in catalog.profiles()] == ["VTI"]
+        assert [a.funds()[0].name for a in accounts] == ["VTI", "vti"]
+        assert [a.funds()[0].fund_type for a in accounts] == [FundType.US_BOND] * 2
+        assert [a.funds()[0].value for a in accounts] == [Decimal(100), Decimal(200)]
+        assert _said_once(p, "This changes VTI's details in every account that holds it.")
+
+    def test_a_saved_fund_offers_details_changed_earlier_in_the_run(self):
+        """The first account re-describes VTI; the second, walked after it,
+        offers the new kind as its default rather than its own old copy."""
+        saved = [
+            Account(
+                account_type="Brokerage",
+                name=name,
+                tax_treatment=TaxTreatment.TAXABLE,
+                holdings=[Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1))],
+            )
+            for name in ("First", "Second")
+        ]
+        responses = [
+            "",  # Keep this account?
+            "", "", INTERNATIONAL_KIND, "",  # keep VTI, but it holds international stocks
+            "n", "",
+            "",  # Keep this account?
+            *keep_fund_responses(),
+            "n", "",
+            "n",  # Add another account?
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, saved)
+        assert p.all_consumed()
+        assert [a.funds()[0].fund_type for a in accounts] == [FundType.INTERNATIONAL_STOCK] * 2
+
+    def test_a_fund_moved_between_accounts_in_one_run_is_still_recognized(self):
+        """Removed from one account and added to another in the same session:
+        the catalog forgets a fund only when the run is saved."""
+        saved = [
+            Account(
+                account_type="Brokerage",
+                name="Old",
+                tax_treatment=TaxTreatment.TAXABLE,
+                holdings=[Holding(fund_type=FundType.US_BOND, name="BND", value=Decimal(1))],
+            )
+        ]
+        responses = [
+            "",  # Keep this account?
+            "n",  # Keep BND? -- no
+            *fund_responses("VTI", US_STOCK_KIND, "1"),
+            "n", "",
+            "y", "10", "New",  # Add another account?
+            *fund_list_responses(known_fund_responses("BND", "50")), "0",
+            "n",
+        ]
+        p = ScriptedPrompter(responses)
+        accounts = prompt_accounts(p, saved)
+        assert p.all_consumed()
+        assert accounts[1].funds()[0].fund_type == FundType.US_BOND
+
+    def test_confirming_saved_details_records_nothing_new(self):
+        catalog = FundCatalog([FundProfile(name="BND", fund_type=FundType.US_BOND)])
+        p = ScriptedPrompter([
+            "y", "10", "Brokerage",
+            *fund_list_responses(known_fund_responses("BND", "50")), "0",
+            "n",
+        ])
+        prompt_accounts(p, [], catalog)
+        assert "This changes" not in p.text
+        assert [f.name for f in catalog.profiles()] == ["BND"]
+
+    def test_saved_details_name_a_single_asset_fund_by_its_asset_class(self):
+        catalog = FundCatalog([
+            FundProfile(name="VTI", fund_type=FundType.US_STOCK),
+            FundProfile(name="VXUS", fund_type=FundType.INTERNATIONAL_STOCK),
+        ])
+        p = ScriptedPrompter([
+            "y", "10", "Brokerage",
+            *fund_list_responses(
+                known_fund_responses("VTI", "1"), known_fund_responses("VXUS", "1")
+            ),
+            "0",
+            "n",
+        ])
+        prompt_accounts(p, [], catalog)
+        assert p.all_consumed()
+        assert _said_once(p, "Saved details: VTI is a U.S. stock fund.")
+        assert _said_once(p, "Saved details: VXUS is an international stock fund.")

@@ -5,11 +5,14 @@ import pytest
 from three_fund_rebalance.models import (
     Account,
     FundAllocation,
+    FundCatalog,
+    FundProfile,
     FundType,
     Holding,
     TargetAllocation,
     TaxTreatment,
     Trade,
+    fund_name_key,
     to_cents,
 )
 
@@ -411,3 +414,119 @@ class TestToCents:
     def test_rounds_half_up(self):
         assert to_cents(Decimal("1.005")) == Decimal("1.01")
         assert to_cents(Decimal("1.004")) == Decimal("1.00")
+
+
+class TestFundProfile:
+    def test_a_multi_asset_fund_needs_its_mix(self):
+        with pytest.raises(ValueError):
+            FundProfile(name="VBIAX", fund_type=FundType.MULTI_ASSET)
+
+    def test_cash_has_no_saved_details(self):
+        with pytest.raises(ValueError):
+            FundProfile(name="Sweep", fund_type=FundType.CASH)
+
+    def test_a_fund_needs_a_name(self):
+        with pytest.raises(ValueError):
+            FundProfile(name="  ", fund_type=FundType.US_STOCK)
+
+    def test_the_spelling_of_the_name_is_not_a_detail(self):
+        assert FundProfile(name="vti", fund_type=FundType.US_STOCK).same_details(
+            FundProfile(name="VTI", fund_type=FundType.US_STOCK)
+        )
+
+    def test_a_holding_keeps_the_accounts_own_spelling(self):
+        profile = FundProfile(name="VTI", fund_type=FundType.US_STOCK)
+        holding = profile.holding(Decimal(5), name="vti")
+        assert (holding.name, holding.value, holding.fund_type) == (
+            "vti",
+            Decimal(5),
+            FundType.US_STOCK,
+        )
+
+
+def taxable_account(name: str, *holdings: Holding) -> Account:
+    return Account(
+        account_type="Brokerage",
+        name=name,
+        tax_treatment=TaxTreatment.TAXABLE,
+        holdings=list(holdings),
+    )
+
+
+class TestFundCatalog:
+    def test_a_name_is_looked_up_the_way_accounts_compare_it(self):
+        catalog = FundCatalog([FundProfile(name="VTI", fund_type=FundType.US_STOCK)])
+        assert catalog.get("  vti ").name == "VTI"
+        assert fund_name_key("  VTI ") == "vti"
+
+    def test_setting_a_known_fund_replaces_its_details_in_place(self):
+        catalog = FundCatalog([
+            FundProfile(name="VTI", fund_type=FundType.US_STOCK),
+            FundProfile(name="BND", fund_type=FundType.US_BOND),
+        ])
+        catalog.set(FundProfile(name="vti", fund_type=FundType.INTERNATIONAL_STOCK))
+        assert [(p.name, p.fund_type) for p in catalog.profiles()] == [
+            ("vti", FundType.INTERNATIONAL_STOCK),
+            ("BND", FundType.US_BOND),
+        ]
+
+    def test_it_is_seeded_from_the_funds_accounts_hold(self):
+        account = taxable_account(
+            "B", Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1))
+        )
+        assert FundCatalog(accounts=[account]).get("VTI").fund_type == FundType.US_STOCK
+
+    def test_one_fund_described_two_ways_is_refused(self):
+        first = taxable_account(
+            "A", Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(1))
+        )
+        second = taxable_account(
+            "B", Holding(fund_type=FundType.US_BOND, name="vti", value=Decimal(1))
+        )
+        with pytest.raises(ValueError, match="described two different ways"):
+            FundCatalog(accounts=[first, second])
+
+    def test_resolve_gives_every_account_the_catalogs_details(self):
+        """A fund name maps to one set of details: changing it once changes
+        it in every account, each keeping its own value and spelling."""
+        first = taxable_account(
+            "A",
+            Holding(fund_type=FundType.US_STOCK, name="VBIAX", value=Decimal(100)),
+            Holding(fund_type=FundType.CASH, name="", value=Decimal(7)),
+        )
+        second = taxable_account(
+            "B", Holding(fund_type=FundType.US_STOCK, name="vbiax", value=Decimal(200))
+        )
+        catalog = FundCatalog(accounts=[first, second])
+        catalog.set(
+            FundProfile(name="VBIAX", fund_type=FundType.MULTI_ASSET, allocation=make_mix())
+        )
+
+        resolved = catalog.resolve([first, second])
+
+        assert [h.fund_type for a in resolved for h in a.funds()] == [
+            FundType.MULTI_ASSET,
+            FundType.MULTI_ASSET,
+        ]
+        assert [(h.name, h.value) for a in resolved for h in a.funds()] == [
+            ("VBIAX", Decimal(100)),
+            ("vbiax", Decimal(200)),
+        ]
+        assert resolved[0].available_cash() == Decimal(7)
+        # The accounts passed in are left as they were.
+        assert first.funds()[0].fund_type == FundType.US_STOCK
+
+    def test_held_by_keeps_only_funds_some_account_holds_in_order(self):
+        catalog = FundCatalog([
+            FundProfile(name="BND", fund_type=FundType.US_BOND),
+            FundProfile(name="VTI", fund_type=FundType.US_STOCK),
+            FundProfile(name="VXUS", fund_type=FundType.INTERNATIONAL_STOCK),
+        ])
+        account = taxable_account(
+            "B",
+            Holding(fund_type=FundType.INTERNATIONAL_STOCK, name="vxus", value=Decimal(1)),
+            Holding(fund_type=FundType.US_STOCK, name="VTI", value=Decimal(0)),
+        )
+        assert [p.name for p in catalog.held_by([account]).profiles()] == ["VTI", "VXUS"]
+        # The full catalog is left as it was.
+        assert len(catalog.profiles()) == 3

@@ -9,7 +9,8 @@ into dollar amounts a user might act on.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
 
@@ -201,6 +202,131 @@ class Holding:
         return self.value * self.fraction_of(asset_class)
 
 
+def fund_name_key(name: str) -> str:
+    """A fund name as every comparison of one reads it -- case and surrounding
+    space are noise a user shouldn't have to get right. The key an order is
+    placed against within an account, and the key a fund's details are kept
+    under across the whole portfolio."""
+    return name.strip().casefold()
+
+
+@dataclass(frozen=True)
+class FundProfile:
+    """What a fund *is*, apart from how much of it any one account holds: its
+    name, which asset class it holds, and its mix if that is several.
+
+    A fund name maps to exactly one of these across every account. VBIAX in a
+    Roth and VBIAX in a brokerage account are the same security, so they
+    cannot hold different things -- and letting two copies of its details
+    exist is what lets them come to disagree. Only the value is per account.
+    """
+
+    name: str
+    fund_type: FundType
+    allocation: FundAllocation | None = None
+
+    def __post_init__(self) -> None:
+        # Holding's own checks, which a profile has to pass to become one.
+        self.holding(Decimal(0))
+        if self.fund_type == FundType.CASH:
+            raise ValueError("Cash is not a fund and has no saved details")
+
+    @classmethod
+    def of(cls, holding: Holding) -> FundProfile:
+        return cls(name=holding.name, fund_type=holding.fund_type, allocation=holding.allocation)
+
+    def holding(self, value: Decimal, *, name: str | None = None) -> Holding:
+        """This fund held at `value`. `name` keeps an account's own spelling
+        of it -- "vti" and "VTI" are one fund, and the order is placed against
+        whichever the account was entered with."""
+        return Holding(
+            fund_type=self.fund_type,
+            name=self.name if name is None else name,
+            value=value,
+            allocation=self.allocation,
+        )
+
+    def same_details(self, other: FundProfile) -> bool:
+        """Whether two profiles describe a fund the same way -- spelling of
+        the name aside, which is not a detail."""
+        return self.fund_type == other.fund_type and self.allocation == other.allocation
+
+
+class FundCatalog:
+    """Every fund entered, one `FundProfile` per name.
+
+    Kept in the config file so a fund typed again in another account is
+    offered back with its details rather than described from scratch, and so
+    the details exist in exactly one place. What is saved is only the funds
+    some account still holds -- see `held_by`.
+    """
+
+    def __init__(
+        self, profiles: Iterable[FundProfile] = (), accounts: Iterable[Account] = ()
+    ) -> None:
+        """Seeded from saved profiles and from the funds the accounts hold.
+        Either may repeat a fund, but never with different details: that is
+        two answers to one question, and picking one would silently change
+        what some account holds."""
+        self._by_key: dict[str, FundProfile] = {}
+        seeds = [*profiles, *(FundProfile.of(h) for a in accounts for h in a.funds())]
+        for profile in seeds:
+            known = self.get(profile.name)
+            if known is None:
+                self.set(profile)
+            elif not known.same_details(profile):
+                raise ValueError(
+                    f"Fund {profile.name!r} is described two different ways; "
+                    "a fund's details must be the same in every account"
+                )
+
+    def get(self, name: str) -> FundProfile | None:
+        return self._by_key.get(fund_name_key(name))
+
+    def set(self, profile: FundProfile) -> None:
+        """Record `profile` as what its fund is, replacing any earlier answer
+        -- including the spelling of the name."""
+        self._by_key[fund_name_key(profile.name)] = profile
+
+    def profiles(self) -> list[FundProfile]:
+        """In the order they were first entered."""
+        return list(self._by_key.values())
+
+    def held_by(self, accounts: Iterable[Account]) -> FundCatalog:
+        """Only the funds some account holds, in the same order.
+
+        A fund removed from every account is gone from the portfolio, so it is
+        dropped from what is saved rather than kept forever. Within a run the
+        full catalog still answers, so a fund moved from one account to
+        another in the same session is still recognized.
+        """
+        held = {fund_name_key(h.name) for a in accounts for h in a.funds()}
+        return FundCatalog(p for key, p in self._by_key.items() if key in held)
+
+    def resolve(self, accounts: Iterable[Account]) -> list[Account]:
+        """The accounts with every fund's details taken from here, each
+        keeping its own value and its own spelling of the name.
+
+        This is what makes a change to one fund a change in every account that
+        holds it: the answer is recorded once, and every holding is re-read
+        from it. A fund not in the catalog is left as it is.
+        """
+        resolved = []
+        for account in accounts:
+            holdings = []
+            for holding in account.holdings:
+                profile = (
+                    self.get(holding.name) if holding.fund_type != FundType.CASH else None
+                )
+                holdings.append(
+                    holding
+                    if profile is None
+                    else profile.holding(holding.value, name=holding.name)
+                )
+            resolved.append(replace(account, holdings=holdings))
+        return resolved
+
+
 @dataclass
 class Account:
     """One investment account: a 401(k), an IRA, a taxable brokerage account,
@@ -240,7 +366,7 @@ class Account:
         for holding in self.holdings:
             if holding.fund_type == FundType.CASH:
                 continue
-            key = holding.name.strip().casefold()
+            key = fund_name_key(holding.name)
             if key in seen_names:
                 raise ValueError(
                     f"Account {self.name!r} has more than one holding named "

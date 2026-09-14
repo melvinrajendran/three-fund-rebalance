@@ -138,6 +138,19 @@ ordinary: VTI beside VOO is two securities. Two with the same asset mix leave ev
 location phase tied across every split between them, and which one a purchase lands
 in is deliberately unspecified -- see [`solver.md`](solver.md).
 
+**A fund name maps to one kind and mix across every account.** VBIAX in a Roth and
+VBIAX in a brokerage account are one security, so they cannot hold different things;
+only the value is per account. Letting each holding carry its own copy of the details
+is what let two copies come to disagree, so they are kept once: `models.FundCatalog`
+holds one `FundProfile` per `fund_name_key`, the config file stores them once under
+`"funds"` (a holding there is only a name and a value -- see
+[`persistence.md`](persistence.md)), and every `Holding` the flow builds is read from
+it. `FundCatalog.resolve` is what turns a change made in one account into a change in
+all of them, and seeding a catalog with one fund described two ways raises rather than
+picks. `Holding` still carries `fund_type` and `allocation` in memory, because the
+solver and report read them there -- the rule is that nothing sets them except the
+catalog.
+
 **A declared fund is capacity, whatever it is worth -- and only a declared fund is
 ever traded.** A slot exists because the account *can* hold that fund, not because it
 currently does: `_build_slots` takes every non-cash holding regardless of value, its

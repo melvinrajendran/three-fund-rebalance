@@ -21,6 +21,7 @@ from three_fund_rebalance.config import (
     infer_tax_treatment,
 )
 from three_fund_rebalance.formatting import (
+    ASSET_CLASS_LABELS,
     INDENT_UNIT,
     describe_as_of,
     describe_fund_allocation,
@@ -34,9 +35,12 @@ from three_fund_rebalance.formatting import (
 from three_fund_rebalance.models import (
     Account,
     FundAllocation,
+    FundCatalog,
+    FundProfile,
     FundType,
     Holding,
     TaxTreatment,
+    fund_name_key,
 )
 from three_fund_rebalance.vt_allocation import VTAllocationResult, VTFetchError, fetch_vt_us_pct
 
@@ -585,26 +589,83 @@ def _prompt_fund_allocation(prompter: Prompter) -> FundAllocation:
                 )
 
 
+def _describe_fund_profile(profile: FundProfile) -> str:
+    """A saved fund as one sentence: "VTI is a U.S. stock fund." or "VBIAX is
+    a multi-asset fund that holds 60% U.S. stocks, 0% international stocks,
+    and 40% bonds."
+
+    Named by `ASSET_CLASS_LABELS`, the attributive labels the report already
+    calls a fund by, so a fund is "a bond fund" here exactly as it is there.
+    """
+    label = ASSET_CLASS_LABELS[profile.fund_type]
+    article = "an" if label[0] in "aeiou" else "a"
+    sentence = f"{profile.name} is {article} {label} fund"
+    if profile.fund_type == FundType.MULTI_ASSET:
+        sentence += f" that holds {describe_fund_allocation(profile.allocation)}"
+    return f"{sentence}."
+
+
+def _prompt_fund_details(
+    prompter: Prompter, name: str, *, defaults: FundProfile | None, list_kinds: bool
+) -> FundProfile:
+    """What a fund holds, and its mix if that is several -- everything about a
+    fund that is the same in every account holding it.
+
+    Every answer offers `defaults` back as an editable default, the *kind*
+    included: a lineup change where a balanced fund replaces an index fund is
+    then one keystroke rather than a removal and a re-entry. A fund whose kind
+    is changed *to* multi-asset has no saved mix, so it is asked for outright
+    -- which is the same branch a brand new fund takes.
+    """
+    kind = prompt_choice(
+        prompter,
+        "What does this fund hold?",
+        _FUND_KIND_LABELS,
+        default=_KIND_BY_FUND_TYPE[defaults.fund_type] if defaults else None,
+        list_choices=list_kinds,
+    )
+    fund_type = _FUND_TYPE_BY_KIND[kind]
+
+    # Carried over only when the kind did not change; a fund that has just
+    # become multi-asset has no mix yet, and one that has just stopped being
+    # multi-asset may not keep the one it had.
+    allocation = (
+        defaults.allocation if defaults is not None and defaults.fund_type == fund_type else None
+    )
+    if fund_type == FundType.MULTI_ASSET:
+        if allocation is None:
+            allocation = _prompt_fund_allocation(prompter)
+        else:
+            prompter.say_wrapped(f"Currently {describe_fund_allocation(allocation)}")
+            if prompt_yes_no(prompter, "Update this fund's underlying allocation?", default=False):
+                allocation = _prompt_fund_allocation(prompter)
+    return FundProfile(name=name, fund_type=fund_type, allocation=allocation)
+
+
 def _prompt_holding(
     prompter: Prompter,
     *,
     existing: Holding | None = None,
     list_kinds: bool = True,
     taken_names: set[str] | None = None,
+    catalog: FundCatalog | None = None,
 ) -> Holding:
     """Ask for one fund: what it is called at the current depth, everything
     about it one level deeper.
 
     The same helper serves a new fund and a saved one -- `existing` only
-    decides what the questions offer as defaults, and whether a multi-asset
-    fund's mix is asked for outright or shown for confirmation. One shape for
-    both is what stops the two flows drifting apart.
+    decides what the questions offer as defaults. One shape for both is what
+    stops the two flows drifting apart.
 
-    Every answer is re-offered as an editable default, the fund's *kind*
-    included: a lineup change where a balanced fund replaces an index fund is
-    then one keystroke rather than a removal and a re-entry. A fund whose
-    kind is changed *to* multi-asset has no saved mix, so it is asked for
-    outright -- which is the same branch a brand new fund takes.
+    **A fund name maps to one set of details across every account**, kept in
+    `catalog`. A name the catalog already knows -- typed into a second
+    account, or re-added later in the run it was removed in -- has its details shown and
+    confirmed rather than asked again; a saved fund keeping its own name
+    takes its defaults from the catalog rather than from its own copy, so an
+    edit made to the same fund earlier in the run is what it offers. Whatever
+    is answered is recorded back, and a change to a known fund's details says
+    that it reaches every account holding it: `prompt_accounts` and the
+    revise loop re-read every holding from the catalog, so it does.
 
     `taken_names` are the other funds already in this account, normalized the
     way `Account` compares them. An account may not hold two funds under one
@@ -618,6 +679,7 @@ def _prompt_holding(
     text: this is called from two places at different depths, and a literal
     indent that lines up in one lands two levels off in the other.
     """
+    catalog = catalog if catalog is not None else FundCatalog()
     while True:
         name = prompt_str(
             prompter,
@@ -625,39 +687,39 @@ def _prompt_holding(
             default=existing.name if existing else None,
             reject_numeric=True,
         )
-        if name.strip().casefold() not in (taken_names or set()):
+        if fund_name_key(name) not in (taken_names or set()):
             break
         prompter.say(
             f"'{name}' is already in this account -- please choose a different "
             "name or ticker."
         )
+    known = catalog.get(name)
+    keeping_own_name = existing is not None and fund_name_key(name) == fund_name_key(
+        existing.name
+    )
     with prompter.indented():
-        kind = prompt_choice(
-            prompter,
-            "What does this fund hold?",
-            _FUND_KIND_LABELS,
-            default=_KIND_BY_FUND_TYPE[existing.fund_type] if existing else None,
-            list_choices=list_kinds,
-        )
-        fund_type = _FUND_TYPE_BY_KIND[kind]
-
-        # Carried over only when the kind did not change; a fund that has
-        # just become multi-asset has no mix yet, and one that has just
-        # stopped being multi-asset may not keep the one it had.
-        allocation = (
-            existing.allocation
-            if existing is not None and existing.fund_type == fund_type
-            else None
-        )
-        if fund_type == FundType.MULTI_ASSET:
-            if allocation is None:
-                allocation = _prompt_fund_allocation(prompter)
+        if known is not None and not keeping_own_name:
+            prompter.say_wrapped(
+                f"Saved details: {_describe_fund_profile(known)}"
+            )
+            if prompt_yes_no(prompter, "Use these details?", default=True):
+                profile = known
             else:
-                prompter.say_wrapped(f"Currently {describe_fund_allocation(allocation)}")
-                if prompt_yes_no(
-                    prompter, "Update this fund's underlying allocation?", default=False
-                ):
-                    allocation = _prompt_fund_allocation(prompter)
+                # The saved spelling stays: "vbiax" typed into a second account
+                # is a lookup, not a rename of the fund everywhere else.
+                profile = _prompt_fund_details(
+                    prompter, known.name, defaults=known, list_kinds=list_kinds
+                )
+        else:
+            defaults = known or (FundProfile.of(existing) if existing else None)
+            profile = _prompt_fund_details(
+                prompter, name, defaults=defaults, list_kinds=list_kinds
+            )
+        if known is not None and not known.same_details(profile):
+            prompter.say_wrapped(
+                f"This changes {profile.name}'s details in every account that holds it."
+            )
+        catalog.set(profile)
 
         value = prompt_decimal(
             prompter,
@@ -665,7 +727,7 @@ def _prompt_holding(
             default=existing.value if existing else Decimal(0),
             min_value=Decimal(0),
         )
-    return Holding(fund_type=fund_type, name=name, value=value, allocation=allocation)
+    return profile.holding(value, name=name)
 
 
 def _prompt_cash(prompter: Prompter, *, default: Decimal = Decimal(0)) -> Holding | None:
@@ -676,7 +738,9 @@ def _prompt_cash(prompter: Prompter, *, default: Decimal = Decimal(0)) -> Holdin
 
 
 def _prompt_fund_holdings(
-    prompter: Prompter, existing: list[Holding] | None = None
+    prompter: Prompter,
+    existing: list[Holding] | None = None,
+    catalog: FundCatalog | None = None,
 ) -> list[Holding]:
     """The funds an account holds, as a list the user builds rather than a
     fixed set of slots.
@@ -719,7 +783,7 @@ def _prompt_fund_holdings(
         them. A saved fund being re-asked is not in here yet, so pressing
         Enter through its own name never clashes with itself.
         """
-        return {h.name.strip().casefold() for h in holdings}
+        return {fund_name_key(h.name) for h in holdings}
 
     for saved in existing or []:
         if not prompt_yes_no(prompter, f"Keep {saved.name}?", default=True):
@@ -731,6 +795,7 @@ def _prompt_fund_holdings(
                 existing=saved,
                 list_kinds=not listed_kinds,
                 taken_names=taken(),
+                catalog=catalog,
             )
         )
         listed_kinds = True
@@ -742,7 +807,9 @@ def _prompt_fund_holdings(
         if holdings and not prompt_yes_no(prompter, "Add another fund?", default=True):
             break
         holdings.append(
-            _prompt_holding(prompter, list_kinds=not listed_kinds, taken_names=taken())
+            _prompt_holding(
+                prompter, list_kinds=not listed_kinds, taken_names=taken(), catalog=catalog
+            )
         )
         listed_kinds = True
         prompter.say("")
@@ -751,9 +818,11 @@ def _prompt_fund_holdings(
 
 
 def _prompt_holdings(
-    prompter: Prompter, existing: Account | None = None
+    prompter: Prompter, existing: Account | None = None, catalog: FundCatalog | None = None
 ) -> list[Holding]:
-    holdings = _prompt_fund_holdings(prompter, existing.funds() if existing else None)
+    holdings = _prompt_fund_holdings(
+        prompter, existing.funds() if existing else None, catalog
+    )
     cash_holding = _prompt_cash(
         prompter, default=existing.available_cash() if existing else Decimal(0)
     )
@@ -763,7 +832,11 @@ def _prompt_holdings(
 
 
 def _prompt_new_account(
-    prompter: Prompter, existing_names: set[str], *, list_account_types: bool = True
+    prompter: Prompter,
+    existing_names: set[str],
+    *,
+    list_account_types: bool = True,
+    catalog: FundCatalog | None = None,
 ) -> Account:
     account_type = prompt_choice(
         prompter, "\nAccount type", ACCOUNT_TYPE_CHOICES, list_choices=list_account_types
@@ -791,7 +864,7 @@ def _prompt_new_account(
     with prompter.indented():
         prompter.say(format_account_heading(name, account_type))
         with prompter.indented():
-            holdings = _prompt_holdings(prompter)
+            holdings = _prompt_holdings(prompter, catalog=catalog)
     return Account(
         account_type=account_type,
         name=name,
@@ -800,7 +873,9 @@ def _prompt_new_account(
     )
 
 
-def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Account:
+def _prompt_update_existing_account(
+    prompter: Prompter, existing: Account, catalog: FundCatalog | None = None
+) -> Account:
     """Re-ask a saved account's holdings, its own answers pre-filled.
 
     Every question sits at the depth the same question sits at when the
@@ -818,13 +893,22 @@ def _prompt_update_existing_account(prompter: Prompter, existing: Account) -> Ac
         account_type=existing.account_type,
         name=existing.name,
         tax_treatment=existing.tax_treatment,
-        holdings=_prompt_holdings(prompter, existing),
+        holdings=_prompt_holdings(prompter, existing, catalog),
     )
 
 
-def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> list[Account]:
+def prompt_accounts(
+    prompter: Prompter,
+    existing_accounts: list[Account],
+    catalog: FundCatalog | None = None,
+) -> list[Account]:
     """Every saved account, offered back with its own answers pre-filled,
     then however many new ones are added.
+
+    `catalog` is every fund known so far, and is added to as funds are
+    entered; without one, it starts from the saved accounts' own funds. What
+    comes back is re-read from it, so a fund whose details were changed in a
+    later account is changed in an earlier one too.
 
     The saved accounts are listed vertically first: those names are the
     headings the questions below arrive in, and a list read down the page is
@@ -833,6 +917,8 @@ def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> lis
     it -- repeating "press Enter to keep the last value" at the head of each
     one said nothing the previous account had not already said.
     """
+    if catalog is None:
+        catalog = FundCatalog(accounts=existing_accounts)
     accounts: list[Account] = []
     if existing_accounts:
         prompter.say("\n" + format_subheading(SAVED_ACCOUNTS_SUBHEADING))
@@ -848,16 +934,24 @@ def prompt_accounts(prompter: Prompter, existing_accounts: list[Account]) -> lis
             "\nFor each, press Enter to use its saved value, or type a new value."
         )
         for existing in existing_accounts:
-            kept = prompt_revise_account(prompter, existing)
+            kept = prompt_revise_account(prompter, existing, catalog)
             if kept is not None:
                 accounts.append(kept)
 
-    accounts.extend(prompt_add_accounts(prompter, accounts, had_saved=bool(existing_accounts)))
-    return accounts
+    accounts.extend(
+        prompt_add_accounts(
+            prompter, accounts, had_saved=bool(existing_accounts), catalog=catalog
+        )
+    )
+    return catalog.resolve(accounts)
 
 
 def prompt_add_accounts(
-    prompter: Prompter, accounts: list[Account], *, had_saved: bool
+    prompter: Prompter,
+    accounts: list[Account],
+    *,
+    had_saved: bool,
+    catalog: FundCatalog | None = None,
 ) -> list[Account]:
     """The "add accounts" loop, on its own so step 3 and the revision menu
     share one implementation rather than two that drift.
@@ -868,6 +962,8 @@ def prompt_add_accounts(
     """
     # Both states of this heading are imperative: it is a section that asks
     # you to do something, unlike "Saved Accounts" above, which names a list.
+    if catalog is None:
+        catalog = FundCatalog(accounts=accounts)
     heading = ADD_MORE_ACCOUNTS_SUBHEADING if had_saved else ADD_ACCOUNTS_SUBHEADING
     prompter.say("\n" + format_subheading(heading))
     added: list[Account] = []
@@ -887,6 +983,7 @@ def prompt_add_accounts(
                 prompter,
                 existing_names={a.name for a in (*accounts, *added)},
                 list_account_types=not listed_account_types,
+                catalog=catalog,
             )
         )
         listed_account_types = True
@@ -895,10 +992,14 @@ def prompt_add_accounts(
     return added
 
 
-def prompt_revise_account(prompter: Prompter, existing: Account) -> Account | None:
+def prompt_revise_account(
+    prompter: Prompter, existing: Account, catalog: FundCatalog | None = None
+) -> Account | None:
     """One saved account re-asked, exactly as step 3 asks it -- the same
     heading, the same "Keep this account?" gate, the same pre-filled answers.
     None means the user dropped it."""
+    if catalog is None:
+        catalog = FundCatalog(accounts=[existing])
     prompter.say("")
     with prompter.indented():
         prompter.say(format_account_heading(existing.name, existing.account_type))
@@ -906,7 +1007,7 @@ def prompt_revise_account(prompter: Prompter, existing: Account) -> Account | No
             if not prompt_yes_no(prompter, "Keep this account?", default=True):
                 prompter.say(f"Removed '{existing.name}'.")
                 return None
-            return _prompt_update_existing_account(prompter, existing)
+            return _prompt_update_existing_account(prompter, existing, catalog)
 
 
 def prompt_revision_choice(

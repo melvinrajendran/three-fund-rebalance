@@ -30,7 +30,7 @@ from three_fund_rebalance.formatting import (
     format_section_header,
     format_subheading,
 )
-from three_fund_rebalance.models import Account
+from three_fund_rebalance.models import Account, FundCatalog
 from three_fund_rebalance.persistence import (
     PersistedConfig,
     PersistenceError,
@@ -175,6 +175,9 @@ class _Answers:
     band_pct: Decimal
     relative_band_pct: Decimal | None
     accounts: list[Account]
+    # Every fund entered, saved ones included -- the one place a fund's
+    # details live, which the accounts are re-read from after every change.
+    catalog: FundCatalog
 
 
 def _summary_path(raw: str, moment: datetime) -> Path:
@@ -261,7 +264,9 @@ def _revise(prompter: Prompter, args, answers: _Answers) -> bool:
         )
     elif choice == ADD_ACCOUNTS_SUBHEADING:
         answers.accounts.extend(
-            prompt_add_accounts(prompter, answers.accounts, had_saved=True)
+            prompt_add_accounts(
+                prompter, answers.accounts, had_saved=True, catalog=answers.catalog
+            )
         )
     else:
         # The remaining choices are the accounts, listed in their own order.
@@ -270,11 +275,13 @@ def _revise(prompter: Prompter, args, answers: _Answers) -> bool:
             for i, account in enumerate(answers.accounts)
             if format_account_heading(account.name, account.account_type) == choice
         )
-        revised = prompt_revise_account(prompter, answers.accounts[index])
+        revised = prompt_revise_account(prompter, answers.accounts[index], answers.catalog)
         if revised is None:
             del answers.accounts[index]
         else:
             answers.accounts[index] = revised
+    # A fund's details changed in one account are changed in all of them.
+    answers.accounts = answers.catalog.resolve(answers.accounts)
     return True
 
 
@@ -332,7 +339,8 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
     )
 
     prompter.say("\n" + format_section_header(3, _INPUT_STEPS, "Account holdings"))
-    accounts = prompt_accounts(prompter, config.accounts)
+    catalog = FundCatalog(config.funds, config.accounts)
+    accounts = prompt_accounts(prompter, config.accounts, catalog)
     if not accounts:
         prompter.say("\nNo accounts entered -- nothing to rebalance.")
         return 0
@@ -344,6 +352,7 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
         band_pct=band_pct,
         relative_band_pct=relative_band_pct,
         accounts=accounts,
+        catalog=catalog,
     )
 
     # Compute, show, and offer to correct one answer -- looping because the
@@ -432,6 +441,8 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
                 # by a day every evening.
                 values_as_of=_now_local().date().isoformat(),
                 accounts=answers.accounts,
+                # Saving keeps only the funds some account still holds.
+                funds=answers.catalog.profiles(),
             )
             save_config(args.config, updated)
             prompter.say(f"Saved to {args.config}")
