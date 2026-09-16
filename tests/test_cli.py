@@ -8,11 +8,16 @@ import pytest
 
 from three_fund_rebalance import __version__, cli
 from three_fund_rebalance.cli import _write_summary, parse_args, run
-from three_fund_rebalance.config import VT_FUND_PAGE_URL
+from three_fund_rebalance.config import (
+    DEFAULT_REBALANCE_BAND_PCT,
+    DEFAULT_REBALANCE_RELATIVE_BAND_PCT,
+    VT_FUND_PAGE_URL,
+)
 from three_fund_rebalance.formatting import (
     SUMMARY_FILE_WIDTH,
     TABLE_MIN_WIDTH,
     format_generated_at,
+    format_percent,
     prose_width,
     table_width,
 )
@@ -21,6 +26,7 @@ from three_fund_rebalance.persistence import load_config
 from three_fund_rebalance.prompts import Prompter
 from three_fund_rebalance.rebalance import RebalanceError
 from three_fund_rebalance.report import DISCLAIMER
+from three_fund_rebalance.vt_allocation import VTAllocationResult, VTFetchError
 
 
 class ScriptedPrompter(Prompter):
@@ -188,6 +194,19 @@ class TestArgParsing:
             parse_args(["--version"])
         assert exc_info.value.code == 0
         assert __version__ in capsys.readouterr().out
+
+    def test_no_input_parses(self):
+        assert parse_args(["--no-input"]).no_input is True
+        assert parse_args([]).no_input is False
+
+    def test_no_input_with_fresh_exits_with_usage_error(self, capsys):
+        """One reads the saved portfolio and the other ignores it, so
+        together they ask for a run with no answers at all."""
+        with pytest.raises(SystemExit) as exc_info:
+            parse_args(["--no-input", "--fresh"])
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "--no-input" in err and "--fresh" in err
 
 
 class TestEndToEndRun:
@@ -945,3 +964,230 @@ class TestFundsAreRememberedAcrossRuns:
         assert prompter.all_consumed()
         written = json.loads(config_path.read_text())
         assert [f["name"] for f in written["funds"]] == ["VTI", "VXUS"]
+
+
+class TestNoInput:
+    """--no-input runs the saved portfolio without asking anything.
+
+    Every test here gives the prompter an *empty* answer list, so a question
+    of any kind fails with "Ran out of scripted responses" rather than being
+    caught by an assertion about what was printed. That is the claim the flag
+    makes, and it is the one worth testing structurally.
+    """
+
+    def _save_a_portfolio(self, config_path, monkeypatch=None):
+        """One ordinary interactive run, saved. This is the file every test
+        below reads back -- built by the flow rather than hand-written, so a
+        change to what is persisted reaches these tests too."""
+        if monkeypatch is not None:
+            evening = datetime(2026, 8, 29, 21, 3, tzinfo=ZoneInfo("America/New_York"))
+            monkeypatch.setattr(cli, "_now_local", lambda: evening)
+        prompter = ScriptedPrompter([
+            "80", "y", "5", "25",
+            "y", *new_account_responses("1", "Roth", "10000", "0", "0"),
+            "n", NO_REVISION, "y",
+        ])
+        assert run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter) == 0
+
+    def _run(self, config_path, *extra):
+        prompter = ScriptedPrompter([])
+        code = run(
+            ["--config", str(config_path), "--no-input", "--offline", *extra],
+            prompter=prompter,
+        )
+        return code, prompter
+
+    def test_the_saved_portfolio_goes_straight_to_the_summary(self, tmp_path):
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        code, prompter = self._run(config_path)
+        assert code == 0
+        assert "Sell $4,000.00 of VTI" in prompter.full_output
+        # The same plan the interactive run produced, from the same answers.
+        assert "Buy $2,000.00 of VXUS" in prompter.full_output
+        assert "Buy $2,000.00 of BND" in prompter.full_output
+
+    def test_none_of_the_three_steps_is_printed(self, tmp_path):
+        """Not merely unasked: unprinted. The report restates the target, the
+        band and every holding, so the inputs are still on screen -- after
+        the plan rather than before it."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        _, prompter = self._run(config_path)
+        out = prompter.full_output
+        assert "STEP 1 OF 3" not in out
+        assert "STEP 2 OF 3" not in out
+        assert "STEP 3 OF 3" not in out
+        assert "Update Answer" not in out
+        assert "REBALANCING SUMMARY" in out
+
+    def test_the_portfolio_file_is_not_rewritten(self, tmp_path):
+        """--no-input implies --no-save. The answers came out of this file,
+        so a save would rewrite nothing but `values_as_of` -- the one stamp
+        that says how old the balances are."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        before = config_path.read_bytes()
+        _, prompter = self._run(config_path)
+        assert config_path.read_bytes() == before
+        assert "Save Portfolio" not in prompter.full_output
+        assert "Save this portfolio" not in prompter.full_output
+
+    def test_it_says_which_file_it_read_and_how_old_it_is(self, tmp_path, monkeypatch):
+        """The staleness stamp otherwise appears only under Save Portfolio,
+        which this run never reaches -- so a plan computed from months-old
+        balances would look exactly like one typed in just now."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path, monkeypatch)
+        _, prompter = self._run(config_path)
+        assert (
+            f"Using the portfolio at {config_path}, "
+            "last saved August 29, 2026 at 9:03 PM EDT."
+        ) in " ".join(prompter.full_output.split())
+
+    def test_a_file_written_before_the_stamp_still_names_itself(self, tmp_path):
+        """A v6 file holding a bare date prints one, as `format_saved_at`
+        already does everywhere else; one holding no stamp at all says only
+        which file it is."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        written = json.loads(config_path.read_text())
+        del written["values_as_of"]
+        del written["values_as_of_zone"]
+        config_path.write_text(json.dumps(written))
+        code, prompter = self._run(config_path)
+        assert code == 0
+        assert (
+            f"Using the portfolio at {config_path}."
+            in " ".join(prompter.full_output.split())
+        )
+        assert "last saved" not in prompter.full_output
+
+    def test_a_missing_portfolio_is_an_error_and_not_a_blank_start(self, tmp_path):
+        """The warn-and-start-blank path starts the questions over, and there
+        are none to start."""
+        code, prompter = self._run(tmp_path / "nothing.json")
+        assert code == 1
+        assert "There is no saved portfolio at" in " ".join(prompter.full_output.split())
+
+    def test_a_portfolio_with_no_target_allocation_is_refused(self, tmp_path):
+        """Inventing a stock target is inventing the plan."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        written = json.loads(config_path.read_text())
+        del written["stock_pct"]
+        del written["bond_pct"]
+        config_path.write_text(json.dumps(written))
+        code, prompter = self._run(config_path)
+        assert code == 1
+        joined = " ".join(prompter.full_output.split())
+        assert "has no target stock and bond allocation" in joined
+        assert "--no-input" in joined
+
+    def test_a_portfolio_with_no_accounts_has_nothing_to_rebalance(self, tmp_path):
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        written = json.loads(config_path.read_text())
+        written["accounts"] = []
+        config_path.write_text(json.dumps(written))
+        code, prompter = self._run(config_path)
+        assert code == 0
+        assert "nothing to rebalance" in prompter.full_output
+
+    def test_an_absent_band_falls_back_to_the_default_it_would_be_offered(self, tmp_path):
+        """The one gap filled rather than refused: absent means "never
+        chosen", and these are the numbers step 2 offers as its default."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        written = json.loads(config_path.read_text())
+        del written["rebalance_band_pct"]
+        del written["rebalance_relative_band_pct"]
+        config_path.write_text(json.dumps(written))
+        code, prompter = self._run(config_path)
+        assert code == 0
+        joined = " ".join(prompter.full_output.split())
+        assert f"{format_percent(DEFAULT_REBALANCE_BAND_PCT)}%" in joined
+        assert f"{format_percent(DEFAULT_REBALANCE_RELATIVE_BAND_PCT)}%" in joined
+
+    def test_the_live_lookup_is_used_when_it_answers(self, tmp_path, monkeypatch):
+        """Accepted rather than confirmed -- the interactive "Use these
+        values?" is `default=True`, and this is that default with no one
+        there to press Enter."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        monkeypatch.setattr(
+            cli,
+            "fetch_vt_us_pct",
+            lambda: VTAllocationResult(
+                us_pct=Decimal(60), as_of="September 1, 2026", source="api"
+            ),
+        )
+        prompter = ScriptedPrompter([])
+        code = run(["--config", str(config_path), "--no-input"], prompter=prompter)
+        assert code == 0
+        # 80% stocks * 60% U.S. = 48% of $10,000, against $10,000 held.
+        assert "Sell $5,200.00 of VTI" in prompter.full_output
+
+    def test_a_failed_lookup_falls_back_to_the_saved_split(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+
+        def boom():
+            raise VTFetchError("no answer")
+
+        monkeypatch.setattr(cli, "fetch_vt_us_pct", boom)
+        prompter = ScriptedPrompter([])
+        code = run(["--config", str(config_path), "--no-input"], prompter=prompter)
+        assert code == 0
+        # The saved 75%, as the interactive path's cache fallback would use.
+        assert "Sell $4,000.00 of VTI" in prompter.full_output
+
+    def test_no_split_anywhere_is_refused_rather_than_guessed(self, tmp_path):
+        """`FALLBACK_VT_US_PCT` is only ever a suggested default at a prompt,
+        and a run with no prompt has no business passing it off as the
+        user's own figure."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        written = json.loads(config_path.read_text())
+        del written["vt_us_pct"]
+        config_path.write_text(json.dumps(written))
+        code, prompter = self._run(config_path)
+        assert code == 1
+        assert "--vt-us-pct" in prompter.full_output
+
+    def test_vt_us_pct_supplies_the_split_outright(self, tmp_path):
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        written = json.loads(config_path.read_text())
+        del written["vt_us_pct"]
+        config_path.write_text(json.dumps(written))
+        code, prompter = self._run(config_path, "--vt-us-pct", "75")
+        assert code == 0
+        assert "Sell $4,000.00 of VTI" in prompter.full_output
+
+    def test_an_unplannable_portfolio_exits_rather_than_offering_the_menu(
+        self, tmp_path, monkeypatch
+    ):
+        """There is no correction loop here: nothing was typed this run, so
+        the way to change an answer is to run without the flag."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+
+        def boom(*_args, **_kwargs):
+            raise RebalanceError("infeasible")
+
+        monkeypatch.setattr(cli, "compute_trades", boom)
+        code, prompter = self._run(config_path)
+        assert code == 1
+        assert "Could not compute a rebalance: infeasible" in prompter.full_output
+        assert "Update an answer" not in prompter.full_output
+
+    def test_the_summary_file_is_still_written(self, tmp_path):
+        """The pairing the flag exists for: no questions, and the plan on
+        disk. --write-summary already asks nothing."""
+        config_path = tmp_path / "c.json"
+        self._save_a_portfolio(config_path)
+        out = tmp_path / "plan.txt"
+        code, _ = self._run(config_path, "--write-summary", str(out))
+        assert code == 0
+        assert "Sell $4,000.00 of VTI" in out.read_text()

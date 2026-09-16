@@ -145,10 +145,17 @@ account holdings -- then the summary above. Run it again and every saved
 account comes back with its last values pre-filled: press Enter to keep one or
 type a new one.
 
+To re-run a portfolio that has not changed, `--no-input` skips the three steps
+entirely and prints the summary from the saved file. It never writes that file
+back, so the "last saved" date keeps meaning the last time you entered a
+figure. It pairs with `--write-summary` for an unattended run, and errors
+rather than guessing if the saved portfolio is missing something.
+
 | Flag | Effect |
 | --- | --- |
 | `--config PATH` | Portfolio file to read and write (default `~/.three_fund_rebalance/config.json`) |
 | `--fresh` | Ignore the saved portfolio and start blank |
+| `--no-input` | Use the saved portfolio as-is: ask nothing, print the summary, and don't save |
 | `--no-save` | Don't offer to save this run's answers to the portfolio file |
 | `--offline` | Skip the live VT fetch; use the saved or a manually entered value instead |
 | `--vt-us-pct PCT` | Set VT's U.S. stock allocation % directly, skipping the lookup and the prompt |

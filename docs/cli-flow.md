@@ -130,6 +130,74 @@ the portfolio file outright for the same reason, and the README says it in a
 sentence, since a help string is not where someone resolves a confusion they
 have not had yet.
 
+## Running without input (`--no-input`)
+
+Everything above is the interactive flow, and `--no-input` is the one way past
+it: the saved portfolio is read, the plan is computed, the summary is printed,
+and nothing is asked. It exists because a saved answer is re-offered as an
+*editable default* and never silently trusted (see
+[`persistence.md`](persistence.md)) -- which is right at the prompt and leaves
+no way at all to re-run a portfolio that has not changed. Pressing Enter
+through three steps and one question per fund per account is not a
+non-interactive mode; it is the interactive one, typed faster.
+
+**The name is not `--yes`.** `-y` means "assume yes to confirmations", and the
+questions here collect values: there is no yes to assume for "Fund name or
+ticker". `--no-input` is the name the same behavior carries elsewhere (pip,
+Django, cookiecutter, Terraform's `-input=false`), and it carries the failure
+mode with it -- a value the file cannot supply is an error, never a guess.
+`--no-input --fresh` is refused by `parser.error`: one reads the saved
+portfolio and the other ignores it, so together they ask for a run with no
+answers at all.
+
+**The three steps are not printed, not merely unasked.** The report already
+restates the target, the band and every account holding, so the inputs are
+still on screen -- after the plan rather than before it. What is printed above
+them is one line naming the file and its stamp: `Using the portfolio at
+~/.three_fund_rebalance/config.json, last saved August 29, 2026 at 9:03 PM
+EDT.` It says "at" rather than "saved to" because the stamp behind it is the
+only save the line describes: two of the word read as two different events,
+the file being written and the figures in it being entered. That stamp
+otherwise appears only under "Save Portfolio", which this run never reaches, and it is the only thing separating a plan computed from
+months-old balances from one typed in just now. It is built by the same
+`format_saved_at` the save section uses, so a file with a bare date prints one
+and a file with no stamp says only which file it is.
+
+**There is no revise loop.** The loop exists because a typo is noticed in the
+report and nowhere earlier; nothing was typed this run, and the way to change a
+saved answer is to run without the flag. A `RebalanceError` therefore returns 1
+where the interactive path would offer the menu.
+
+**It implies `--no-save`.** The answers came out of the file, so a save would
+rewrite nothing but `values_as_of` -- and that stamp is exactly what the line
+above is for. Refreshing it on a run no one looked at is how it comes to date
+the last *run* rather than the last time anyone confirmed a figure, which is
+the one question it is asked. `--write-summary` is unaffected and still writes:
+it already asks nothing, and the two together are the unattended run this flag
+is for.
+
+**What it refuses rather than defaults.** A missing file, an unreadable one, and
+a file with no `stock_pct`/`bond_pct` each end the run with a message naming the
+file -- inventing a stock target is inventing the plan, and the
+warn-and-start-blank path has nowhere to go with no prompts. Note a missing file
+is checked for by name: `load_config` returns a blank config for one, which is
+right for a flow about to ask for everything and wrong for one that cannot ask
+for anything. The VT split is resolved flag, then lookup, then cache -- each of
+the interactive path's questions answered the way its own default answers it --
+and refused if all three come up empty, because `FALLBACK_VT_US_PCT` is only
+ever a suggested default at a prompt.
+
+**The bands are the one gap that is filled.** An absent band means "never
+chosen" and step 2 offers `DEFAULT_REBALANCE_BAND_PCT` /
+`DEFAULT_REBALANCE_RELATIVE_BAND_PCT` for it; using them here is the answer a
+user pressing Enter would have given, not a guess at one they typed.
+
+`_collect_answers` holds the three steps and `_answers_from_config` reads them
+off the file, so `run()` chooses between them once rather than testing the flag
+at each of six places. Every test of this flag hands the prompter an **empty**
+answer list, so a question of any kind fails the test outright -- that is the
+claim the flag makes, and the only way to test it is structurally.
+
 ## An account's funds are a list the user builds
 
 Step 3 no longer asks which *kind* of account this is and then walks fixed slots.
