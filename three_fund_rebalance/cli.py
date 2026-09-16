@@ -19,7 +19,11 @@ from pathlib import Path
 
 from three_fund_rebalance import __version__
 from three_fund_rebalance.allocation import compute_target_allocation
-from three_fund_rebalance.config import DEFAULT_CONFIG_PATH
+from three_fund_rebalance.config import (
+    DEFAULT_CONFIG_PATH,
+    DEFAULT_REBALANCE_BAND_PCT,
+    DEFAULT_REBALANCE_RELATIVE_BAND_PCT,
+)
 from three_fund_rebalance.formatting import (
     SUMMARY_FILE_WIDTH,
     fixed_width,
@@ -61,7 +65,11 @@ from three_fund_rebalance.prompts import (
 )
 from three_fund_rebalance.rebalance import RebalanceError, compute_trades
 from three_fund_rebalance.report import DISCLAIMER, RebalanceInputs, format_report
-from three_fund_rebalance.vt_allocation import VTAllocationResult
+from three_fund_rebalance.vt_allocation import (
+    VTAllocationResult,
+    VTFetchError,
+    fetch_vt_us_pct,
+)
 
 #: How many numbered steps the user is asked to walk through. The report
 #: that follows them is not one of them.
@@ -130,6 +138,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--fresh", action="store_true", help="Ignore the saved portfolio and start blank"
     )
     parser.add_argument(
+        "--no-input",
+        action="store_true",
+        # Named for what it does to the flow rather than for what it answers:
+        # the questions here collect values, not confirmations, so there is no
+        # "yes" for a --yes to assume. The name also carries the failure mode
+        # -- a value the file cannot supply is an error, never a guess.
+        help="Use the saved portfolio as-is: ask nothing, print the summary, and don't save",
+    )
+    parser.add_argument(
         "--no-save",
         action="store_true",
         # Names the file it is about. It sounds like it governs
@@ -163,7 +180,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "timestamped file beside the portfolio file"
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.no_input and args.fresh:
+        # Not merely redundant: one reads the saved portfolio and the other
+        # ignores it, so together they ask for a run with no answers at all.
+        parser.error("--no-input reads the saved portfolio; --fresh ignores it")
+    return args
 
 
 @dataclass
@@ -215,24 +237,162 @@ def _write_summary(path: Path, text: str, *, generated_name: bool) -> Path:
             candidate = path.with_name(f"{path.stem}-{attempt}{path.suffix}")
 
 
-def _ask_vt_split(prompter: Prompter, args, answers: _Answers) -> VTAllocationResult:
-    """Step 1's second question, asked the same way the first time and every
-    time after -- the saved split is offered back as the default."""
-    if args.vt_us_pct is not None:
-        result = VTAllocationResult(
-            us_pct=args.vt_us_pct, as_of="manually specified via --vt-us-pct", source="manual"
-        )
+def _vt_split_from_flag(prompter: Prompter | None, us_pct: Decimal) -> VTAllocationResult:
+    """The split `--vt-us-pct` names. One function rather than a copy at each
+    of the three places that honour the flag, so the `as_of` note the report
+    prints cannot come to be worded differently depending on which asked."""
+    result = VTAllocationResult(
+        us_pct=us_pct, as_of="manually specified via --vt-us-pct", source="manual"
+    )
+    if prompter is not None:
         prompter.say_wrapped(
             f"Using {format_percent(result.us_pct)}% U.S. stocks and "
             f"{format_percent(Decimal(100) - result.us_pct)}% international stocks, "
             f"as given by --vt-us-pct."
         )
-        return result
+    return result
+
+
+def _ask_vt_split(prompter: Prompter, args, answers: _Answers) -> VTAllocationResult:
+    """Step 1's second question, asked the same way the first time and every
+    time after -- the saved split is offered back as the default."""
+    if args.vt_us_pct is not None:
+        return _vt_split_from_flag(prompter, args.vt_us_pct)
     return resolve_vt_allocation(
         prompter,
         cached_us_pct=answers.vt.us_pct if answers.vt else None,
         cached_as_of=answers.vt.as_of if answers.vt else None,
         offline=args.offline,
+    )
+
+
+class _NoInputError(Exception):
+    """A `--no-input` run needs an answer the saved portfolio does not hold.
+
+    Its message is the one the user sees, so it names the file or the flag
+    that would supply what is missing. There is no prompt to fall back to --
+    that is the whole point of the flag -- and no default worth inventing for
+    any of these, so each of them ends the run.
+    """
+
+
+def _vt_split_without_asking(config: PersistedConfig, args) -> VTAllocationResult:
+    """The VT split for a run that cannot ask for one.
+
+    The flag wins, then the live lookup, then the cache -- the same order the
+    interactive path walks, with each of its questions answered the way its
+    own default answers it ("Use these values?" is `default=True` both times).
+    `FALLBACK_VT_US_PCT` is deliberately not reached for: it is only ever a
+    suggested default at a prompt, and a run with no prompt has no business
+    passing a constant off as the user's own figure.
+    """
+    if args.vt_us_pct is not None:
+        return _vt_split_from_flag(None, args.vt_us_pct)
+    if not args.offline:
+        try:
+            return fetch_vt_us_pct()
+        except VTFetchError:
+            # Falls through to the cache, as the interactive path does. The
+            # failure is not reported: the report names the source and date
+            # of whatever split it did use, which is the thing worth knowing.
+            pass
+    if config.vt_us_pct is not None:
+        return VTAllocationResult(
+            us_pct=config.vt_us_pct,
+            as_of=config.vt_as_of or "unknown date",
+            source="cache",
+        )
+    raise _NoInputError(
+        "No U.S. and international stock split available: the lookup did not "
+        "answer and the saved portfolio has none. Pass --vt-us-pct to supply one."
+    )
+
+
+def _answers_from_config(config: PersistedConfig, args, path: Path) -> _Answers:
+    """The three steps' answers, read from the saved portfolio instead of asked.
+
+    Every field `compute_target_allocation` and `compute_trades` need is
+    persisted, so this is a read and not a reconstruction. What it will not do
+    is fill a gap: a file that never recorded a target is a file this run
+    cannot plan from, and guessing one would put a number in the report that
+    no one chose.
+    """
+    if config.stock_pct is None or config.bond_pct is None:
+        raise _NoInputError(
+            f"The saved portfolio at {path} has no target stock and bond allocation. "
+            "Run without --no-input once to set one."
+        )
+    return _Answers(
+        stock_pct=config.stock_pct,
+        bond_pct=config.bond_pct,
+        vt=_vt_split_without_asking(config, args),
+        # The one gap that is filled rather than refused. An absent band means
+        # "never chosen" (see docs/persistence.md), and these constants are
+        # exactly what step 2 offers as its default -- so this is the answer a
+        # user pressing Enter would have given, not a guess at one they typed.
+        band_pct=(
+            DEFAULT_REBALANCE_BAND_PCT
+            if config.rebalance_band_pct is None
+            else config.rebalance_band_pct
+        ),
+        relative_band_pct=(
+            DEFAULT_REBALANCE_RELATIVE_BAND_PCT
+            if config.rebalance_relative_band_pct is None
+            else config.rebalance_relative_band_pct
+        ),
+        accounts=list(config.accounts),
+        catalog=FundCatalog(config.funds, config.accounts),
+    )
+
+
+def _collect_answers(prompter: Prompter, args, config: PersistedConfig) -> _Answers | None:
+    """The three numbered steps. None if the user entered no accounts at all,
+    which is the one way out of them that is not an answer."""
+    prompter.say("\n" + format_section_header(1, _INPUT_STEPS, "Target asset allocation"))
+
+    prompter.say("\n" + format_subheading(STOCK_BOND_SUBHEADING))
+    stock_pct, bond_pct = prompt_stock_bond_allocation(prompter, default_stock=config.stock_pct)
+
+    prompter.say("\n" + format_subheading(VT_SPLIT_SUBHEADING))
+    if args.vt_us_pct is not None:
+        vt_result = _vt_split_from_flag(prompter, args.vt_us_pct)
+    else:
+        vt_result = resolve_vt_allocation(
+            prompter,
+            cached_us_pct=config.vt_us_pct,
+            cached_as_of=config.vt_as_of,
+            offline=args.offline,
+        )
+
+    # The banner names the question, the subheading names the mechanism --
+    # the same shape as step 1, and it lets the band be called a band here as
+    # it is in the report, the README and the saved config.
+    prompter.say("\n" + format_section_header(2, _INPUT_STEPS, "When to rebalance"))
+
+    prompter.say("\n" + format_subheading(REBALANCING_BANDS_SUBHEADING))
+    # The one place the flow explains before it asks; see BAND_EXPLANATION.
+    prompter.say_wrapped(BAND_EXPLANATION)
+    prompter.say("")
+    band_pct = prompt_rebalance_band(prompter, default=config.rebalance_band_pct)
+    relative_band_pct = prompt_relative_rebalance_band(
+        prompter, default=config.rebalance_relative_band_pct
+    )
+
+    prompter.say("\n" + format_section_header(3, _INPUT_STEPS, "Account holdings"))
+    catalog = FundCatalog(config.funds, config.accounts)
+    accounts = prompt_accounts(prompter, config.accounts, catalog)
+    if not accounts:
+        prompter.say("\nNo accounts entered -- nothing to rebalance.")
+        return None
+
+    return _Answers(
+        stock_pct=stock_pct,
+        bond_pct=bond_pct,
+        vt=vt_result,
+        band_pct=band_pct,
+        relative_band_pct=relative_band_pct,
+        accounts=accounts,
+        catalog=catalog,
     )
 
 
@@ -294,66 +454,58 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
         try:
             config = load_config(args.config)
         except PersistenceError as exc:
+            if args.no_input:
+                # The warn-and-start-blank path below starts the questions
+                # over, and there are none to start.
+                prompter.say_wrapped(
+                    f"Could not read the saved portfolio at {args.config} ({exc})."
+                )
+                return 1
             prompter.say_wrapped(
                 f"Warning: could not read the saved portfolio at {args.config} "
                 f"({exc}). Starting from scratch."
             )
 
-    prompter.say("\n" + format_section_header(1, _INPUT_STEPS, "Target asset allocation"))
-
-    prompter.say("\n" + format_subheading(STOCK_BOND_SUBHEADING))
-    stock_pct, bond_pct = prompt_stock_bond_allocation(
-        prompter, default_stock=config.stock_pct
-    )
-
-    prompter.say("\n" + format_subheading(VT_SPLIT_SUBHEADING))
-    if args.vt_us_pct is not None:
-        vt_result = VTAllocationResult(
-            us_pct=args.vt_us_pct, as_of="manually specified via --vt-us-pct", source="manual"
-        )
+    if args.no_input:
+        # A file that does not exist loads as a blank config rather than an
+        # error, which is right for a flow that is about to ask for
+        # everything and wrong for one that cannot ask for anything.
+        if not args.config.exists():
+            prompter.say_wrapped(
+                f"There is no saved portfolio at {args.config}. "
+                "Run without --no-input once to create one."
+            )
+            return 1
+        try:
+            answers = _answers_from_config(config, args, args.config)
+        except _NoInputError as exc:
+            prompter.say_wrapped(f"{exc}")
+            return 1
+        if not answers.accounts:
+            prompter.say_wrapped(
+                f"The saved portfolio at {args.config} holds no accounts -- "
+                "nothing to rebalance."
+            )
+            return 0
+        # How old the figures below are. The report dates itself, not them,
+        # and this run never reaches the Save Portfolio section where that
+        # stamp otherwise appears -- so without this line a plan computed
+        # from months-old balances looks exactly like one typed in just now.
+        # "at", not "saved to": the stamp that follows is the only save this
+        # sentence describes, and two of the word in one line read as two
+        # different events -- the file being written, and the figures in it
+        # being entered. "Last saved ..." is the same phrase the Save
+        # Portfolio section dates the same file with.
+        stamp = format_saved_at(config.values_as_of, config.values_as_of_zone)
         prompter.say_wrapped(
-            f"Using {format_percent(vt_result.us_pct)}% U.S. stocks and "
-            f"{format_percent(Decimal(100) - vt_result.us_pct)}% international stocks, "
-            f"as given by --vt-us-pct."
+            f"\nUsing the portfolio at {args.config}"
+            + (f", last saved {stamp}." if config.values_as_of else ".")
         )
     else:
-        vt_result = resolve_vt_allocation(
-            prompter,
-            cached_us_pct=config.vt_us_pct,
-            cached_as_of=config.vt_as_of,
-            offline=args.offline,
-        )
-
-    # The banner names the question, the subheading names the mechanism --
-    # the same shape as step 1, and it lets the band be called a band here as
-    # it is in the report, the README and the saved config.
-    prompter.say("\n" + format_section_header(2, _INPUT_STEPS, "When to rebalance"))
-
-    prompter.say("\n" + format_subheading(REBALANCING_BANDS_SUBHEADING))
-    # The one place the flow explains before it asks; see BAND_EXPLANATION.
-    prompter.say_wrapped(BAND_EXPLANATION)
-    prompter.say("")
-    band_pct = prompt_rebalance_band(prompter, default=config.rebalance_band_pct)
-    relative_band_pct = prompt_relative_rebalance_band(
-        prompter, default=config.rebalance_relative_band_pct
-    )
-
-    prompter.say("\n" + format_section_header(3, _INPUT_STEPS, "Account holdings"))
-    catalog = FundCatalog(config.funds, config.accounts)
-    accounts = prompt_accounts(prompter, config.accounts, catalog)
-    if not accounts:
-        prompter.say("\nNo accounts entered -- nothing to rebalance.")
-        return 0
-
-    answers = _Answers(
-        stock_pct=stock_pct,
-        bond_pct=bond_pct,
-        vt=vt_result,
-        band_pct=band_pct,
-        relative_band_pct=relative_band_pct,
-        accounts=accounts,
-        catalog=catalog,
-    )
+        collected = _collect_answers(prompter, args, config)
+        if collected is None:
+            return 0
+        answers = collected
 
     # Compute, show, and offer to correct one answer -- looping because the
     # report is where a typo is actually noticed. A wrong balance shows up as
@@ -379,6 +531,11 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
             prompter.say_wrapped(f"\nCould not compute a rebalance: {exc}")
             # An unplannable portfolio is usually a mistyped answer, so the
             # same correction loop is the way out of it rather than a rerun.
+            # Not under --no-input, where nothing was typed this run: the
+            # answers came from the file, and the way to change them is to
+            # run without the flag.
+            if args.no_input:
+                return 1
             if not prompt_yes_no(prompter, "Update an answer and try again?", default=True):
                 return 1
         else:
@@ -402,6 +559,8 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
             # to. The failed-solve path below stays bare: there is no report
             # and no disclaimer there, and the question sits directly under
             # the one sentence that explains it, which a rule would break.
+            if args.no_input:
+                break
             prompter.say("\n" + format_subheading(UPDATE_ANSWER_SUBHEADING))
             if not prompt_yes_no(prompter, "Update an answer and recompute?", default=False):
                 break
@@ -424,7 +583,12 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
     # A section of its own rather than a question tacked onto the end of the
     # report: it is a separate action, and the report now closes with a
     # disclaimer that should not read as part of the prompt.
-    if not args.no_save:
+    # --no-input implies --no-save. The answers came out of this file, so a
+    # save would rewrite nothing but `values_as_of` -- and that stamp is what
+    # tells the next run's reader how old the balances are. Refreshing it on
+    # a run no one looked at is how it comes to date the last run rather than
+    # the last time anyone confirmed a figure.
+    if not args.no_save and not args.no_input:
         prompter.say("\n" + format_subheading(SAVE_PORTFOLIO_SUBHEADING))
         # How stale the file about to be overwritten is, where the file is
         # the subject. It used to sit under the portfolio total in the
