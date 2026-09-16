@@ -104,6 +104,25 @@ land at 78 columns from one machine and 198 from another;
 is written *after* the report is on screen, so an unwritable path costs a
 message and not the plan.
 
+**"Save Portfolio" opens by saying when the file was last written** -- "Last
+saved August 29, 2026 at 9:03 PM EDT." above the question, with a blank line
+between them the way step 2 sets its explanation off from the questions under
+it. The sentence used to sit in the report, under the portfolio total, as the
+second half of "Values as entered, not live market prices." It dates the
+*file*, though, not the figures, and the one decision it informs is the one
+being asked here: whether to overwrite it. Printed only when a file was
+loaded, so a first run and a `--fresh` one show the heading and the question
+alone.
+
+The stamp is `PersistedConfig.values_as_of`, a local ISO timestamp written to
+the second, with `values_as_of_zone` beside it because ISO 8601 has nowhere to
+put "EDT". `formatting.format_saved_at` rebuilds the sentence from the pair
+through the same `format_generated_at` the report's own first line uses -- so
+the two stamps in one session are spelled alike, and a file reads the same on
+every machine that opens it rather than being re-zoned to whoever is looking.
+A file written before the stamp carried a clock holds a bare date and prints
+as one.
+
 **`--no-save` and `--write-summary` govern different files**, which is most of
 why the new flag is not called `--save-summary`: beside an existing `--no-save`
 that reads as its opposite number, and it is not. `--no-save`'s help now names

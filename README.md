@@ -16,7 +16,7 @@ sell.** Consult a professional about your situation, and see the CLI's
 
 Three accounts, a target of 80% stocks and 20% bonds, and a rebalancing band
 of 5 percentage points or 25% of an asset class's target, whichever is
-tighter:
+smaller:
 
 ```
 Target Asset Allocation
@@ -31,14 +31,14 @@ Target Asset Allocation
 Rebalancing Bands
 -----------------
 Plus or minus 5 percentage points, or 25% of an asset class's target,
-whichever is tighter:
+whichever is smaller:
 
   U.S. stocks           44.6% to 54.6%
   International stocks  25.4% to 35.4%
   Bonds                 15.0% to 25.0%
 
 No trades while every asset class stays within its band. If any asset class
-drifts outside its band, all three are rebalanced back to target.
+drifts outside its band, all three are rebalanced back to their targets.
 
 Account Holdings
 ----------------
@@ -63,7 +63,6 @@ Account Holdings
 Current vs. Target Allocation
 -----------------------------
 Total portfolio value: $150,000.00
-  Values as entered, not live market prices.
 
                                     Current              Target  Absolute Drift  Relative Drift
   U.S. stocks           $110,000.00 (73.3%)  $74,400.00 (49.6%)     +23.7 pts *        +47.8% *
@@ -164,15 +163,15 @@ sheet PDF, then the last saved value, then manual entry, which points you at
 VT's fund page to read the number off yourself. It never guesses silently.
 
 **Rebalancing bands.** You set two -- and an asset class has to satisfy both,
-so the tighter binds: the *absolute band*, in percentage points of the
+so the smaller binds: the *absolute band*, in percentage points of the
 portfolio, and the *relative band*, as a percentage of the asset class's
 target. They default to 5 points and 25%, and zero on either tolerates no
 drift.
 
 **A band is a trigger, not a destination.** No trades while every asset class
 stays within its band; if any drifts outside, all three are rebalanced back to
-target. Cash is invested first, and the band is judged on what it leaves
-behind.
+their targets. Cash is invested first, and the band is judged on what it
+leaves behind.
 
 **An account holds any combination of funds.** Each one either holds a single
 asset class or is a *multi-asset fund* -- a target-date, balanced or

@@ -14,8 +14,10 @@ from three_fund_rebalance.formatting import (
     format_percent_prose,
     format_percents,
     format_result_header,
+    format_saved_at,
     format_section_header,
     format_subheading,
+    format_zone_label,
     percent_places,
     prose_width,
     table_width,
@@ -205,6 +207,44 @@ class TestGeneratedAt:
             assert format_generated_at_for_filename(moment) == (
                 f"{moment:%Y-%m-%d-%H%M}-{label.lower().replace(':', '')}"
             )
+
+
+class TestSavedAt:
+    """When the portfolio file was last written, read back off disk. Nothing
+    here builds a local zone or asks the machine for one: a saved stamp has
+    to read the same on every machine that opens the file."""
+
+    def test_it_reads_back_as_the_sentence_that_saved_it(self):
+        assert (
+            format_saved_at("2026-08-29T21:03:00-04:00", "EDT")
+            == "August 29, 2026 at 9:03 PM EDT"
+        )
+
+    def test_the_saved_label_is_what_names_the_zone(self):
+        """The offset alone cannot tell EDT from AST, so the label decides --
+        and it is the same one `format_generated_at` printed that session,
+        which is what `format_zone_label` is for."""
+        moment = datetime(2026, 8, 29, 21, 3, tzinfo=ZoneInfo("America/New_York"))
+        assert format_zone_label(moment) == "EDT"
+        assert format_saved_at(moment.isoformat(timespec="seconds"), "AST").endswith("AST")
+
+    def test_a_stamp_with_no_label_falls_to_its_own_offset(self):
+        assert (
+            format_saved_at("2026-08-29T21:03:00+05:45")
+            == "August 29, 2026 at 9:03 PM UTC+05:45"
+        )
+
+    def test_a_label_that_is_not_a_zone_is_not_printed(self):
+        """The file is hand-editable, so the label goes through the same
+        shape test every zone here does."""
+        said = format_saved_at("2026-08-29T21:03:00-04:00", "Eastern Daylight Time")
+        assert said == "August 29, 2026 at 9:03 PM UTC-04:00"
+
+    def test_a_file_saved_before_the_stamp_had_a_clock_keeps_its_bare_date(self):
+        """Midnight is not when it was saved, and a time the program does not
+        know is not one to invent."""
+        assert format_saved_at("2026-08-21") == "August 21, 2026"
+        assert format_saved_at("") == "unknown date"
 
 
 class TestFixedWidth:

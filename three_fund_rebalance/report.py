@@ -54,7 +54,6 @@ from three_fund_rebalance.formatting import (
     TAX_TREATMENT_LABELS,
     describe_as_of,
     format_account_heading,
-    format_date,
     format_fund_mix,
     format_generated_at,
     format_percent_prose,
@@ -118,9 +117,6 @@ class RebalanceInputs:
     # The other half of the band: a share of each class's own target. 0 on
     # either half tolerates no drift at all.
     relative_band_pct: Decimal
-    # When the saved values were last written, if they came from a config
-    # file. None when everything was typed this session.
-    values_as_of: str | None = None
     # When this plan was computed, as an aware UTC datetime. Passed in rather
     # than read from the clock inside `format_report`, so the same inputs
     # render the same report -- and so the summary file's name and the line
@@ -320,7 +316,7 @@ def _describe_target(inputs: RebalanceInputs) -> list[str]:
 #: buying.
 _BAND_RULE = (
     "No trades while every asset class stays within its band. If any asset class drifts "
-    "outside its band, all three are rebalanced back to target."
+    "outside its band, all three are rebalanced back to their targets."
 )
 
 
@@ -352,14 +348,17 @@ def _describe_band(inputs: RebalanceInputs) -> list[str]:
         lines.append("Off -- every asset class is traded back to its exact target.")
         return lines
 
-    # Two rules meeting at whichever is tighter give each class a different
+    # Two rules meeting at whichever is smaller give each class a different
     # band, so the classes are listed rather than described -- a reader
     # should not have to work out that 25% of a 5% target is 1.2 points.
+    # "Smaller", not "tighter": it is the word the question that collected
+    # the two halves used ("the smaller of these two bands"), and the report
+    # restates an answer in the words it was asked for.
     lines.append(
         wrap(
             f"Plus or minus {format_percent_prose(inputs.band_pct)} percentage points, or "
             f"{format_percent_prose(inputs.relative_band_pct)}% of an asset class's target, "
-            "whichever is tighter:"
+            "whichever is smaller:"
         )
     )
     lines.append("")
@@ -445,12 +444,8 @@ def _describe_comparison(inputs: RebalanceInputs, summary: AllocationSummary) ->
     lines = _subheading("Current vs. Target Allocation")
     total = f"Total portfolio value: {_money(summary.total_value)}"
     if summary.available_cash > 0:
-        total += f" (includes {_money(summary.available_cash)} of cash to invest)"
+        total += f" (includes {_money(summary.available_cash)} of cash available to invest)"
     lines.append(wrap(total))
-    provenance = "Values as entered, not live market prices."
-    if inputs.values_as_of:
-        provenance += f" Last saved {format_date(inputs.values_as_of)}."
-    lines.append(wrap(provenance, indent=INDENT_UNIT))
     lines.append("")
 
     banded = _band_is_on(inputs)
@@ -630,10 +625,12 @@ def format_report(inputs: RebalanceInputs, result: RebalanceResult) -> str:
         inputs.accounts, inputs.target, inputs.band_pct, inputs.relative_band_pct
     )
 
-    # The document's own provenance, at the document's head. The figures
-    # carry theirs further down ("Values as entered", "Last saved ..."); this
-    # is about the plan rather than the numbers it was computed from, which
-    # is why it leads rather than joining them.
+    # The document's own provenance, at the document's head, and the only
+    # stamp the report carries. The figures used to carry their own beneath
+    # the portfolio total ("Values as entered, not live market prices. Last
+    # saved ..."): the first half said nothing a reader who typed those
+    # values did not know, and the second belongs to the config file, so it
+    # is printed where the file is written instead -- see `cli.run`.
     lines: list[str] = []
     if inputs.generated_at is not None:
         lines.append(wrap(f"Generated {format_generated_at(inputs.generated_at)}."))

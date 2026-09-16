@@ -16,7 +16,7 @@ import shutil
 import textwrap
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from three_fund_rebalance.models import FundAllocation, FundType, TaxTreatment
@@ -315,15 +315,30 @@ def _zone_labels(moment: datetime) -> tuple[str, str]:
     return f"UTC{sign}{hours:02d}:{minutes:02d}", f"utc{sign}{hours:02d}{minutes:02d}"
 
 
-def format_generated_at(moment: datetime) -> str:
+def format_generated_at(moment: datetime, *, zone: str | None = None) -> str:
     """When the plan was made, written out the way every other date here is
     -- "August 29, 2026 at 9:03 PM EDT", or "... 9:03 PM UTC+05:45" where the
     zone has no abbreviation.
 
     The abbreviation is not only shorter than an offset: it is what tells the
     two 1:30 AMs of a fall-back apart, which a bare local time cannot.
+
+    `zone` names the zone for a moment that no longer knows its own -- one
+    read back off disk, where ISO 8601 stored the offset and dropped the
+    name. It is the label this function would have produced at the time; an
+    unrecognizable one is ignored rather than printed, so a hand-edited file
+    cannot put arbitrary text where a zone goes.
     """
-    return f"{moment.strftime(_GENERATED_TIME_FORMAT)} {_zone_labels(moment)[0]}"
+    label = zone if zone and _ZONE_ABBREVIATION.match(zone) else _zone_labels(moment)[0]
+    return f"{moment.strftime(_GENERATED_TIME_FORMAT)} {label}"
+
+
+def format_zone_label(moment: datetime) -> str:
+    """What `format_generated_at` would call this moment's zone -- "EDT", or
+    "UTC+05:45" where there is no abbreviation to use. Saved alongside a
+    timestamp so the sentence can be rebuilt from a file; see
+    `format_saved_at`."""
+    return _zone_labels(moment)[0]
 
 
 def format_generated_at_for_filename(moment: datetime) -> str:
@@ -342,6 +357,28 @@ def format_generated_at_for_filename(moment: datetime) -> str:
     overwrite.
     """
     return f"{moment.strftime(_GENERATED_FILENAME_TIME_FORMAT)}-{_zone_labels(moment)[1]}"
+
+
+def format_saved_at(raw: str, zone: str | None = None) -> str:
+    """When the portfolio file was last written, in the same sentence the
+    report's "Generated ..." line uses -- "August 29, 2026 at 9:03 PM EDT".
+
+    It is the one stamp here that has to survive a round trip through a file,
+    and ISO 8601 has nowhere to put "EDT": it stores "-04:00", so the
+    abbreviation is saved beside it and handed back in `zone`. Re-deriving it
+    from the machine instead would make the same file read differently on two
+    machines, which is exactly what a stamp is there to rule out.
+
+    A file written before the stamp carried a clock holds a bare date and
+    gets one back: midnight is not when it was saved, and a time the program
+    does not know is not one to invent.
+    """
+    parsed = _parse_date(raw)
+    if parsed is None:
+        return raw or "unknown date"
+    if parsed.tzinfo is None and parsed.time() == time(0, 0):
+        return parsed.strftime(_DATE_FORMAT)
+    return format_generated_at(parsed, zone=zone)
 
 
 def describe_as_of(raw: str) -> str:

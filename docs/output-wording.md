@@ -112,10 +112,9 @@ loses them is a regression:
   no other unprompted commentary on its own reasoning.
   `test_the_asset_location_note_is_not_said_during_onboarding` holds the line.
 - **The report says when it was made**, as its first line -- "Generated August
-  29, 2026 at 9:03 PM EDT." That is the *document's* provenance and it leads;
-  the figures carry their own further down, which is why the two are not
-  together. It comes from `RebalanceInputs.generated_at` rather than from the
-  clock inside `format_report`, so the same inputs render the same report and
+  29, 2026 at 9:03 PM EDT." That is the *document's* provenance, and it is now the
+  only stamp in the report. It comes from `RebalanceInputs.generated_at` rather than
+  from the clock inside `format_report`, so the same inputs render the same report and
   the summary file's name is stamped from the same instant the sentence names.
 - **Every date and time the program prints or saves is the user's own local
   one.** `cli._now_local` is the only clock, and everything -- the line above,
@@ -127,10 +126,22 @@ loses them is a regression:
   a day into the future -- "Last saved August 30, 2026" for figures typed on
   the 29th, every evening, silently. `TestSavedDateIsTheUsersOwn` pins it by
   freezing `_now_local` at a New York evening whose UTC date is the next day.
-- **Figures carry their provenance** -- "Values as entered, not live market prices.",
-  plus "Last saved July 31, 2026." as its own sentence when they came from a config
-  file. The numbers are the user's, and can be stale. The date is written out in full
-  like every other date the program prints; see `formatting.format_date`.
+- **The portfolio file says when it was last written, where it is written** --
+  "Last saved August 29, 2026 at 9:03 PM EDT.", under the "Save Portfolio"
+  subheading and above the question it informs. It used to be a second sentence
+  under the report's portfolio total, beside a "Values as entered, not live market
+  prices." that told someone who had just typed those values what they already knew.
+  Both are gone from the report: the date is the *file's*, not the figures', and the
+  one reader it answers a question for is the one deciding whether to overwrite it.
+
+  It is stamped to the minute, in the same sentence `format_generated_at` writes at
+  the head of the report, because a portfolio is re-saved several times in a day and
+  a bare date cannot tell those saves apart. `formatting.format_saved_at` is where it
+  is rendered: ISO 8601 stores the offset and drops the zone's name, so
+  `PersistedConfig.values_as_of_zone` carries the abbreviation beside the stamp and
+  the sentence is rebuilt from the file rather than from the machine reading it --
+  the same save reads identically everywhere. A file written before the stamp carried
+  a clock holds a bare date and prints as one; midnight is not when it was saved.
 - **Dropped sub-minimum moves are disclosed**, so trades that do not reach the target
   exactly are explained rather than looking like an arithmetic error. The count is
   spelled out through nine (`report._count`): the sentence opens on it, and "1 order
