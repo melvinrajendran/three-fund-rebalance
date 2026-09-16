@@ -101,3 +101,13 @@ exactly as an absent `rebalance_band_pct` does. A hop is for a name or a meaning
 changed. Note that `_upgrade_v2` now writes the literal `3` rather than
 `SCHEMA_VERSION` -- same trap as `_upgrade_v1`, harmless only until the next hop
 exists.
+
+`values_as_of_zone` was added the same way, and it is the reason `values_as_of`
+went from a date to a full local timestamp without a hop either: a v6 file holding
+`"2026-08-18"` still loads, and `formatting.format_saved_at` prints a bare date for
+it rather than inventing the midnight the string literally says. The zone is stored
+beside the stamp rather than derived when it is read because ISO 8601 carries the
+offset and not the name, and an offset alone can neither tell EST from CDT nor name
+either 1:30 AM of a fall-back. Two fields for one instant is the trade; they cannot
+disagree harmfully, since an absent or unrecognizable label falls back to the offset
+the timestamp itself carries.

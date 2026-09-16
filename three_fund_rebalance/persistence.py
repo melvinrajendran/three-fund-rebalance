@@ -42,8 +42,17 @@ class PersistedConfig:
     rebalance_band_pct: Decimal | None = None
     rebalance_relative_band_pct: Decimal | None = None
     # Set whenever accounts (including values) are saved; shown to the
-    # user so they know how stale a pre-filled value might be.
+    # user so they know how stale a pre-filled value might be. A local ISO
+    # timestamp, written to the second.
     values_as_of: str | None = None
+    # How that instant's zone is named in prose -- "EDT", or "UTC+05:45"
+    # where there is no abbreviation. ISO 8601 carries the offset and not the
+    # name, and the offset alone cannot tell EST from CDT or name either 1:30
+    # AM of a fall-back, so the label is kept beside the stamp rather than
+    # re-derived on whatever machine reads the file next. No schema hop:
+    # absent means a file written before the stamp had a clock, which
+    # `format_saved_at` prints as the bare date it is.
+    values_as_of_zone: str | None = None
     accounts: list[Account] = field(default_factory=list)
     # The details of every fund the accounts hold, each once. On save, a fund
     # listed here that no account holds is dropped, and one an account holds
@@ -180,6 +189,7 @@ def config_to_dict(config: PersistedConfig) -> dict:
         "rebalance_band_pct": _decimal_to_json(config.rebalance_band_pct),
         "rebalance_relative_band_pct": _decimal_to_json(config.rebalance_relative_band_pct),
         "values_as_of": config.values_as_of,
+        "values_as_of_zone": config.values_as_of_zone,
         "funds": [_fund_profile_to_dict(p) for p in catalog.profiles()],
         "accounts": [_account_to_dict(a) for a in config.accounts],
     }
@@ -483,6 +493,7 @@ def config_from_dict(data: dict) -> PersistedConfig:
                 field_name="rebalance_relative_band_pct",
             ),
             values_as_of=data.get("values_as_of"),
+            values_as_of_zone=data.get("values_as_of_zone"),
             accounts=[_account_from_dict(a, catalog) for a in data.get("accounts", [])],
             funds=catalog.profiles(),
         )

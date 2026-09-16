@@ -865,12 +865,45 @@ class TestRequiredWording:
         and stops."""
         assert "qualified withdrawals" not in self._report()
 
-    def test_figures_say_they_came_from_the_user(self):
-        assert "Values as entered, not live market prices." in self._report()
+    def test_cash_is_named_as_cash_available_to_invest(self):
+        """Beside the portfolio total, cash is what has not been put to work
+        yet -- "available to invest" says that the dollars are sitting there,
+        where "to invest" alone reads as an instruction to go and do it."""
+        account = replace(
+            self._account(),
+            holdings=[
+                *self._account().holdings,
+                Holding(fund_type=FundType.CASH, name="", value=Decimal(500)),
+            ],
+        )
+        text = " ".join(
+            format_report(
+                replace(inputs([account], self._target()), accounts=[account]),
+                RebalanceResult(trades=[], notes=[], taxable_bond_dollars=Decimal(0)),
+            ).split()
+        )
+        assert (
+            "Total portfolio value: $2,500.00 "
+            "(includes $500.00 of cash available to invest)"
+        ) in text
 
-    def test_figures_name_the_last_saved_date_when_there_is_one(self):
-        text = self._report(values_as_of="2026-08-21")
-        assert "Values as entered, not live market prices. Last saved August 21, 2026." in text
+    def test_the_band_rule_says_every_class_returns_to_its_own_target(self):
+        """Each class has a target of its own, and a rebalance moves all
+        three back to theirs -- there is no single "the target" to return
+        to."""
+        text = " ".join(self._report(band_pct=Decimal(5)).split())
+        assert "all three are rebalanced back to their targets." in text
+
+    def test_the_figures_carry_no_provenance_line_of_their_own(self):
+        """Both halves of it are gone. "Values as entered, not live market
+        prices." told a reader who typed those values what they already knew,
+        and the "Last saved ..." date beside it dated the portfolio file
+        rather than the plan -- it is printed under "Save Portfolio", where
+        that file is written. The document's own stamp still leads the
+        report."""
+        text = " ".join(self._report().split())
+        assert "Values as entered" not in text
+        assert "Last saved" not in text
 
     def test_dropped_sub_minimum_orders_are_disclosed(self):
         result = RebalanceResult(
@@ -1170,7 +1203,7 @@ class TestTerminalWidth:
 
 
 class TestRelativeBandInTheReport:
-    """With two rules meeting at whichever is tighter, each class gets its
+    """With two rules meeting at whichever is smaller, each class gets its
     own band -- so the report writes them out instead of naming one number."""
 
     def _accounts(self):
@@ -1208,7 +1241,7 @@ class TestRelativeBandInTheReport:
     def test_states_both_rules_and_which_one_wins(self):
         assert (
             "Plus or minus 5 percentage points, or 25% of an asset class's "
-            "target, whichever is tighter"
+            "target, whichever is smaller"
         ) in " ".join(self._report().split())
 
     def test_writes_out_each_class_s_own_band(self):

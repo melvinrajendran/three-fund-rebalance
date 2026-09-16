@@ -57,7 +57,8 @@ def sample_config() -> PersistedConfig:
         bond_pct=Decimal(20),
         vt_us_pct=Decimal("61.9"),
         vt_as_of="June 30, 2026",
-        values_as_of="2026-08-18",
+        values_as_of="2026-08-18T21:03:00-04:00",
+        values_as_of_zone="EDT",
         accounts=[target_date_account, individual_fund_account],
     )
 
@@ -74,6 +75,9 @@ class TestRoundTrip:
         assert loaded.vt_us_pct == original.vt_us_pct
         assert loaded.vt_as_of == original.vt_as_of
         assert loaded.values_as_of == original.values_as_of
+        # The zone travels with the stamp: ISO 8601 keeps the offset and
+        # drops the name, and the name is what the save is read back as.
+        assert loaded.values_as_of_zone == "EDT"
         assert len(loaded.accounts) == 2
 
         original_account = original.accounts[0]

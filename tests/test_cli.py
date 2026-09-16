@@ -676,8 +676,8 @@ class TestRevisionLoop:
 
 
 class TestSavedDateIsTheUsersOwn:
-    """`values_as_of` is the date the user would say it was, which is the
-    local one. It used to be UTC's."""
+    """`values_as_of` is the instant the user would say it was, which is the
+    local one. It used to be UTC's, and a date rather than a time."""
 
     def test_an_evening_run_west_of_greenwich_saves_todays_date(self, tmp_path, monkeypatch):
         """9:03 PM in New York is already tomorrow in UTC, so this is the
@@ -695,11 +695,15 @@ class TestSavedDateIsTheUsersOwn:
             "n", NO_REVISION, "y",
         ])
         run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter)
-        assert load_config(config_path).values_as_of == "2026-08-29"
+        saved = load_config(config_path)
+        assert saved.values_as_of == "2026-08-29T21:03:00-04:00"
+        assert saved.values_as_of_zone == "EDT"
 
-    def test_the_report_reads_it_back_in_full(self, tmp_path, monkeypatch):
-        """And the next run says so, through the same `format_date` every
-        other date goes through."""
+    def test_the_save_section_reads_it_back_in_full(self, tmp_path, monkeypatch):
+        """And the next run says so where the file is written, stamped to the
+        minute like the report's own "Generated ..." line -- one portfolio is
+        saved several times in a day, and a bare date cannot tell those saves
+        apart."""
         evening = datetime(2026, 8, 29, 21, 3, tzinfo=ZoneInfo("America/New_York"))
         monkeypatch.setattr(cli, "_now_local", lambda: evening)
         config_path = tmp_path / "c.json"
@@ -720,7 +724,12 @@ class TestSavedDateIsTheUsersOwn:
             "n", NO_REVISION, "n",
         ])
         run(["--config", str(config_path), "--vt-us-pct", "75"], prompter=prompter)
-        assert "Last saved August 29, 2026." in prompter.full_output
+        assert "Last saved August 29, 2026 at 9:03 PM EDT." in prompter.full_output
+        # Under "Save Portfolio", where the file it dates is written -- not
+        # in the report, which carries only its own "Generated ..." stamp.
+        report, save_section = prompter.full_output.split("Save Portfolio")
+        assert "Last saved" not in report
+        assert "Last saved" in save_section
 
 
 class TestSummaryFile:

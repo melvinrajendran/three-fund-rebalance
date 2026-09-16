@@ -27,8 +27,10 @@ from three_fund_rebalance.formatting import (
     format_generated_at_for_filename,
     format_percent,
     format_result_header,
+    format_saved_at,
     format_section_header,
     format_subheading,
+    format_zone_label,
 )
 from three_fund_rebalance.models import Account, FundCatalog
 from three_fund_rebalance.persistence import (
@@ -388,7 +390,6 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
                 band_pct=answers.band_pct,
                 relative_band_pct=answers.relative_band_pct,
                 accounts=answers.accounts,
-                values_as_of=config.values_as_of,
                 generated_at=_now_local(),
             )
             prompter.say("\n" + format_result_header(_SUMMARY_TITLE))
@@ -425,7 +426,22 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
     # disclaimer that should not read as part of the prompt.
     if not args.no_save:
         prompter.say("\n" + format_subheading(SAVE_PORTFOLIO_SUBHEADING))
+        # How stale the file about to be overwritten is, where the file is
+        # the subject. It used to sit under the portfolio total in the
+        # report, beside the figures it dated -- but it dates the *file*,
+        # and a reader deciding whether to save is the one it answers a
+        # question for. Stamped to the minute like the report's own
+        # "Generated ..." line: a portfolio is re-saved several times in a
+        # day, and a bare date cannot tell those saves apart.
+        if config.values_as_of:
+            stamp = format_saved_at(config.values_as_of, config.values_as_of_zone)
+            prompter.say_wrapped(f"Last saved {stamp}.")
+            # A blank line under it, as step 2 sets its own explanation off
+            # from the questions below it: a statement and a question run
+            # together read as one prompt.
+            prompter.say("")
         if prompt_yes_no(prompter, "Save this portfolio for next time?", default=True):
+            saved_at = _now_local()
             updated = PersistedConfig(
                 stock_pct=answers.stock_pct,
                 bond_pct=answers.bond_pct,
@@ -433,11 +449,13 @@ def run(argv: list[str] | None = None, prompter: Prompter | None = None) -> int:
                 vt_as_of=answers.vt.as_of,
                 rebalance_band_pct=answers.band_pct,
                 rebalance_relative_band_pct=answers.relative_band_pct,
-                # The local date, not UTC's. Saving UTC's meant anyone west
-                # of Greenwich running this in the evening got tomorrow's
-                # date back as "Last saved ...", misdating their own figures
-                # by a day every evening.
-                values_as_of=_now_local().date().isoformat(),
+                # The local instant, not UTC's. Saving UTC's meant anyone
+                # west of Greenwich running this in the evening got
+                # tomorrow's date back as "Last saved ...", misdating their
+                # own figures by a day every evening. Seconds rather than
+                # microseconds: nothing reads it back finer than minutes.
+                values_as_of=saved_at.isoformat(timespec="seconds"),
+                values_as_of_zone=format_zone_label(saved_at),
                 accounts=answers.accounts,
                 # Saving keeps only the funds some account still holds.
                 funds=answers.catalog.profiles(),
